@@ -368,21 +368,47 @@ class DrDataAgent:
         for iteration in range(max_iterations):
             _progress(f"Dr. Data is thinking... (step {iteration + 1})")
 
-            try:
-                response = self.client.messages.create(
-                    model=self.MODEL,
-                    max_tokens=self.MAX_TOKENS,
-                    temperature=0,
-                    system=DR_DATA_SYSTEM_PROMPT,
-                    tools=TOOLS,
-                    messages=self.messages,
-                )
-            except Exception as api_err:
-                # If the API call itself fails, remove the user message
-                # we just added so self.messages stays consistent
+            # Retry loop for API resilience
+            response = None
+            last_err = None
+            for attempt in range(3):
+                try:
+                    response = self.client.messages.create(
+                        model=self.MODEL,
+                        max_tokens=self.MAX_TOKENS,
+                        temperature=0,
+                        system=DR_DATA_SYSTEM_PROMPT,
+                        tools=TOOLS,
+                        messages=self.messages,
+                        timeout=120.0,
+                    )
+                    break
+                except anthropic.RateLimitError as e:
+                    last_err = e
+                    if attempt < 2:
+                        time.sleep(2)
+                except anthropic.APIError as e:
+                    last_err = e
+                    if attempt < 2:
+                        time.sleep(2)
+                except Exception as e:
+                    last_err = e
+                    if attempt < 2:
+                        time.sleep(2)
+
+            if response is None:
+                # All retries failed -- clean up and return friendly error
                 if self.messages and self.messages[-1]["role"] == "user":
                     self.messages.pop()
-                raise api_err
+                return {
+                    "text": (
+                        "Hit a snag reaching my analysis engine. "
+                        "Give me a second and try again."
+                    ),
+                    "files": [],
+                    "profile": None,
+                    "spec": None,
+                }
 
             # Process response blocks -- convert to plain dicts for re-serialization
             assistant_content = response.content

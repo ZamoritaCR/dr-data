@@ -35,6 +35,14 @@ from core.multi_file_handler import MultiFileSession
 from core.audit_engine import AuditEngine
 
 
+def _safe_html(html_str, fallback_text=""):
+    """Render HTML via st.markdown with fallback to st.write on error."""
+    try:
+        st.markdown(html_str, unsafe_allow_html=True)
+    except Exception:
+        st.write(fallback_text or html_str)
+
+
 # === PAGE CONFIG (must be first Streamlit call) ===
 st.set_page_config(
     page_title="Dr. Data -- Dashboard Intelligence",
@@ -331,7 +339,7 @@ if "audience_mode" not in st.session_state:
 # ============================================
 # HEADER (with avatar)
 # ============================================
-st.markdown(f'<div class="top-header"><div class="header-left">{DR_DATA_AVATAR}<div><h1>Dr. Data</h1><div class="role">Chief Data Intelligence Officer</div></div></div><div>{WU_LOGO}</div></div>', unsafe_allow_html=True)
+_safe_html(f'<div class="top-header"><div class="header-left">{DR_DATA_AVATAR}<div><h1>Dr. Data</h1><div class="role">Chief Data Intelligence Officer</div></div></div><div>{WU_LOGO}</div></div>', "Dr. Data -- Chief Data Intelligence Officer")
 
 
 # ============================================
@@ -456,7 +464,7 @@ with workspace_col:
     if ws["phase"] == "waiting" and ws.get("data_preview") is None:
         # Empty state
         avatar_lg = DR_DATA_AVATAR.replace('width="36" height="36"', 'width="64" height="64"')
-        st.markdown(f'<div style="text-align:center;padding:80px 40px;color:#B0B0B0;"><div style="margin-bottom:16px;opacity:0.6;">{avatar_lg}</div><div style="font-size:16px;font-weight:500;color:#FFFFFF;margin-bottom:8px;">Welcome! I am Dr. Data.</div><div style="font-size:13px;max-width:440px;margin:0 auto;line-height:1.6;">I am here to help you unlock the full potential of your data. Upload a file in the sidebar -- CSV, Excel, Tableau, Alteryx, whatever you have -- and let me show you The Art of the Possible. I can build dashboards, reports, PowerPoints, and more. Let us get started!</div></div>', unsafe_allow_html=True)
+        _safe_html(f'<div style="text-align:center;padding:80px 40px;color:#B0B0B0;"><div style="margin-bottom:16px;opacity:0.6;">{avatar_lg}</div><div style="font-size:16px;font-weight:500;color:#FFFFFF;margin-bottom:8px;">Welcome! I am Dr. Data.</div><div style="font-size:13px;max-width:440px;margin:0 auto;line-height:1.6;">I am here to help you unlock the full potential of your data. Upload a file in the sidebar -- CSV, Excel, Tableau, Alteryx, whatever you have -- and let me show you The Art of the Possible. I can build dashboards, reports, PowerPoints, and more. Let us get started!</div></div>', "Welcome! I am Dr. Data. Upload a file in the sidebar to get started.")
 
     else:
         # === KPI CARDS ===
@@ -465,18 +473,18 @@ with workspace_col:
             for col, kpi in zip(kpi_cols, ws["kpis"]):
                 with col:
                     color = kpi.get("color", "#FFDE00")
-                    st.markdown(f'<div class="kpi-card"><div class="kpi-value" style="color:{color};">{html_module.escape(str(kpi["value"]))}</div><div class="kpi-label">{html_module.escape(str(kpi["label"]))}</div></div>', unsafe_allow_html=True)
+                    _safe_html(f'<div class="kpi-card"><div class="kpi-value" style="color:{color};">{html_module.escape(str(kpi["value"]))}</div><div class="kpi-label">{html_module.escape(str(kpi["label"]))}</div></div>', f'{kpi["value"]} -- {kpi["label"]}')
 
         # === PROGRESS MESSAGES ===
         if ws["progress_messages"]:
             for i, msg in enumerate(ws["progress_messages"]):
                 is_last = i == len(ws["progress_messages"]) - 1
                 status_class = "" if is_last else "complete"
-                st.markdown(f'<div class="phase-status {status_class}"><div class="dot"></div>{html_module.escape(str(msg))}</div>', unsafe_allow_html=True)
+                _safe_html(f'<div class="phase-status {status_class}"><div class="dot"></div>{html_module.escape(str(msg))}</div>', str(msg))
 
         # === DATA QUALITY AUDIT (shows BEFORE data preview) ===
         if ws.get("audit_html"):
-            st.markdown('<div class="workspace-card"><h3>Data Quality Audit</h3></div>', unsafe_allow_html=True)
+            _safe_html('<div class="workspace-card"><h3>Data Quality Audit</h3></div>', "**Data Quality Audit**")
             components.html(ws["audit_html"], height=600, scrolling=True)
 
             # Executive summary always accessible
@@ -489,7 +497,7 @@ with workspace_col:
         # === DATA PREVIEW ===
         if ws.get("data_preview") is not None:
             df_preview = ws["data_preview"]
-            st.markdown('<div class="workspace-card"><h3>Data Preview</h3></div>', unsafe_allow_html=True)
+            _safe_html('<div class="workspace-card"><h3>Data Preview</h3></div>', "**Data Preview**")
             st.dataframe(
                 df_preview.head(20),
                 use_container_width=True,
@@ -500,7 +508,7 @@ with workspace_col:
         # === SCORES ===
         if ws["scores"]:
             scores = ws["scores"]
-            st.markdown('<div class="workspace-card"><h3>Quality Scorecard</h3></div>', unsafe_allow_html=True)
+            _safe_html('<div class="workspace-card"><h3>Quality Scorecard</h3></div>', "**Quality Scorecard**")
             score_cols = st.columns(5)
             labels = [
                 ("Overall", "total_score"),
@@ -517,11 +525,11 @@ with workspace_col:
                     else "score-red"
                 )
                 with col:
-                    st.markdown(f'<div style="text-align:center;"><div class="score-badge {css_class}">{val}</div><div style="font-size:11px;color:#B0B0B0;margin-top:6px;">{label}</div></div>', unsafe_allow_html=True)
+                    _safe_html(f'<div style="text-align:center;"><div class="score-badge {css_class}">{val}</div><div style="font-size:11px;color:#B0B0B0;margin-top:6px;">{label}</div></div>', f'{label}: {val}')
 
         # === DELIVERABLES (with audit gate) ===
         if ws["deliverables"]:
-            st.markdown('<div class="workspace-card"><h3>Your Deliverables</h3></div>', unsafe_allow_html=True)
+            _safe_html('<div class="workspace-card"><h3>Your Deliverables</h3></div>', "**Your Deliverables**")
 
             # Audit gate message
             if ws.get("audit_releasable") is False:
@@ -533,7 +541,7 @@ with workspace_col:
             for dl in ws["deliverables"]:
                 dl_col1, dl_col2 = st.columns([3, 1])
                 with dl_col1:
-                    st.markdown(f'<div class="dl-card"><div class="dl-name">{html_module.escape(dl["name"])}</div><div class="dl-desc">{html_module.escape(dl.get("description", ""))}</div></div>', unsafe_allow_html=True)
+                    _safe_html(f'<div class="dl-card"><div class="dl-name">{html_module.escape(dl["name"])}</div><div class="dl-desc">{html_module.escape(dl.get("description", ""))}</div></div>', f'{dl["name"]}: {dl.get("description", "")}')
                 with dl_col2:
                     if os.path.exists(dl["path"]):
                         # Audit each deliverable file
@@ -559,7 +567,7 @@ with workspace_col:
 # RIGHT: CHAT PANEL -- Conversation with Dr. Data
 # ============================================
 with chat_col:
-    st.markdown(f'<div style="padding:8px 0 12px 0;border-bottom:1px solid #4a4a4a;margin-bottom:12px;display:flex;align-items:center;gap:10px;">{DR_DATA_AVATAR}<div><div style="font-size:13px;font-weight:600;color:#FFFFFF;">Chat with Dr. Data</div><div style="font-size:11px;color:#B0B0B0;">The Art of the Possible</div></div></div>', unsafe_allow_html=True)
+    _safe_html(f'<div style="padding:8px 0 12px 0;border-bottom:1px solid #4a4a4a;margin-bottom:12px;display:flex;align-items:center;gap:10px;">{DR_DATA_AVATAR}<div><div style="font-size:13px;font-weight:600;color:#FFFFFF;">Chat with Dr. Data</div><div style="font-size:11px;color:#B0B0B0;">The Art of the Possible</div></div></div>', "Chat with Dr. Data -- The Art of the Possible")
 
     # Chat container with scroll
     chat_container = st.container(height=500)
@@ -567,16 +575,16 @@ with chat_col:
     with chat_container:
         # Opening message if empty
         if not st.session_state.messages:
-            st.markdown('<div class="dr-msg"><div class="dr-name">Dr. Data</div>Hello! Great to have you here. I am Dr. Data, your personal data intelligence partner. I believe in The Art of the Possible -- every dataset has a story waiting to be told, and I am here to help you tell it.<br><br>Upload a file in the sidebar (CSV, Excel, Tableau, Alteryx, or anything else you have) and tell me what you need. I can build interactive dashboards, Power BI projects, PDF reports, PowerPoint presentations, and more. Whatever helps you shine -- I have got you covered. Let us make something great together!</div>', unsafe_allow_html=True)
+            _safe_html('<div class="dr-msg"><div class="dr-name">Dr. Data</div>Hello! Great to have you here. I am Dr. Data, your personal data intelligence partner. I believe in The Art of the Possible -- every dataset has a story waiting to be told, and I am here to help you tell it.<br><br>Upload a file in the sidebar (CSV, Excel, Tableau, Alteryx, or anything else you have) and tell me what you need. I can build interactive dashboards, Power BI projects, PDF reports, PowerPoint presentations, and more. Whatever helps you shine -- I have got you covered. Let us make something great together!</div>', "Dr. Data: Hello! Upload a file in the sidebar and tell me what you need.")
 
         # Render chat history
         for msg in st.session_state.messages:
             escaped = html_module.escape(msg["content"])
             escaped = escaped.replace("\n", "<br>")
             if msg["role"] == "assistant":
-                st.markdown(f'<div class="dr-msg"><div class="dr-name">Dr. Data</div>{escaped}</div>', unsafe_allow_html=True)
+                _safe_html(f'<div class="dr-msg"><div class="dr-name">Dr. Data</div>{escaped}</div>', f'Dr. Data: {msg["content"]}')
             else:
-                st.markdown(f'<div class="user-msg">{escaped}</div>', unsafe_allow_html=True)
+                _safe_html(f'<div class="user-msg">{escaped}</div>', msg["content"])
 
     # === HANDLE AUTO-ANALYSIS ON FILE UPLOAD ===
     if st.session_state.file_just_uploaded:
@@ -600,6 +608,8 @@ with chat_col:
                 status_container.write("Running data quality audit...")
 
                 response = st.session_state.agent.analyze_uploaded_file()
+                if not response or not str(response).strip():
+                    response = "Dr. Data is thinking... try sending your message again."
                 st.session_state.messages.append({
                     "role": "assistant",
                     "content": response,
@@ -676,6 +686,8 @@ with chat_col:
                     if isinstance(response_data, dict)
                     else str(response_data)
                 )
+                if not content or not content.strip():
+                    content = "Dr. Data is thinking... try sending your message again."
                 st.session_state.messages.append({
                     "role": "assistant",
                     "content": content,

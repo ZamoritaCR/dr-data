@@ -34,6 +34,7 @@ from config.prompts import DR_DATA_SYSTEM_PROMPT, DASHBOARD_DESIGN_PROMPT
 from core.deep_analyzer import DeepAnalyzer
 from core.html_dashboard import HTMLDashboardBuilder
 from core.pdf_report import PDFReportBuilder
+from core.export_engine import ExportEngine
 
 # ------------------------------------------------------------------ #
 #  Tool Definitions for Claude                                         #
@@ -247,6 +248,7 @@ class DrDataAgent:
         self.analyzer = DeepAnalyzer()
         self.html_builder = HTMLDashboardBuilder()
         self.pdf_builder = PDFReportBuilder()
+        self.export_engine = ExportEngine()
 
         self.output_dir = str(PROJECT_ROOT / "output")
 
@@ -689,6 +691,74 @@ class DrDataAgent:
                     except Exception:
                         pass
                     break
+
+        # --- Export interception: handle PowerPoint/PDF/Word before LLM ---
+        if self.dataframe is not None:
+            msg_lower = user_message.lower()
+            want_pptx = any(k in msg_lower for k in ("powerpoint", "pptx", "presentation", "slides"))
+            want_pdf = any(k in msg_lower for k in ("pdf", "report"))
+            want_docx = any(k in msg_lower for k in ("word", "docx", "document"))
+            want_all = any(k in msg_lower for k in ("all formats", "all three", "everything"))
+
+            if want_pptx or want_pdf or want_docx or want_all:
+                title = "Dr. Data Report"
+                if self.data_file_path:
+                    base = os.path.splitext(os.path.basename(self.data_file_path))[0]
+                    title = base.replace("_", " ").strip() or title
+                safe = "".join(c if c.isalnum() or c in " _-" else "_" for c in title)
+                os.makedirs(self.output_dir, exist_ok=True)
+                downloads = []
+
+                if want_all:
+                    want_pptx = want_pdf = want_docx = True
+
+                if want_pptx:
+                    p = self.export_engine.generate_pptx(
+                        self.dataframe, title,
+                        os.path.join(self.output_dir, f"{safe}.pptx"),
+                    )
+                    if p:
+                        downloads.append({
+                            "name": "PowerPoint Presentation",
+                            "filename": f"{safe}.pptx",
+                            "path": p,
+                            "description": "Professional presentation with key stats and trends",
+                        })
+
+                if want_pdf:
+                    p = self.export_engine.generate_pdf(
+                        self.dataframe, title,
+                        os.path.join(self.output_dir, f"{safe}.pdf"),
+                    )
+                    if p:
+                        downloads.append({
+                            "name": "PDF Report",
+                            "filename": f"{safe}.pdf",
+                            "path": p,
+                            "description": "Executive PDF report with data summary",
+                        })
+
+                if want_docx:
+                    p = self.export_engine.generate_docx(
+                        self.dataframe, title,
+                        os.path.join(self.output_dir, f"{safe}.docx"),
+                    )
+                    if p:
+                        downloads.append({
+                            "name": "Word Document",
+                            "filename": f"{safe}.docx",
+                            "path": p,
+                            "description": "Detailed Word document with data analysis",
+                        })
+
+                if downloads:
+                    fmt_names = [d["name"] for d in downloads]
+                    rows, cols = self.dataframe.shape
+                    content = (
+                        f"Built {' and '.join(fmt_names)} from your {rows:,}-row dataset. "
+                        f"Covers all {cols} columns with statistical breakdowns and key findings."
+                    )
+                    return {"content": content, "downloads": downloads, "scores": None}
 
         # Enrich user message with context so Claude never asks for paths
         enriched = self._build_context_message(user_message)

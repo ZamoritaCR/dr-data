@@ -48,10 +48,12 @@ st.set_page_config(
 # DR. DATA AVATAR (inline SVG)
 # =============================================================================
 
-DR_DATA_AVATAR = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="36" height="36"><defs><linearGradient id="abg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#0d1117"/><stop offset="100%" style="stop-color:#161b22"/></linearGradient><linearGradient id="agl" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#1c2128"/><stop offset="100%" style="stop-color:#1a1f35"/></linearGradient></defs><circle cx="24" cy="24" r="23" fill="url(#abg)" stroke="#30363d" stroke-width="1"/><rect x="10" y="9" width="28" height="24" rx="8" fill="url(#agl)" stroke="#1f6feb" stroke-width="1"/><rect x="13" y="15" width="22" height="8" rx="4" fill="#0d1117" stroke="#1f6feb" stroke-width="0.8"/><circle cx="19" cy="19" r="2" fill="#1f6feb"/><circle cx="29" cy="19" r="2" fill="#1f6feb"/><path d="M 18 28 Q 24 33 30 28" fill="none" stroke="#1f6feb" stroke-width="1.5" stroke-linecap="round"/><line x1="24" y1="9" x2="24" y2="4" stroke="#30363d" stroke-width="1.5"/><circle cx="24" cy="3" r="2" fill="#238636"/><rect x="12" y="38" width="24" height="6" rx="2" fill="#0d1117" stroke="#30363d" stroke-width="0.5"/><text x="24" y="43" text-anchor="middle" fill="#1f6feb" font-family="monospace" font-size="4" font-weight="bold">DR.DATA</text></svg>'
+DR_DATA_AVATAR = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="36" height="36"><defs><linearGradient id="abg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#1a1a1a"/><stop offset="100%" style="stop-color:#2d2d2d"/></linearGradient><linearGradient id="agl" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#3a3a3a"/><stop offset="100%" style="stop-color:#2d2d2d"/></linearGradient></defs><circle cx="24" cy="24" r="23" fill="url(#abg)" stroke="#4a4a4a" stroke-width="1"/><rect x="10" y="9" width="28" height="24" rx="8" fill="url(#agl)" stroke="#FFDE00" stroke-width="1"/><rect x="13" y="15" width="22" height="8" rx="4" fill="#1a1a1a" stroke="#FFDE00" stroke-width="0.8"/><circle cx="19" cy="19" r="2" fill="#FFDE00"/><circle cx="29" cy="19" r="2" fill="#FFDE00"/><path d="M 18 28 Q 24 33 30 28" fill="none" stroke="#FFDE00" stroke-width="1.5" stroke-linecap="round"/><line x1="24" y1="9" x2="24" y2="4" stroke="#4a4a4a" stroke-width="1.5"/><circle cx="24" cy="3" r="2" fill="#FFE600"/><rect x="12" y="38" width="24" height="6" rx="2" fill="#1a1a1a" stroke="#4a4a4a" stroke-width="0.5"/><text x="24" y="43" text-anchor="middle" fill="#FFDE00" font-family="monospace" font-size="4" font-weight="bold">DR.DATA</text></svg>'
+
+WU_LOGO = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 40" width="120" height="24"><rect width="200" height="40" rx="4" fill="#FFDE00"/><text x="12" y="28" font-family="Arial,Helvetica,sans-serif" font-size="20" font-weight="900" fill="#1a1a1a" letter-spacing="1">WESTERN UNION</text></svg>'
 
 
-# === CUSTOM CSS -- THE ENTIRE LOOK ===
+# === CUSTOM CSS -- THE ENTIRE LOOK (Western Union) ===
 st.markdown("""
 <style>
     /* Kill Streamlit defaults */
@@ -62,13 +64,13 @@ st.markdown("""
 
     /* Dark foundation */
     .stApp {
-        background-color: #0d1117;
+        background-color: #1a1a1a;
     }
 
     /* === HEADER BAR === */
     .top-header {
-        background: linear-gradient(135deg, #0d1117 0%, #161b22 50%, #1a1f35 100%);
-        border-bottom: 1px solid #30363d;
+        background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 50%, #2d2d2d 100%);
+        border-bottom: 1px solid #4a4a4a;
         padding: 16px 24px;
         display: flex;
         align-items: center;
@@ -80,7 +82,7 @@ st.markdown("""
         position: absolute;
         top: 0; left: 0; right: 0;
         height: 2px;
-        background: linear-gradient(90deg, #1f6feb, #238636, #1f6feb);
+        background: linear-gradient(90deg, #FFDE00, #FFE600, #FFDE00);
     }
     .header-left {
         display: flex;
@@ -90,21 +92,21 @@ st.markdown("""
     .top-header h1 {
         font-size: 18px;
         font-weight: 600;
-        color: #e6edf3;
+        color: #FFFFFF;
         margin: 0;
         letter-spacing: -0.3px;
     }
     .top-header .role {
         font-size: 11px;
-        color: #8b949e;
+        color: #B0B0B0;
         letter-spacing: 0.5px;
         text-transform: uppercase;
     }
 
     /* === WORKSPACE AREA (center) === */
     .workspace-card {
-        background: #161b22;
-        border: 1px solid #30363d;
+        background: #2d2d2d;
+        border: 1px solid #4a4a4a;
         border-radius: 10px;
         padding: 24px;
         margin-bottom: 16px;
@@ -112,10 +114,10 @@ st.markdown("""
     .workspace-card h3 {
         font-size: 14px;
         font-weight: 600;
-        color: #e6edf3;
+        color: #FFFFFF;
         margin: 0 0 16px 0;
         padding-bottom: 8px;
-        border-bottom: 1px solid #30363d;
+        border-bottom: 1px solid #4a4a4a;
     }
 
     /* === KPI CARDS === */
@@ -126,8 +128,8 @@ st.markdown("""
     }
     .kpi-card {
         flex: 1;
-        background: linear-gradient(135deg, #161b22, #1c2128);
-        border: 1px solid #30363d;
+        background: linear-gradient(135deg, #2d2d2d, #3a3a3a);
+        border: 1px solid #4a4a4a;
         border-radius: 10px;
         padding: 16px 20px;
         text-align: center;
@@ -135,12 +137,12 @@ st.markdown("""
     .kpi-card .kpi-value {
         font-size: 26px;
         font-weight: 700;
-        color: #1f6feb;
+        color: #FFDE00;
         line-height: 1.2;
     }
     .kpi-card .kpi-label {
         font-size: 10px;
-        color: #8b949e;
+        color: #B0B0B0;
         text-transform: uppercase;
         letter-spacing: 0.8px;
         margin-top: 4px;
@@ -168,26 +170,26 @@ st.markdown("""
         align-items: center;
         gap: 10px;
         padding: 12px 16px;
-        background: #1c2128;
-        border: 1px solid #30363d;
-        border-left: 3px solid #1f6feb;
+        background: #3a3a3a;
+        border: 1px solid #4a4a4a;
+        border-left: 3px solid #FFDE00;
         border-radius: 6px;
         margin-bottom: 12px;
         font-size: 13px;
-        color: #e6edf3;
+        color: #FFFFFF;
     }
     .phase-status.complete {
-        border-left-color: #238636;
+        border-left-color: #FFE600;
     }
     .phase-status .dot {
         width: 8px;
         height: 8px;
         border-radius: 50%;
-        background: #1f6feb;
+        background: #FFDE00;
         animation: pulse 1.5s infinite;
     }
     .phase-status.complete .dot {
-        background: #238636;
+        background: #FFE600;
         animation: none;
     }
     @keyframes pulse {
@@ -197,66 +199,58 @@ st.markdown("""
 
     /* === CHAT PANEL STYLING === */
     div[data-testid="column"]:last-child {
-        border-left: 1px solid #30363d;
+        border-left: 1px solid #4a4a4a;
         padding-left: 16px !important;
     }
 
     /* Chat input fix -- ALWAYS visible and readable */
-    div[data-testid="stChatInput"] textarea,
-    div[data-testid="stChatInput"] textarea:active,
-    div[data-testid="stChatInput"] textarea:enabled,
-    div[data-testid="stChatInput"] div[contenteditable="true"],
-    .stChatInput textarea,
-    .stChatInput div[contenteditable="true"] {
-        background: #0d1117 !important;
-        border: 2px solid #1f6feb !important;
+    div[data-testid='stChatInput'] textarea,
+    div[data-testid='stChatInput'] div[contenteditable='true'] {
+        background: #1a1a1a !important;
+        border: 2px solid #FFDE00 !important;
         color: #ffffff !important;
         caret-color: #ffffff !important;
         font-size: 14px !important;
         -webkit-text-fill-color: #ffffff !important;
     }
-    div[data-testid="stChatInput"] textarea:focus {
-        border-color: #1f6feb !important;
-        box-shadow: 0 0 8px rgba(31,111,235,0.2) !important;
-        color: #ffffff !important;
-    }
-    div[data-testid="stChatInput"] textarea::placeholder {
-        color: #484f58 !important;
+    div[data-testid='stChatInput'] textarea::placeholder {
+        color: #808080 !important;
+        -webkit-text-fill-color: #808080 !important;
     }
 
     /* Chat messages */
     .dr-msg {
-        background: #161b22;
-        border: 1px solid #30363d;
+        background: #2d2d2d;
+        border: 1px solid #4a4a4a;
         border-radius: 10px;
         padding: 12px 16px;
         margin-bottom: 10px;
         font-size: 13px;
         line-height: 1.6;
-        color: #e6edf3;
+        color: #FFFFFF;
     }
     .user-msg {
-        background: #1c2128;
-        border: 1px solid #30363d;
+        background: #3a3a3a;
+        border: 1px solid #4a4a4a;
         border-radius: 10px;
         padding: 10px 14px;
         margin-bottom: 10px;
         font-size: 13px;
-        color: #8b949e;
+        color: #B0B0B0;
         text-align: right;
     }
     .dr-name {
         font-size: 11px;
         font-weight: 600;
-        color: #1f6feb;
+        color: #FFDE00;
         margin-bottom: 4px;
         letter-spacing: 0.3px;
     }
 
     /* Download cards */
     .dl-card {
-        background: #1c2128;
-        border: 1px solid #238636;
+        background: #3a3a3a;
+        border: 1px solid #FFDE00;
         border-radius: 8px;
         padding: 10px 14px;
         margin: 8px 0;
@@ -264,26 +258,26 @@ st.markdown("""
     .dl-card .dl-name {
         font-size: 12px;
         font-weight: 600;
-        color: #238636;
+        color: #FFDE00;
     }
     .dl-card .dl-desc {
         font-size: 11px;
-        color: #8b949e;
+        color: #B0B0B0;
     }
 
     /* Make data tables dark */
     .stDataFrame {
-        border: 1px solid #30363d;
+        border: 1px solid #4a4a4a;
         border-radius: 8px;
     }
 
     /* Sidebar refinement */
     section[data-testid="stSidebar"] {
-        background-color: #0d1117;
-        border-right: 1px solid #30363d;
+        background-color: #1a1a1a;
+        border-right: 1px solid #4a4a4a;
     }
     section[data-testid="stSidebar"] .stFileUploader {
-        border: 1px dashed #30363d;
+        border: 1px dashed #4a4a4a;
         border-radius: 8px;
         padding: 12px;
     }
@@ -337,7 +331,7 @@ if "audience_mode" not in st.session_state:
 # ============================================
 # HEADER (with avatar)
 # ============================================
-st.markdown(f'<div class="top-header"><div class="header-left">{DR_DATA_AVATAR}<div><h1>Dr. Data</h1><div class="role">Chief Data Intelligence Officer</div></div></div><div style="font-size:11px;color:#8b949e;">Dashboard Intelligence Platform</div></div>', unsafe_allow_html=True)
+st.markdown(f'<div class="top-header"><div class="header-left">{DR_DATA_AVATAR}<div><h1>Dr. Data</h1><div class="role">Chief Data Intelligence Officer</div></div></div><div>{WU_LOGO}</div></div>', unsafe_allow_html=True)
 
 
 # ============================================
@@ -462,7 +456,7 @@ with workspace_col:
     if ws["phase"] == "waiting" and ws.get("data_preview") is None:
         # Empty state
         avatar_lg = DR_DATA_AVATAR.replace('width="36" height="36"', 'width="64" height="64"')
-        st.markdown(f'<div style="text-align:center;padding:80px 40px;color:#8b949e;"><div style="margin-bottom:16px;opacity:0.6;">{avatar_lg}</div><div style="font-size:16px;font-weight:500;color:#e6edf3;margin-bottom:8px;">Welcome to Dr. Data</div><div style="font-size:13px;max-width:400px;margin:0 auto;line-height:1.6;">Upload a data file in the sidebar to begin. I work with CSV, Excel, Tableau, Alteryx, Business Objects, and more. Tell me what you need, and I handle the rest.</div></div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="text-align:center;padding:80px 40px;color:#B0B0B0;"><div style="margin-bottom:16px;opacity:0.6;">{avatar_lg}</div><div style="font-size:16px;font-weight:500;color:#FFFFFF;margin-bottom:8px;">Welcome to Dr. Data</div><div style="font-size:13px;max-width:400px;margin:0 auto;line-height:1.6;">Upload a data file in the sidebar to begin. I work with CSV, Excel, Tableau, Alteryx, Business Objects, and more. Tell me what you need, and I handle the rest.</div></div>', unsafe_allow_html=True)
 
     else:
         # === KPI CARDS ===
@@ -470,7 +464,7 @@ with workspace_col:
             kpi_cols = st.columns(len(ws["kpis"]))
             for col, kpi in zip(kpi_cols, ws["kpis"]):
                 with col:
-                    color = kpi.get("color", "#1f6feb")
+                    color = kpi.get("color", "#FFDE00")
                     st.markdown(f"""
                     <div class="kpi-card">
                         <div class="kpi-value" style="color:{color};">{html_module.escape(str(kpi['value']))}</div>
@@ -548,7 +542,7 @@ with workspace_col:
                     st.markdown(f"""
                     <div style="text-align:center;">
                         <div class="score-badge {css_class}">{val}</div>
-                        <div style="font-size:11px; color:#8b949e; margin-top:6px;">{label}</div>
+                        <div style="font-size:11px; color:#B0B0B0; margin-top:6px;">{label}</div>
                     </div>
                     """, unsafe_allow_html=True)
 
@@ -601,7 +595,7 @@ with workspace_col:
 # RIGHT: CHAT PANEL -- Conversation with Dr. Data
 # ============================================
 with chat_col:
-    st.markdown(f'<div style="padding:8px 0 12px 0;border-bottom:1px solid #30363d;margin-bottom:12px;display:flex;align-items:center;gap:10px;">{DR_DATA_AVATAR}<div><div style="font-size:13px;font-weight:600;color:#e6edf3;">Chat with Dr. Data</div><div style="font-size:11px;color:#8b949e;">Your data intelligence advisor</div></div></div>', unsafe_allow_html=True)
+    st.markdown(f'<div style="padding:8px 0 12px 0;border-bottom:1px solid #4a4a4a;margin-bottom:12px;display:flex;align-items:center;gap:10px;">{DR_DATA_AVATAR}<div><div style="font-size:13px;font-weight:600;color:#FFFFFF;">Chat with Dr. Data</div><div style="font-size:11px;color:#B0B0B0;">Your data intelligence advisor</div></div></div>', unsafe_allow_html=True)
 
     # Chat container with scroll
     chat_container = st.container(height=500)
@@ -718,23 +712,11 @@ with chat_col:
         })
 
         if st.session_state.agent:
-            status_container = st.status(
-                "Dr. Data is working...", expanded=True
-            )
             try:
-                def progress_cb(msg):
-                    status_container.write(msg)
-                    status_container.update(label=msg)
-
                 response_data = st.session_state.agent.respond(
                     prompt,
                     st.session_state.messages,
                     st.session_state.uploaded_files,
-                    progress_callback=progress_cb,
-                )
-
-                status_container.update(
-                    label="Complete", state="complete", expanded=False
                 )
 
                 content = (
@@ -773,9 +755,6 @@ with chat_col:
                     ws["data_preview"] = agent.dataframe
 
             except Exception as e:
-                status_container.update(
-                    label="Error", state="error", expanded=False
-                )
                 st.session_state.messages.append({
                     "role": "assistant",
                     "content": (

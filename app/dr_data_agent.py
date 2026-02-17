@@ -35,6 +35,7 @@ from core.deep_analyzer import DeepAnalyzer
 from core.html_dashboard import HTMLDashboardBuilder
 from core.pdf_report import PDFReportBuilder
 from core.export_engine import ExportEngine
+from core.interactive_dashboard import InteractiveDashboard
 
 # ------------------------------------------------------------------ #
 #  Tool Definitions for Claude                                         #
@@ -249,6 +250,7 @@ class DrDataAgent:
         self.html_builder = HTMLDashboardBuilder()
         self.pdf_builder = PDFReportBuilder()
         self.export_engine = ExportEngine()
+        self.dashboard_builder = InteractiveDashboard()
 
         self.output_dir = str(PROJECT_ROOT / "output")
 
@@ -698,9 +700,10 @@ class DrDataAgent:
             want_pptx = any(k in msg_lower for k in ("powerpoint", "pptx", "presentation", "slides"))
             want_pdf = any(k in msg_lower for k in ("pdf", "report"))
             want_docx = any(k in msg_lower for k in ("word", "docx", "document"))
+            want_dash = any(k in msg_lower for k in ("dashboard", "html", "interactive", "explore", "drill down", "filter"))
             want_all = any(k in msg_lower for k in ("all formats", "all three", "everything"))
 
-            if want_pptx or want_pdf or want_docx or want_all:
+            if want_pptx or want_pdf or want_docx or want_dash or want_all:
                 title = "Dr. Data Report"
                 if self.data_file_path:
                     base = os.path.splitext(os.path.basename(self.data_file_path))[0]
@@ -710,7 +713,7 @@ class DrDataAgent:
                 downloads = []
 
                 if want_all:
-                    want_pptx = want_pdf = want_docx = True
+                    want_pptx = want_pdf = want_docx = want_dash = True
 
                 if want_pptx:
                     p = self.export_engine.generate_pptx(
@@ -749,6 +752,19 @@ class DrDataAgent:
                             "filename": f"{safe}.docx",
                             "path": p,
                             "description": "Detailed Word document with data analysis",
+                        })
+
+                if want_dash:
+                    p = self.dashboard_builder.generate(
+                        self.dataframe, title,
+                        os.path.join(self.output_dir, f"{safe}_dashboard.html"),
+                    )
+                    if p:
+                        downloads.append({
+                            "name": "Interactive Dashboard",
+                            "filename": f"{safe}_dashboard.html",
+                            "path": p,
+                            "description": "Filterable charts and data table with search, sort, copy, and CSV export",
                         })
 
                 if downloads:

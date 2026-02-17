@@ -677,25 +677,22 @@ class PBIPGenerator:
     def _build_m_expression(self, table_cfg, data_file_path, sheet_name=None):
         """Build Power Query M expression lines for a table partition.
 
-        Uses generic step names (Navigation, Source) to avoid M parser errors
-        when identifiers contain special characters.
-
-        The M expression uses a FilePath parameter pattern so PBI Desktop
-        can locate the data file wherever the user extracts the ZIP.
-
-        Args:
-            table_cfg:      dict with 'name' and 'columns' keys.
-            data_file_path: path to the source data file.
-            sheet_name:     Excel sheet name to load (e.g. "Orders").
+        The M expression must use a valid Windows absolute path for
+        File.Contents(). If the generator runs on Linux (Streamlit Cloud)
+        or uses a temp path, we substitute a portable Windows path so
+        PBI Desktop can open the file. The data file is bundled in the
+        ZIP -- the user just needs to update the path once in Power Query.
         """
         if data_file_path:
             try:
-                p = Path(data_file_path)
-                filename = p.name
-                original_path = str(p.resolve())
+                filename = Path(data_file_path).name
             except Exception:
-                filename = str(data_file_path).replace("/", "\\").split("\\")[-1]
-                original_path = str(data_file_path)
+                filename = str(data_file_path).split("/")[-1].split("\\")[-1]
+
+            # Build a valid Windows path for PBI Desktop.
+            # If we're already on Windows with a real path, use it.
+            # Otherwise use a placeholder the user can update.
+            file_path_for_m = self._windows_path_for_m(data_file_path, filename)
             is_excel = filename.lower().endswith((".xlsx", ".xls"))
 
             if is_excel:
@@ -708,8 +705,7 @@ class PBIPGenerator:
                     nav_line = '    Navigation = Source{0}[Data],'
                 return [
                     "let",
-                    f'    // DataFile: {filename}',
-                    f'    Source = Excel.Workbook(File.Contents("{original_path}"), null, true),',
+                    f'    Source = Excel.Workbook(File.Contents("{file_path_for_m}"), null, true),',
                     nav_line,
                     f'    #"Promoted Headers" = Table.PromoteHeaders(Navigation, [PromoteAllScalars=true]),',
                     f'    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{self._build_type_transforms(table_cfg)})',
@@ -719,8 +715,7 @@ class PBIPGenerator:
             else:
                 return [
                     "let",
-                    f'    // DataFile: {filename}',
-                    f'    Source = Csv.Document(File.Contents("{original_path}"),[Delimiter=",",Columns={len(table_cfg.get("columns", []))},Encoding=65001,QuoteStyle=QuoteStyle.None]),',
+                    f'    Source = Csv.Document(File.Contents("{file_path_for_m}"),[Delimiter=",",Columns={len(table_cfg.get("columns", []))},Encoding=65001,QuoteStyle=QuoteStyle.None]),',
                     f'    #"Promoted Headers" = Table.PromoteHeaders(Source, [PromoteAllScalars=true]),',
                     f'    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{self._build_type_transforms(table_cfg)})',
                     "in",
@@ -734,6 +729,29 @@ class PBIPGenerator:
             "in",
             "    Source",
         ]
+
+    @staticmethod
+    def _windows_path_for_m(data_file_path, filename):
+        """Return a valid Windows absolute path for PBI M expressions.
+
+        - On Windows with a real local path: use as-is (resolved).
+        - On Linux / temp paths / Streamlit Cloud: use C:\\PBI_Data\\{filename}
+          so PBI Desktop can open the file (user updates path once).
+        """
+        import sys
+        raw = str(data_file_path)
+
+        if sys.platform == "win32":
+            try:
+                resolved = str(Path(raw).resolve())
+                # Only use it if it looks like a real Windows path (not temp)
+                if resolved[1] == ":" and "\\Temp\\" not in resolved:
+                    return resolved
+            except Exception:
+                pass
+
+        # Fallback: portable placeholder path
+        return f"C:\\PBI_Data\\{filename}"
 
     def _build_type_transforms(self, table_cfg):
         """Build the type transform list for Table.TransformColumnTypes."""

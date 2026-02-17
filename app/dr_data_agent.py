@@ -1005,10 +1005,19 @@ class DrDataAgent:
                 sheet_name=self.sheet_name,
             )
 
-            # Step 5: ZIP the project directory for download
+            # Step 5: Bundle data file + ZIP for download
             self._report_progress(
                 "Step 5/5: Packaging Power BI project for download..."
             )
+
+            # Copy the data file into the project so the user has it
+            data_filename = ""
+            if self.data_file_path and os.path.isfile(self.data_file_path):
+                data_filename = os.path.basename(self.data_file_path)
+                dst = os.path.join(result_path, data_filename)
+                if not os.path.exists(dst):
+                    shutil.copy2(self.data_file_path, dst)
+
             zip_name = project_name.replace(" ", "_")
             zip_path = shutil.make_archive(
                 os.path.join(output_dir, zip_name), "zip", result_path
@@ -1029,10 +1038,12 @@ class DrDataAgent:
                 "visuals": visual_count,
                 "measures": len(dashboard_spec.get("measures", [])),
                 "instructions": (
-                    f"Extract the ZIP file to a folder, then double-click "
+                    f"Extract the ZIP to a folder. The data file "
+                    f"({data_filename}) is included. Double-click "
                     f"{safe_name}.pbip to open in Power BI Desktop. "
-                    f"Requires PBI Desktop January 2026 or later with "
-                    f"PBIP preview features enabled."
+                    f"If Power BI says 'file not found', update the "
+                    f"data source path in Power Query Editor to point "
+                    f"to {data_filename} in the extracted folder."
                 ),
             })
 

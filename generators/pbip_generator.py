@@ -680,27 +680,36 @@ class PBIPGenerator:
         Uses generic step names (Navigation, Source) to avoid M parser errors
         when identifiers contain special characters.
 
+        The M expression uses a FilePath parameter pattern so PBI Desktop
+        can locate the data file wherever the user extracts the ZIP.
+
         Args:
             table_cfg:      dict with 'name' and 'columns' keys.
             data_file_path: path to the source data file.
             sheet_name:     Excel sheet name to load (e.g. "Orders").
         """
-        # Use actual data file path if available
         if data_file_path:
-            real_path = str(Path(data_file_path).resolve())
-            # Determine file type
-            if real_path.lower().endswith(".xlsx"):
-                # Use the known sheet name when available, fall back to first sheet
+            try:
+                p = Path(data_file_path)
+                filename = p.name
+                original_path = str(p.resolve())
+            except Exception:
+                filename = str(data_file_path).replace("/", "\\").split("\\")[-1]
+                original_path = str(data_file_path)
+            is_excel = filename.lower().endswith((".xlsx", ".xls"))
+
+            if is_excel:
                 if sheet_name:
                     nav_line = (
                         f'    Navigation = Source{{[Item="{sheet_name}",'
                         f'Kind="Sheet"]}}[Data],'
                     )
                 else:
-                    nav_line = f'    Navigation = Source{{0}}[Data],'
+                    nav_line = '    Navigation = Source{0}[Data],'
                 return [
                     "let",
-                    f'    Source = Excel.Workbook(File.Contents("{real_path}"), null, true),',
+                    f'    // DataFile: {filename}',
+                    f'    Source = Excel.Workbook(File.Contents("{original_path}"), null, true),',
                     nav_line,
                     f'    #"Promoted Headers" = Table.PromoteHeaders(Navigation, [PromoteAllScalars=true]),',
                     f'    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{self._build_type_transforms(table_cfg)})',
@@ -710,7 +719,8 @@ class PBIPGenerator:
             else:
                 return [
                     "let",
-                    f'    Source = Csv.Document(File.Contents("{real_path}"),[Delimiter=",",Columns={len(table_cfg.get("columns", []))},Encoding=65001,QuoteStyle=QuoteStyle.None]),',
+                    f'    // DataFile: {filename}',
+                    f'    Source = Csv.Document(File.Contents("{original_path}"),[Delimiter=",",Columns={len(table_cfg.get("columns", []))},Encoding=65001,QuoteStyle=QuoteStyle.None]),',
                     f'    #"Promoted Headers" = Table.PromoteHeaders(Source, [PromoteAllScalars=true]),',
                     f'    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{self._build_type_transforms(table_cfg)})',
                     "in",

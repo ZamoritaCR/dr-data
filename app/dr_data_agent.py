@@ -482,19 +482,37 @@ class DrDataAgent:
             self.dataframe = df
 
     def analyze_uploaded_file(self, file_path=None):
-        """Auto-analyze uploaded file(s) and return a text summary.
+        """Auto-analyze uploaded file(s) and return Dr. Data's LLM response.
 
-        If a MultiFileSession is connected via set_session(), uses that.
-        Otherwise falls back to single-file analysis via ingest_file().
+        Gathers data context (rows, columns, stats, structure) then sends
+        it through the LLM so Dr. Data's personality controls the greeting.
         """
         # Multi-file session path
         if self.session:
-            return self._analyze_from_session()
-
-        # Single-file fallback
-        if not file_path:
+            context = self._build_upload_context_from_session()
+        elif file_path:
+            context = self._build_upload_context_from_file(file_path)
+        else:
             return "No file provided."
 
+        # Route through the LLM so Dr. Data's voice comes through
+        internal_prompt = (
+            f"[SYSTEM: The user just uploaded a file. Here is what you have:\n"
+            f"{context}\n"
+            f"Greet the user warmly. Tell them the most interesting thing you "
+            f"see in the data -- lead with an insight, not just metadata. "
+            f"Then naturally mention what you can build for them (interactive "
+            f"dashboards, Power BI projects, PDF reports, PowerPoint "
+            f"presentations, Word documents). Do NOT use a numbered list -- "
+            f"weave the options into your conversation naturally. Ask who the "
+            f"audience is. Remember The Art of the Possible.]"
+        )
+
+        result = self.chat(internal_prompt)
+        return result.get("text", "")
+
+    def _build_upload_context_from_file(self, file_path):
+        """Load a single file and return context string for the LLM."""
         from app.file_handler import ingest_file
 
         self.data_file_path = file_path
@@ -513,50 +531,14 @@ class DrDataAgent:
         if result.get("report_structure"):
             self.tableau_spec = result["report_structure"]
 
-        # Build summary text
-        fname = os.path.basename(file_path)
-        parts = [f"I have loaded {fname}."]
+        return self._format_data_context(
+            file_names=[os.path.basename(file_path)]
+        )
 
-        if self.dataframe is not None:
-            df = self.dataframe
-            cols_preview = ", ".join(df.columns[:8].tolist())
-            if len(df.columns) > 8:
-                cols_preview += "..."
-            parts.append(
-                f"The dataset contains {len(df):,} rows and "
-                f"{len(df.columns)} columns: {cols_preview}."
-            )
-            if self.data_profile:
-                for insight in self.data_profile.get("quick_insights", [])[:3]:
-                    parts.append(insight)
-
-        if self.tableau_spec:
-            rtype = self.tableau_spec.get("type", "")
-            if "tableau" in rtype:
-                ws_count = len(self.tableau_spec.get("worksheets", []))
-                ds_count = len(self.tableau_spec.get("datasources", []))
-                parts.append(
-                    f"This is a Tableau workbook with {ws_count} worksheets "
-                    f"and {ds_count} data sources."
-                )
-            elif "alteryx" in rtype:
-                tool_count = self.tableau_spec.get(
-                    "tool_summary", {}
-                ).get("total_tools", 0)
-                parts.append(
-                    f"This is an Alteryx workflow with {tool_count} tools."
-                )
-            elif "business_objects" in rtype:
-                parts.append("This is a Business Objects report.")
-
-        parts.append(self._build_options_text())
-        return " ".join(parts)
-
-    def _analyze_from_session(self):
-        """Build analysis summary from the MultiFileSession."""
+    def _build_upload_context_from_session(self):
+        """Build context string from MultiFileSession for the LLM."""
         session = self.session
         summary = session.get_summary()
-        parts = []
 
         # Sync data from session
         df = session.get_primary_dataframe()
@@ -564,100 +546,111 @@ class DrDataAgent:
             self.dataframe = df
             self.data_profile = self.analyzer.profile(df)
 
-        # File listing
         file_names = [f["filename"] for f in summary["files"]]
-        if len(file_names) == 1:
-            parts.append(f"I have loaded {file_names[0]}.")
-        else:
-            parts.append(
-                f"I have loaded {len(file_names)} files: {', '.join(file_names)}."
-            )
 
-        # Data summary with specific numbers
-        if self.dataframe is not None:
-            df = self.dataframe
-            cols_preview = ", ".join(df.columns[:8].tolist())
-            if len(df.columns) > 8:
-                cols_preview += "..."
-            parts.append(
-                f"The primary dataset contains {len(df):,} rows and "
-                f"{len(df.columns)} columns: {cols_preview}."
-            )
-            if self.data_profile:
-                for insight in self.data_profile.get("quick_insights", [])[:3]:
-                    parts.append(insight)
+        # Extra structure context
+        extra_parts = []
 
-        # Structure info
         if summary.get("has_structure"):
             stype = summary.get("structure_type", "")
             if "tableau" in stype and "tableau" in summary:
                 t = summary["tableau"]
-                parts.append(
-                    f"This is a Tableau workbook with {t['worksheet_count']} worksheets, "
-                    f"{t['dashboard_count']} dashboards, and "
+                extra_parts.append(
+                    f"Tableau workbook: {t['worksheet_count']} worksheets, "
+                    f"{t['dashboard_count']} dashboards, "
                     f"{t['calculated_fields']} calculated fields."
                 )
                 unmapped = t.get("unmapped_sources", [])
                 if unmapped:
-                    parts.append(
-                        f"I need the data files for these Tableau sources: "
-                        f"{', '.join(unmapped)}. Please upload them so I can "
-                        f"build your dashboard with real data."
+                    extra_parts.append(
+                        f"Still need data files for: {', '.join(unmapped)}."
                     )
             elif "alteryx" in str(stype) and "alteryx" in summary:
                 a = summary["alteryx"]
-                parts.append(
-                    f"This is an Alteryx workflow with {a['tool_count']} tools."
+                extra_parts.append(
+                    f"Alteryx workflow: {a['tool_count']} tools."
                 )
 
-        # Multiple data files
         if summary["data_file_count"] > 1:
             data_names = [d["filename"] for d in session.data_files]
-            parts.append(
-                f"I have {summary['data_file_count']} data files loaded: "
-                f"{', '.join(data_names)}. Using the largest as the primary dataset."
+            extra_parts.append(
+                f"Multiple data files: {', '.join(data_names)}. "
+                f"Using the largest as primary."
             )
 
-        # Data-to-Tableau mapping
         mapping = summary.get("data_source_mapping", {})
         if mapping:
             for ds_name, info in mapping.items():
-                parts.append(
-                    f"Mapped Tableau source '{ds_name}' to {info['data_file']}."
+                extra_parts.append(
+                    f"Mapped source '{ds_name}' to {info['data_file']}."
                 )
 
-        # Present options (skip if still needs data)
-        if not summary.get("needs_data"):
-            parts.append(self._build_options_text())
-
-        return " ".join(parts)
-
-    def _build_options_text(self):
-        """Build the numbered output options per CORE_BEHAVIOR."""
-        if self.tableau_spec:
-            return (
-                "\n\nWhat would you like me to do?\n\n"
-                "1. Translate to Power BI -- equivalent DAX measures, visuals, "
-                "and data model in a .pbip project you can open in PBI Desktop.\n\n"
-                "2. Build an interactive HTML dashboard -- from the data, "
-                "opens in any browser, filters update every chart live.\n\n"
-                "3. Both -- Power BI project for your analytics team plus an "
-                "HTML dashboard for quick sharing.\n\n"
-                "4. Migration report -- every calculated field translated with "
-                "explanations.\n\n"
-                "Who is the audience?"
-            )
-        return (
-            "\n\nWhat would you like me to build?\n\n"
-            "1. Interactive HTML Dashboard -- opens in any browser, filters "
-            "update all charts live, works offline. Best for sharing and "
-            "presenting.\n\n"
-            "2. Power BI Project -- full .pbip with DAX measures, relationships, "
-            "and formatted visuals. Best if your team uses Power BI Desktop.\n\n"
-            "3. Both -- I'll generate the HTML dashboard for quick sharing "
-            "and the Power BI project for your analytics team.\n\n"
-            "Who is the audience?"
+        return self._format_data_context(
+            file_names=file_names,
+            extra=extra_parts,
+            needs_data=summary.get("needs_data", False),
         )
+
+    def _format_data_context(self, file_names, extra=None, needs_data=False):
+        """Format data stats into a context string for the LLM prompt."""
+        parts = [f"Files loaded: {', '.join(file_names)}."]
+
+        if self.dataframe is not None:
+            df = self.dataframe
+            parts.append(
+                f"Dataset: {len(df):,} rows, {len(df.columns)} columns."
+            )
+            parts.append(f"Columns: {', '.join(df.columns.tolist())}.")
+
+            # Numeric summary
+            num_cols = df.select_dtypes(include="number").columns.tolist()
+            if num_cols:
+                stats_lines = []
+                for col in num_cols[:6]:
+                    stats_lines.append(
+                        f"  {col}: min={df[col].min():,.2f}, "
+                        f"max={df[col].max():,.2f}, "
+                        f"mean={df[col].mean():,.2f}"
+                    )
+                parts.append("Numeric summary:\n" + "\n".join(stats_lines))
+
+            # Null info
+            total_nulls = int(df.isna().sum().sum())
+            if total_nulls > 0:
+                parts.append(f"Total null cells: {total_nulls:,}.")
+
+            # Quick insights from profiler
+            if self.data_profile:
+                insights = self.data_profile.get("quick_insights", [])
+                if insights:
+                    parts.append(
+                        "Profiler insights: " + " ".join(insights[:4])
+                    )
+
+        if self.tableau_spec:
+            rtype = self.tableau_spec.get("type", "")
+            if "tableau" in rtype:
+                ws_count = len(self.tableau_spec.get("worksheets", []))
+                ds_count = len(self.tableau_spec.get("datasources", []))
+                parts.append(
+                    f"Tableau workbook: {ws_count} worksheets, "
+                    f"{ds_count} data sources."
+                )
+            elif "alteryx" in rtype:
+                tool_count = self.tableau_spec.get(
+                    "tool_summary", {}
+                ).get("total_tools", 0)
+                parts.append(f"Alteryx workflow: {tool_count} tools.")
+            elif "business_objects" in rtype:
+                parts.append("Business Objects report.")
+
+        if extra:
+            parts.extend(extra)
+
+        if needs_data:
+            parts.append("NOTE: Still waiting for data files to be uploaded.")
+
+        return "\n".join(parts)
 
     def respond(self, user_message, conversation_history, uploaded_files,
                 progress_callback=None):

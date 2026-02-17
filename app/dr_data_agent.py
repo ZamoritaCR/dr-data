@@ -837,28 +837,83 @@ class DrDataAgent:
                         pass
                     break
 
-        # --- Export interception: handle PowerPoint/PDF/Word before LLM ---
-        if self.dataframe is not None:
-            msg_lower = user_message.lower()
-            want_pptx = any(k in msg_lower for k in ("powerpoint", "pptx", "presentation", "slides"))
-            want_pdf = any(k in msg_lower for k in ("pdf", "report"))
-            want_docx = any(k in msg_lower for k in ("word", "docx", "document"))
-            want_dash = any(k in msg_lower for k in ("dashboard", "html", "interactive", "explore", "drill down", "filter"))
-            want_all = any(k in msg_lower for k in ("all formats", "all three", "everything"))
+        # --- Export interception: handle deliverables before LLM ---
+        msg_lower = user_message.lower()
+        want_pptx = any(k in msg_lower for k in (
+            "powerpoint", "pptx", "presentation", "slides", "deck",
+        ))
+        want_pdf = any(k in msg_lower for k in ("pdf", "report"))
+        want_docx = any(k in msg_lower for k in ("word", "docx", "document"))
+        want_dash = any(k in msg_lower for k in (
+            "dashboard", "html", "interactive", "explore",
+            "drill down", "filter",
+        ))
+        want_pbi = any(k in msg_lower for k in (
+            "power bi", "pbi", "pbip", "pbix",
+        ))
+        want_all = any(k in msg_lower for k in (
+            "all formats", "all three", "everything",
+        ))
 
-            if want_pptx or want_pdf or want_docx or want_dash or want_all:
-                title = "Dr. Data Report"
-                if self.data_file_path:
-                    base = os.path.splitext(os.path.basename(self.data_file_path))[0]
-                    title = base.replace("_", " ").strip() or title
-                safe = "".join(c if c.isalnum() or c in " _-" else "_" for c in title)
-                os.makedirs(self.output_dir, exist_ok=True)
-                downloads = []
+        any_export = (
+            want_pptx or want_pdf or want_docx
+            or want_dash or want_pbi or want_all
+        )
 
-                if want_all:
-                    want_pptx = want_pdf = want_docx = want_dash = True
+        if any_export:
+            # Guard: need data first
+            if self.dataframe is None:
+                return {
+                    "content": (
+                        "Upload a file first and I will build that for you. "
+                        "Drop a CSV, Excel, or any data file in the sidebar "
+                        "and I will get right on it."
+                    ),
+                    "downloads": [],
+                    "scores": None,
+                }
 
-                if want_pptx:
+            title = "Dr. Data Report"
+            if self.data_file_path:
+                base = os.path.splitext(
+                    os.path.basename(self.data_file_path)
+                )[0]
+                title = base.replace("_", " ").strip() or title
+            safe = "".join(
+                c if c.isalnum() or c in " _-" else "_" for c in title
+            )
+            os.makedirs(self.output_dir, exist_ok=True)
+            downloads = []
+            errors = []
+
+            if want_all:
+                want_pptx = want_pdf = want_docx = want_dash = want_pbi = True
+
+            # -- Interactive HTML Dashboard --
+            if want_dash:
+                try:
+                    p = self.dashboard_builder.generate(
+                        self.dataframe, title,
+                        os.path.join(
+                            self.output_dir, f"{safe}_dashboard.html"
+                        ),
+                    )
+                    if p:
+                        downloads.append({
+                            "name": "Interactive Dashboard",
+                            "filename": f"{safe}_dashboard.html",
+                            "path": p,
+                            "description": (
+                                "Filterable charts and data table with "
+                                "search, sort, copy, and CSV export"
+                            ),
+                        })
+                except Exception as e:
+                    errors.append(f"Interactive Dashboard: {e}")
+
+            # -- PowerPoint --
+            if want_pptx:
+                try:
                     p = self.export_engine.generate_pptx(
                         self.dataframe, title,
                         os.path.join(self.output_dir, f"{safe}.pptx"),
@@ -868,10 +923,17 @@ class DrDataAgent:
                             "name": "PowerPoint Presentation",
                             "filename": f"{safe}.pptx",
                             "path": p,
-                            "description": "Professional presentation with key stats and trends",
+                            "description": (
+                                "Professional presentation with key "
+                                "stats and trends"
+                            ),
                         })
+                except Exception as e:
+                    errors.append(f"PowerPoint: {e}")
 
-                if want_pdf:
+            # -- PDF --
+            if want_pdf:
+                try:
                     p = self.export_engine.generate_pdf(
                         self.dataframe, title,
                         os.path.join(self.output_dir, f"{safe}.pdf"),
@@ -881,10 +943,16 @@ class DrDataAgent:
                             "name": "PDF Report",
                             "filename": f"{safe}.pdf",
                             "path": p,
-                            "description": "Executive PDF report with data summary",
+                            "description": (
+                                "Executive PDF report with data summary"
+                            ),
                         })
+                except Exception as e:
+                    errors.append(f"PDF Report: {e}")
 
-                if want_docx:
+            # -- Word --
+            if want_docx:
+                try:
                     p = self.export_engine.generate_docx(
                         self.dataframe, title,
                         os.path.join(self.output_dir, f"{safe}.docx"),
@@ -894,30 +962,63 @@ class DrDataAgent:
                             "name": "Word Document",
                             "filename": f"{safe}.docx",
                             "path": p,
-                            "description": "Detailed Word document with data analysis",
+                            "description": (
+                                "Detailed Word document with data analysis"
+                            ),
                         })
+                except Exception as e:
+                    errors.append(f"Word Document: {e}")
 
-                if want_dash:
-                    p = self.dashboard_builder.generate(
-                        self.dataframe, title,
-                        os.path.join(self.output_dir, f"{safe}_dashboard.html"),
+            # -- Power BI project --
+            if want_pbi:
+                try:
+                    # Route through the LLM tool-calling path so the
+                    # full Power BI pipeline (design + build) runs.
+                    pbi_prompt = self._build_context_message(
+                        f"Build a Power BI .pbip project from this data. "
+                        f"Title: {title}."
                     )
-                    if p:
-                        downloads.append({
-                            "name": "Interactive Dashboard",
-                            "filename": f"{safe}_dashboard.html",
-                            "path": p,
-                            "description": "Filterable charts and data table with search, sort, copy, and CSV export",
-                        })
+                    pbi_result = self.chat(pbi_prompt)
+                    for fpath in pbi_result.get("files", []):
+                        if os.path.exists(fpath):
+                            fname = os.path.basename(fpath)
+                            downloads.append({
+                                "name": "Power BI Project",
+                                "filename": fname,
+                                "path": fpath,
+                                "description": (
+                                    "Full .pbip project with DAX measures, "
+                                    "visuals, and data model"
+                                ),
+                            })
+                except Exception as e:
+                    errors.append(f"Power BI Project: {e}")
 
+            # Build response content
+            if downloads or errors:
+                parts = []
                 if downloads:
                     fmt_names = [d["name"] for d in downloads]
-                    rows, cols = self.dataframe.shape
-                    content = (
-                        f"Built {' and '.join(fmt_names)} from your {rows:,}-row dataset. "
-                        f"Covers all {cols} columns with statistical breakdowns and key findings."
-                    )
-                    return {"content": content, "downloads": downloads, "scores": None}
+                    if len(fmt_names) == 1:
+                        parts.append(
+                            f"Your {fmt_names[0]} is ready."
+                        )
+                    else:
+                        parts.append(
+                            f"Built {' and '.join(fmt_names)} from your "
+                            f"{len(self.dataframe):,}-row dataset."
+                        )
+                if errors:
+                    for err in errors:
+                        parts.append(
+                            f"Hit a snag on {err.split(':')[0]} -- "
+                            f"I will retry if you ask again."
+                        )
+                return {
+                    "content": " ".join(parts),
+                    "downloads": downloads,
+                    "scores": None,
+                }
 
         # Enrich user message with context so Claude never asks for paths
         enriched = self._build_context_message(user_message)

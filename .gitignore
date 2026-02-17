@@ -46,3 +46,56 @@ Thumbs.db
 *.twb
 *.xlsx
 *.csv
+
+# Claude Code
+.claude/
+
+# Legacy root-level scripts (moved to app/ and core/)
+agentic_migration_engine.py
+app_integration.py
+app_v2.py
+assemble_pbix.ps1
+audit_engine.py
+build_dashboard.py
+claude_agent.py
+dr_data_chat.py
+dr_data_chat_v2.py
+enhanced_tableau_parser.py
+multi_file_handler.py
+output_formatter.py
+pbix_assembler.py
+powerbi_visual_generator.py
+quick_start.py
+run_migration.py
+setup_cli.sh
+source_connectors.py
+streamlit_app.py
+test_migration.py
+windows_test.py
+app_v2.py
+
+# Legacy folders
+connectors/
+migration/
+tests/
+vscode/
+
+# Reference template (used at runtime, not for git)
+reference_template.Report/
+reference_template.SemanticModel/
+reference_template.pbip
+
+# Artifacts
+python
+python -c t
+dr_data_avatar.svg
+
+# Docs (not needed in repo)
+AGENTIC_README.md
+ALTERYX_DATAIKU_UPGRADE.md
+CORE_BEHAVIOR.md
+DR_DATA_BUILD_PROMPT.md
+DR_DATA_UI_FIX.md
+IMPLEMENTATION_PLAN.md
+SETUP.md
+.env.example

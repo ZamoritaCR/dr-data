@@ -13,7 +13,7 @@ from openai import OpenAI
 
 # Allow imports from project root
 sys.path.insert(0, str(Path(__file__).parent.parent.resolve()))
-from config.settings import OPENAI_API_KEY
+from config.settings import _get_secret
 from config.prompts import OPENAI_PBIP_SYSTEM_PROMPT
 
 
@@ -25,9 +25,10 @@ class OpenAIEngine:
     MAX_RETRIES = 3
 
     def __init__(self):
-        if not OPENAI_API_KEY:
-            raise RuntimeError("OPENAI_API_KEY not set. Check .env file.")
-        self.client = OpenAI(api_key=OPENAI_API_KEY)
+        api_key = _get_secret("OPENAI_API_KEY")
+        if not api_key:
+            raise RuntimeError("OPENAI_API_KEY not set.")
+        self.client = OpenAI(api_key=api_key)
         print(f"[OK] OpenAI engine ready (model: {self.MODEL})")
 
     # ------------------------------------------------------------------ #

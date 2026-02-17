@@ -29,7 +29,7 @@ if sys.platform == "win32" and getattr(sys.stdout, "encoding", "") != "utf-8":
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from config.settings import ANTHROPIC_API_KEY
+from config.settings import _get_secret
 from config.prompts import DR_DATA_SYSTEM_PROMPT, DASHBOARD_DESIGN_PROMPT
 from core.deep_analyzer import DeepAnalyzer
 from core.html_dashboard import HTMLDashboardBuilder
@@ -236,9 +236,13 @@ class DrDataAgent:
     MAX_TOKENS = 8192
 
     def __init__(self):
-        if not ANTHROPIC_API_KEY:
-            raise RuntimeError("ANTHROPIC_API_KEY not set. Check .env file.")
-        self.client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        api_key = _get_secret("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "ANTHROPIC_API_KEY not set. "
+                "Add it in Streamlit Cloud Secrets or your local .env file."
+            )
+        self.client = anthropic.Anthropic(api_key=api_key)
         self.messages = []
         self.analyzer = DeepAnalyzer()
         self.html_builder = HTMLDashboardBuilder()

@@ -29,7 +29,7 @@ if sys.platform == "win32" and getattr(sys.stdout, "encoding", "") != "utf-8":
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from config.settings import ANTHROPIC_API_KEY
+from config.settings import _get_secret
 from config.prompts import EXPLANATION_SYSTEM_PROMPT, ANALYST_REPORT_PROMPT
 
 
@@ -41,9 +41,10 @@ class ExplanationEngine:
     MAX_RETRIES = 3
 
     def __init__(self):
-        if not ANTHROPIC_API_KEY:
-            raise RuntimeError("ANTHROPIC_API_KEY not set. Check .env file.")
-        self.client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        api_key = _get_secret("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise RuntimeError("ANTHROPIC_API_KEY not set.")
+        self.client = anthropic.Anthropic(api_key=api_key)
         self.template_dir = Path(__file__).parent
         print(f"[OK] Explanation engine ready (model: {self.MODEL})")
 

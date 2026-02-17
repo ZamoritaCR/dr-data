@@ -13,7 +13,7 @@ import anthropic
 
 # Allow imports from project root
 sys.path.insert(0, str(Path(__file__).parent.parent.resolve()))
-from config.settings import ANTHROPIC_API_KEY
+from config.settings import _get_secret
 from config.prompts import INTERPRETER_SYSTEM_PROMPT, EXPLANATION_SYSTEM_PROMPT
 
 
@@ -25,9 +25,10 @@ class ClaudeInterpreter:
     MAX_RETRIES = 3
 
     def __init__(self):
-        if not ANTHROPIC_API_KEY:
-            raise RuntimeError("ANTHROPIC_API_KEY not set. Check .env file.")
-        self.client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        api_key = _get_secret("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise RuntimeError("ANTHROPIC_API_KEY not set.")
+        self.client = anthropic.Anthropic(api_key=api_key)
         print(f"[OK] Claude interpreter ready (model: {self.MODEL})")
 
     # ------------------------------------------------------------------ #

@@ -371,6 +371,16 @@ with st.sidebar:
                 new_files.append(uf.name)
 
         if new_files:
+            # Auto-unify if 2+ data files
+            if len(session.data_files) >= 2:
+                try:
+                    unified_df, rels, log = session.auto_unify()
+                    if unified_df is not None:
+                        st.session_state.workspace_content["join_log"] = log
+                        st.session_state.workspace_content["relationships"] = rels
+                except Exception:
+                    pass
+
             primary_df = session.get_primary_dataframe()
             if primary_df is not None:
                 st.session_state.workspace_content["data_preview"] = primary_df

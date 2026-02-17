@@ -21,6 +21,7 @@ import xml.etree.ElementTree as ET
 
 sys.path.insert(0, str(os.path.join(os.path.dirname(__file__), "..")))
 from app.file_handler import load_excel_smart
+from core.relationship_detector import RelationshipDetector
 
 
 # File type classification
@@ -53,6 +54,10 @@ class MultiFileSession:
         self.alteryx_spec = None
         self.data_source_map = {}
         self._temp_dir = tempfile.mkdtemp(prefix="drdata_")
+        self.detector = RelationshipDetector()
+        self.relationships = []
+        self.unified_df = None
+        self.join_log = []
 
     def add_file(self, filename, file_bytes_or_path):
         """
@@ -159,7 +164,12 @@ class MultiFileSession:
         return self._describe_session()
 
     def get_primary_dataframe(self):
-        """Get the main DataFrame for building dashboards."""
+        """Get the main DataFrame for building dashboards.
+
+        Prefers the unified (auto-joined) DataFrame if available.
+        """
+        if self.unified_df is not None:
+            return self.unified_df
         if self.primary_df is not None:
             return self.primary_df
         # Fall back to first data file
@@ -178,6 +188,22 @@ class MultiFileSession:
                 self.primary_df = d["df"]
                 return True
         return False
+
+    def auto_unify(self):
+        """Detect relationships and auto-join all data files into one DataFrame.
+
+        Sets self.relationships, self.unified_df, self.join_log.
+        Returns (unified_df, relationships, join_log).
+        """
+        dfs = self.get_all_dataframes()
+        if len(dfs) < 2:
+            return self.get_primary_dataframe(), [], []
+
+        self.relationships = self.detector.detect(dfs)
+        self.unified_df, self.join_log = self.detector.auto_join(
+            dfs, self.relationships
+        )
+        return self.unified_df, self.relationships, self.join_log
 
     def has_structure(self):
         """Do we have a Tableau/Alteryx/BOBJ structure file?"""

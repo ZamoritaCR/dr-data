@@ -18,6 +18,12 @@ import anthropic
 import pandas as pd
 import numpy as np
 
+try:
+    from openai import OpenAI as _OpenAIClient
+    _HAS_OPENAI = True
+except ImportError:
+    _HAS_OPENAI = False
+
 # Windows encoding fix
 if sys.platform == "win32" and getattr(sys.stdout, "encoding", "") != "utf-8":
     sys.stdout = io.TextIOWrapper(
@@ -269,6 +275,14 @@ class DrDataAgent:
         self.session = None
         self.session_bridge = None
 
+        # OpenAI secondary engine (for large-context / data-heavy tasks)
+        self.openai_client = None
+        openai_key = os.getenv("OPENAI_API_KEY") or _get_secret("OPENAI_API_KEY")
+        if openai_key and _HAS_OPENAI:
+            self.openai_client = _OpenAIClient(api_key=openai_key)
+        elif not openai_key:
+            print("[INFO] OPENAI_API_KEY not set -- using Claude for all requests.")
+
     def _fix_orphaned_tool_calls(self):
         """Ensure every assistant tool_use block has a matching tool_result.
 
@@ -508,6 +522,84 @@ class DrDataAgent:
         if df is not None:
             self.dataframe = df
 
+    # ------------------------------------------------------------------ #
+    #  OpenAI secondary engine                                             #
+    # ------------------------------------------------------------------ #
+
+    def _call_openai(self, system_prompt, user_message, model="gpt-4o"):
+        """Call OpenAI chat completions with retry logic.
+
+        Returns response text, or None if all retries fail.
+        """
+        if not self.openai_client:
+            return None
+
+        last_err = None
+        for attempt in range(3):
+            try:
+                resp = self.openai_client.chat.completions.create(
+                    model=model,
+                    temperature=0.7,
+                    max_tokens=4000,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_message},
+                    ],
+                    timeout=120.0,
+                )
+                text = resp.choices[0].message.content
+                return text or ""
+            except Exception as e:
+                last_err = e
+                if attempt < 2:
+                    time.sleep(2)
+
+        print(f"[WARN] OpenAI failed after 3 attempts: {last_err}")
+        return None
+
+    # Keywords that signal a heavy analysis / generation task
+    _HEAVY_KEYWORDS = (
+        "report", "dashboard", "analysis", "analyze", "summary",
+        "generate", "build", "create", "design", "insight",
+        "trend", "forecast", "model", "compare", "breakdown",
+    )
+
+    def _route_request(self, message, context=""):
+        """Route a request to OpenAI or Claude based on context size and intent.
+
+        Args:
+            message: The user/internal message text.
+            context: Additional context string (data stats, etc.).
+
+        Returns:
+            (response_text, engine_used) tuple.
+            engine_used is "openai" or "claude".
+        """
+        full_text = context + "\n" + message if context else message
+        estimated_tokens = len(full_text) // 4
+
+        msg_lower = message.lower()
+        is_heavy = (
+            estimated_tokens > 5000
+            or any(kw in msg_lower for kw in self._HEAVY_KEYWORDS)
+        )
+
+        # Try OpenAI for heavy tasks
+        if is_heavy and self.openai_client:
+            result = self._call_openai(DR_DATA_SYSTEM_PROMPT, full_text)
+            if result is not None:
+                return result, "openai"
+            # OpenAI failed -- fall back to Claude with truncated context
+            if estimated_tokens > 5000:
+                # Truncate context to ~4000 tokens worth
+                max_chars = 16000
+                if len(full_text) > max_chars:
+                    full_text = full_text[:max_chars] + "\n[...context truncated...]"
+
+        # Use Claude (chat loop with tool calling)
+        chat_result = self.chat(full_text)
+        return chat_result.get("text", ""), "claude"
+
     def analyze_uploaded_file(self, file_path=None):
         """Auto-analyze uploaded file(s) and return Dr. Data's LLM response.
 
@@ -524,18 +616,18 @@ class DrDataAgent:
 
         # Route through the LLM so Dr. Data's voice comes through
         internal_prompt = (
-            f"[SYSTEM: A new file was uploaded. Here is what I computed from "
-            f"the raw data:\n\n{context}\n\n"
-            f"Use these specific numbers in your analysis. Lead with the most "
-            f"interesting finding -- a correlation, an outlier, a trend, a "
-            f"concentration risk, whatever jumps out. Be specific with numbers. "
-            f"Suggest what to build based on what the data is telling you. "
-            f"Do NOT use numbered lists or bullet points. Do NOT just describe "
-            f"the file metadata. Find the STORY in the data.]"
+            "A new file was uploaded. Here is what I computed from "
+            "the raw data. Use these specific numbers in your analysis. "
+            "Lead with the most interesting finding -- a correlation, "
+            "an outlier, a trend, a concentration risk, whatever jumps out. "
+            "Be specific with numbers. Suggest what to build based on what "
+            "the data is telling you. Do NOT use numbered lists or bullet "
+            "points. Do NOT just describe the file metadata. "
+            "Find the STORY in the data."
         )
 
-        result = self.chat(internal_prompt)
-        return result.get("text", "")
+        text, engine = self._route_request(internal_prompt, context=context)
+        return text
 
     def _build_upload_context_from_file(self, file_path):
         """Load a single file and return context string for the LLM."""
@@ -610,6 +702,18 @@ class DrDataAgent:
                 extra_parts.append(
                     f"Mapped source '{ds_name}' to {info['data_file']}."
                 )
+
+        # Include auto-detected relationships between tables
+        if session.relationships:
+            rel_summary = session.detector.summarize(session.relationships)
+            extra_parts.append(rel_summary)
+        if session.join_log:
+            extra_parts.append("JOIN LOG: " + " | ".join(session.join_log))
+
+        # If session was auto-unified, use the unified DataFrame
+        if session.unified_df is not None and self.dataframe is not session.unified_df:
+            self.dataframe = session.unified_df
+            self.data_profile = self.analyzer.profile(self.dataframe)
 
         return self._format_data_context(
             file_names=file_names,
@@ -1049,7 +1153,32 @@ class DrDataAgent:
         # Enrich user message with context so Claude never asks for paths
         enriched = self._build_context_message(user_message)
 
-        # Use existing chat() method with progress callback
+        # Route: use OpenAI for large-context or analysis-heavy requests,
+        # but ONLY when no tool calling is needed. If tools might be needed
+        # (build, design, parse), always use Claude's tool loop.
+        _tool_keywords = (
+            "build", "power bi", "pbi", "pbip", "tableau", "alteryx",
+            "parse", "migrate",
+        )
+        needs_tools = any(kw in msg_lower for kw in _tool_keywords)
+
+        if not needs_tools and self.openai_client:
+            estimated_tokens = len(enriched) // 4
+            is_heavy = (
+                estimated_tokens > 5000
+                or any(kw in msg_lower for kw in self._HEAVY_KEYWORDS)
+            )
+            if is_heavy:
+                oai_text = self._call_openai(DR_DATA_SYSTEM_PROMPT, enriched)
+                if oai_text is not None:
+                    return {
+                        "content": oai_text,
+                        "downloads": [],
+                        "scores": None,
+                    }
+                # OpenAI failed -- fall through to Claude
+
+        # Use Claude chat() with tool-calling loop
         result = self.chat(enriched, progress_callback=progress_callback)
 
         # Translate to workspace-friendly format

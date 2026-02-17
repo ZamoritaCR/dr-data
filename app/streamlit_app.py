@@ -456,7 +456,7 @@ with workspace_col:
     if ws["phase"] == "waiting" and ws.get("data_preview") is None:
         # Empty state
         avatar_lg = DR_DATA_AVATAR.replace('width="36" height="36"', 'width="64" height="64"')
-        st.markdown(f'<div style="text-align:center;padding:80px 40px;color:#B0B0B0;"><div style="margin-bottom:16px;opacity:0.6;">{avatar_lg}</div><div style="font-size:16px;font-weight:500;color:#FFFFFF;margin-bottom:8px;">Welcome to Dr. Data</div><div style="font-size:13px;max-width:400px;margin:0 auto;line-height:1.6;">Upload a data file in the sidebar to begin. I work with CSV, Excel, Tableau, Alteryx, Business Objects, and more. Tell me what you need, and I handle the rest.</div></div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="text-align:center;padding:80px 40px;color:#B0B0B0;"><div style="margin-bottom:16px;opacity:0.6;">{avatar_lg}</div><div style="font-size:16px;font-weight:500;color:#FFFFFF;margin-bottom:8px;">Welcome! I am Dr. Data.</div><div style="font-size:13px;max-width:440px;margin:0 auto;line-height:1.6;">I am here to help you unlock the full potential of your data. Upload a file in the sidebar -- CSV, Excel, Tableau, Alteryx, whatever you have -- and let me show you The Art of the Possible. I can build dashboards, reports, PowerPoints, and more. Let us get started!</div></div>', unsafe_allow_html=True)
 
     else:
         # === KPI CARDS ===
@@ -595,7 +595,7 @@ with workspace_col:
 # RIGHT: CHAT PANEL -- Conversation with Dr. Data
 # ============================================
 with chat_col:
-    st.markdown(f'<div style="padding:8px 0 12px 0;border-bottom:1px solid #4a4a4a;margin-bottom:12px;display:flex;align-items:center;gap:10px;">{DR_DATA_AVATAR}<div><div style="font-size:13px;font-weight:600;color:#FFFFFF;">Chat with Dr. Data</div><div style="font-size:11px;color:#B0B0B0;">Your data intelligence advisor</div></div></div>', unsafe_allow_html=True)
+    st.markdown(f'<div style="padding:8px 0 12px 0;border-bottom:1px solid #4a4a4a;margin-bottom:12px;display:flex;align-items:center;gap:10px;">{DR_DATA_AVATAR}<div><div style="font-size:13px;font-weight:600;color:#FFFFFF;">Chat with Dr. Data</div><div style="font-size:11px;color:#B0B0B0;">The Art of the Possible</div></div></div>', unsafe_allow_html=True)
 
     # Chat container with scroll
     chat_container = st.container(height=500)
@@ -606,10 +606,15 @@ with chat_col:
             st.markdown(f"""
             <div class="dr-msg">
                 <div class="dr-name">Dr. Data</div>
-                I am your data intelligence strategist. Upload a file in the
-                sidebar -- CSV, Excel, Tableau, Alteryx, whatever you have --
-                and tell me what you need. I will analyze the data, design the
-                dashboard, and build it while we talk.
+                Hello! Great to have you here. I am Dr. Data, your personal data
+                intelligence partner. I believe in The Art of the Possible --
+                every dataset has a story waiting to be told, and I am here to
+                help you tell it.<br><br>
+                Upload a file in the sidebar (CSV, Excel, Tableau, Alteryx, or
+                anything else you have) and tell me what you need. I can build
+                interactive dashboards, Power BI projects, PDF reports,
+                PowerPoint presentations, and more. Whatever helps you shine --
+                I have got you covered. Let us make something great together!
             </div>
             """, unsafe_allow_html=True)
 
@@ -676,8 +681,10 @@ with chat_col:
                     "role": "assistant",
                     "content": (
                         f"I have loaded your files: {name_str}. "
-                        f"The data is ready for analysis. What would "
-                        f"you like me to build?"
+                        f"The data looks great and is ready to go! "
+                        f"What would you like me to build? I can create "
+                        f"dashboards, reports, presentations -- whatever "
+                        f"helps you most. The Art of the Possible starts here!"
                     ),
                 })
         else:
@@ -694,18 +701,19 @@ with chat_col:
                 "role": "assistant",
                 "content": (
                     f"I have loaded {name_str}.{preview_note} "
-                    f"What would you like me to build? I can create "
+                    f"There is a lot we can do with this! I can build "
                     f"interactive HTML dashboards, PDF reports, Power BI "
-                    f"projects, or a full documentation package. "
-                    f"Tell me who the audience is and what questions "
-                    f"the dashboard should answer."
+                    f"projects, PowerPoint presentations, or a full "
+                    f"documentation package. Tell me who your audience "
+                    f"is and what story you want to tell -- I will take "
+                    f"it from there!"
                 ),
             })
 
         st.rerun()
 
     # === CHAT INPUT ===
-    if prompt := st.chat_input("Tell Dr. Data what you need...", key="chat_input"):
+    if prompt := st.chat_input("Ask Dr. Data anything -- I am here to help!", key="chat_input"):
         st.session_state.messages.append({
             "role": "user",
             "content": prompt,
@@ -758,18 +766,19 @@ with chat_col:
                 st.session_state.messages.append({
                     "role": "assistant",
                     "content": (
-                        f"I encountered an issue processing that request. "
-                        f"The error was: {str(e)[:200]}. "
-                        f"Let me try a different approach -- can you "
-                        f"rephrase what you need?"
+                        f"I ran into a small hiccup there: {str(e)[:200]}. "
+                        f"No worries though -- these things happen! Could you "
+                        f"try rephrasing what you need? I want to make sure "
+                        f"I get it right for you."
                     ),
                 })
         else:
             st.session_state.messages.append({
                 "role": "assistant",
                 "content": (
-                    "I am still initializing my analysis engines. "
-                    "Give me a moment and try again."
+                    "I am just warming up my analysis engines -- almost "
+                    "ready! Give me one moment and try again. I appreciate "
+                    "your patience!"
                 ),
             })
 

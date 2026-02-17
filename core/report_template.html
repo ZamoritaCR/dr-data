@@ -1,0 +1,719 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard Intelligence Report</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-card: #161b22;
+    --bg-card-alt: #1c2128;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-muted: #8b949e;
+    --text-dim: #484f58;
+    --blue: #1f6feb;
+    --blue-dim: #1a3a5c;
+    --green: #238636;
+    --green-dim: #1a3426;
+    --amber: #d29922;
+    --amber-dim: #3d2e00;
+    --red: #da3633;
+    --red-dim: #3d1418;
+    --accent-gradient: linear-gradient(135deg, #1f6feb 0%, #1a3a5c 100%);
+    --font: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    --mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  .container { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+
+  /* Header */
+  .header {
+    background: linear-gradient(135deg, #0d2240 0%, #1a3a5c 50%, #0d2240 100%);
+    border-bottom: 1px solid var(--blue);
+    padding: 32px 0;
+  }
+  .header h1 {
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--text);
+  }
+  .header .subtitle {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-top: 4px;
+  }
+  .header .powered {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-top: 8px;
+  }
+
+  /* Section */
+  .section {
+    margin: 32px 0;
+  }
+  .section-title {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--blue);
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 20px;
+  }
+
+  /* Cards */
+  .card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 20px;
+  }
+
+  /* Executive Summary layout */
+  .exec-grid {
+    display: grid;
+    grid-template-columns: 1fr 340px;
+    gap: 20px;
+  }
+  .exec-text {
+    line-height: 1.8;
+    color: var(--text);
+    white-space: pre-wrap;
+  }
+  .exec-text p { margin-bottom: 16px; }
+  .exec-text strong, .exec-text b { color: #58a6ff; }
+
+  .stat-cards {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  .stat-card {
+    background: var(--bg-card-alt);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px;
+    text-align: center;
+  }
+  .stat-card .label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+  }
+  .stat-card .value {
+    font-size: 28px;
+    font-weight: 700;
+  }
+  .stat-card.score-green .value { color: var(--green); }
+  .stat-card.score-amber .value { color: var(--amber); }
+  .stat-card.score-red .value { color: var(--red); }
+
+  /* Preview grid */
+  .preview-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  .preview-item {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .preview-item img {
+    width: 100%;
+    height: auto;
+    display: block;
+  }
+  .preview-caption {
+    padding: 10px 14px;
+    font-size: 12px;
+    color: var(--text-muted);
+    border-top: 1px solid var(--border);
+  }
+  .preview-caption strong { color: var(--text); }
+
+  /* Scorecard */
+  .scorecard-layout {
+    display: grid;
+    grid-template-columns: 240px 1fr;
+    gap: 32px;
+    align-items: center;
+  }
+  .gauge-container {
+    text-align: center;
+  }
+  .gauge-svg {
+    width: 200px;
+    height: 200px;
+  }
+  .gauge-bg {
+    fill: none;
+    stroke: var(--border);
+    stroke-width: 12;
+  }
+  .gauge-fill {
+    fill: none;
+    stroke-width: 12;
+    stroke-linecap: round;
+    transform: rotate(-90deg);
+    transform-origin: center;
+    transition: stroke-dasharray 0.5s ease;
+  }
+  .gauge-text {
+    font-size: 42px;
+    font-weight: 700;
+    fill: var(--text);
+    text-anchor: middle;
+    dominant-baseline: central;
+  }
+  .gauge-label {
+    font-size: 12px;
+    fill: var(--text-muted);
+    text-anchor: middle;
+  }
+
+  .bar-gauges {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .bar-gauge {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .bar-gauge .bar-label {
+    width: 180px;
+    font-size: 13px;
+    color: var(--text-muted);
+    text-align: right;
+    flex-shrink: 0;
+  }
+  .bar-track {
+    flex: 1;
+    height: 24px;
+    background: var(--bg-card-alt);
+    border-radius: 4px;
+    overflow: hidden;
+    position: relative;
+  }
+  .bar-fill {
+    height: 100%;
+    border-radius: 4px;
+    transition: width 0.5s ease;
+  }
+  .bar-value {
+    width: 44px;
+    font-size: 14px;
+    font-weight: 600;
+    text-align: left;
+    flex-shrink: 0;
+  }
+
+  /* Collapsible details */
+  details {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin-bottom: 12px;
+  }
+  details summary {
+    padding: 14px 20px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--text);
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  details summary::before {
+    content: ">";
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-dim);
+    transition: transform 0.2s;
+    display: inline-block;
+  }
+  details[open] summary::before {
+    transform: rotate(90deg);
+  }
+  details .detail-body {
+    padding: 0 20px 20px;
+    border-top: 1px solid var(--border);
+  }
+
+  /* Measure block */
+  .measure-block {
+    padding: 16px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .measure-block:last-child { border-bottom: none; }
+  .measure-name {
+    font-weight: 600;
+    font-size: 15px;
+    color: #58a6ff;
+    margin-bottom: 8px;
+  }
+  .dax-code {
+    background: #0d1117;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 12px 16px;
+    font-family: var(--mono);
+    font-size: 13px;
+    color: #79c0ff;
+    overflow-x: auto;
+    margin: 8px 0;
+    white-space: pre-wrap;
+  }
+  .measure-explain {
+    color: var(--text-muted);
+    font-size: 13px;
+    margin: 6px 0;
+  }
+  .score-badges {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+    flex-wrap: wrap;
+  }
+  .badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .badge-green { background: var(--green-dim); color: var(--green); border: 1px solid var(--green); }
+  .badge-amber { background: var(--amber-dim); color: var(--amber); border: 1px solid var(--amber); }
+  .badge-red { background: var(--red-dim); color: var(--red); border: 1px solid var(--red); }
+  .badge-blue { background: var(--blue-dim); color: #58a6ff; border: 1px solid var(--blue); }
+
+  .risk-flag {
+    margin-top: 6px;
+    padding: 6px 12px;
+    border-radius: 4px;
+    font-size: 12px;
+  }
+  .risk-flag.amber { background: var(--amber-dim); color: var(--amber); border-left: 3px solid var(--amber); }
+  .risk-flag.red { background: var(--red-dim); color: var(--red); border-left: 3px solid var(--red); }
+  .improvement {
+    margin-top: 6px;
+    padding: 6px 12px;
+    background: var(--blue-dim);
+    color: #58a6ff;
+    border-left: 3px solid var(--blue);
+    border-radius: 4px;
+    font-size: 12px;
+  }
+
+  /* Visual breakdown */
+  .visual-block {
+    padding: 14px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .visual-block:last-child { border-bottom: none; }
+  .visual-title {
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 4px;
+  }
+  .visual-type {
+    font-size: 12px;
+    color: var(--text-dim);
+    font-family: var(--mono);
+  }
+  .visual-justify {
+    color: var(--text-muted);
+    font-size: 13px;
+    margin: 6px 0;
+  }
+
+  /* Data mapping table */
+  .data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  .data-table th {
+    text-align: left;
+    padding: 10px 12px;
+    background: var(--bg-card-alt);
+    color: var(--text-muted);
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--border);
+  }
+  .data-table td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+  }
+  .data-table tr:hover td { background: rgba(31,111,235,0.05); }
+
+  /* Migration comparison */
+  .migration-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .migration-col {
+    background: var(--bg-card-alt);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px;
+  }
+  .migration-col h4 {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  .migration-col.replicated h4 { color: var(--green); }
+  .migration-col.missing h4 { color: var(--red); }
+  .migration-col.improved h4 { color: var(--blue); }
+  .migration-col ul {
+    list-style: none;
+    padding: 0;
+  }
+  .migration-col li {
+    padding: 4px 0;
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+  .migration-col li::before {
+    display: inline-block;
+    width: 18px;
+    font-weight: 700;
+    font-size: 13px;
+  }
+  .migration-col.replicated li::before { content: "+"; color: var(--green); }
+  .migration-col.missing li::before { content: "x"; color: var(--red); }
+  .migration-col.improved li::before { content: "*"; color: var(--blue); }
+
+  .migration-stats {
+    display: flex;
+    gap: 24px;
+  }
+  .migration-stat {
+    text-align: center;
+  }
+  .migration-stat .big {
+    font-size: 36px;
+    font-weight: 700;
+  }
+  .migration-stat .small {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  /* Footer */
+  .footer {
+    border-top: 1px solid var(--border);
+    padding: 24px 0;
+    margin-top: 48px;
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 12px;
+  }
+  .footer p { margin: 4px 0; }
+
+  /* Print styles */
+  @media print {
+    :root {
+      --bg: #ffffff;
+      --bg-card: #f6f8fa;
+      --bg-card-alt: #f0f2f4;
+      --border: #d0d7de;
+      --text: #1f2328;
+      --text-muted: #656d76;
+      --text-dim: #8c959f;
+    }
+    body { font-size: 11px; }
+    .header { background: #f6f8fa; border-bottom-color: var(--blue); }
+    .header h1 { color: #1f2328; }
+    .gauge-text { fill: #1f2328; }
+    .dax-code { background: #f6f8fa; color: #0550ae; }
+    details { break-inside: avoid; }
+    details[open] { break-inside: auto; }
+  }
+
+  @media (max-width: 768px) {
+    .exec-grid { grid-template-columns: 1fr; }
+    .preview-grid { grid-template-columns: 1fr; }
+    .scorecard-layout { grid-template-columns: 1fr; }
+    .migration-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header">
+  <div class="container">
+    <h1>Dashboard Intelligence Report</h1>
+    <div class="subtitle">Generated {{ generated_date }} | Classification: {{ classification }}</div>
+    <div class="powered">Powered by Dashboard Intelligence Platform</div>
+  </div>
+</div>
+
+<div class="container">
+
+<!-- EXECUTIVE SUMMARY -->
+<div class="section">
+  <div class="section-title">Executive Summary</div>
+  <div class="exec-grid">
+    <div class="card">
+      <div class="exec-text">{{ executive_summary }}</div>
+    </div>
+    <div class="stat-cards">
+      <div class="stat-card">
+        <div class="label">Total Visuals</div>
+        <div class="value" style="color: var(--blue);">{{ total_visuals }}</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">DAX Measures</div>
+        <div class="value" style="color: var(--blue);">{{ total_measures }}</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Data Columns</div>
+        <div class="value" style="color: var(--blue);">{{ total_columns }}</div>
+      </div>
+      <div class="stat-card {{ score_class }}">
+        <div class="label">Overall Score</div>
+        <div class="value">{{ total_score }}/100</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- DASHBOARD PREVIEW -->
+{% if preview_images %}
+<div class="section">
+  <div class="section-title">Dashboard Preview</div>
+  <div class="preview-grid">
+    {% for img in preview_images %}
+    <div class="preview-item">
+      <img src="{{ img.path }}" alt="{{ img.title }}">
+      <div class="preview-caption"><strong>{{ img.title }}</strong> &mdash; {{ img.type }}</div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<!-- SCORECARD -->
+<div class="section">
+  <div class="section-title">Quality Scorecard</div>
+  <div class="card">
+    <div class="scorecard-layout">
+      <div class="gauge-container">
+        <svg class="gauge-svg" viewBox="0 0 200 200">
+          <circle class="gauge-bg" cx="100" cy="100" r="80"/>
+          <circle class="gauge-fill" cx="100" cy="100" r="80"
+                  stroke="{{ gauge_color }}"
+                  stroke-dasharray="{{ gauge_dasharray }}"
+                  stroke-dashoffset="0"/>
+          <text class="gauge-text" x="100" y="94">{{ total_score }}</text>
+          <text class="gauge-label" x="100" y="122">TOTAL SCORE</text>
+        </svg>
+      </div>
+      <div class="bar-gauges">
+        {% for bar in score_bars %}
+        <div class="bar-gauge">
+          <div class="bar-label">{{ bar.label }}</div>
+          <div class="bar-track">
+            <div class="bar-fill" style="width: {{ bar.value }}%; background: {{ bar.color }};"></div>
+          </div>
+          <div class="bar-value" style="color: {{ bar.color }};">{{ bar.value }}</div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- DAX MEASURES -->
+<div class="section">
+  <div class="section-title">DAX Measure Audit</div>
+  {% for m in dax_measures %}
+  <details{% if loop.first %} open{% endif %}>
+    <summary>{{ m.name }}</summary>
+    <div class="detail-body">
+      <div class="measure-block">
+        <div class="dax-code">{{ m.dax }}</div>
+        <div class="measure-explain">{{ m.explanation }}</div>
+        <div class="score-badges">
+          <span class="badge {{ 'badge-green' if m.syntax_score >= 80 else ('badge-amber' if m.syntax_score >= 60 else 'badge-red') }}">Syntax: {{ m.syntax_score }}/100</span>
+          <span class="badge {{ 'badge-green' if m.semantic_score >= 80 else ('badge-amber' if m.semantic_score >= 60 else 'badge-red') }}">Semantic: {{ m.semantic_score }}/100</span>
+        </div>
+        {% if m.risks %}
+        <div class="risk-flag amber">Risk: {{ m.risks }}</div>
+        {% endif %}
+        {% if m.improvements %}
+        <div class="improvement">Improvement: {{ m.improvements }}</div>
+        {% endif %}
+      </div>
+    </div>
+  </details>
+  {% endfor %}
+</div>
+
+<!-- VISUAL BREAKDOWN -->
+<div class="section">
+  <div class="section-title">Visual Design Audit</div>
+  {% for v in visuals %}
+  <details{% if loop.first %} open{% endif %}>
+    <summary>{{ v.title }} <span class="visual-type">{{ v.type }}</span></summary>
+    <div class="detail-body">
+      <div class="visual-block">
+        <div class="visual-justify">{{ v.justification }}</div>
+        <div class="score-badges">
+          <span class="badge {{ 'badge-green' if v.density_score >= 80 else ('badge-amber' if v.density_score >= 60 else 'badge-red') }}">Density: {{ v.density_score }}</span>
+          <span class="badge {{ 'badge-green' if v.clarity_score >= 80 else ('badge-amber' if v.clarity_score >= 60 else 'badge-red') }}">Clarity: {{ v.clarity_score }}</span>
+          <span class="badge {{ 'badge-green' if v.actionability_score >= 80 else ('badge-amber' if v.actionability_score >= 60 else 'badge-red') }}">Actionability: {{ v.actionability_score }}</span>
+        </div>
+      </div>
+    </div>
+  </details>
+  {% endfor %}
+</div>
+
+<!-- DATA MAPPING -->
+<div class="section">
+  <div class="section-title">Data Mapping Audit</div>
+  <details open>
+    <summary>Column Usage ({{ data_mapping|length }} columns)</summary>
+    <div class="detail-body">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Column</th>
+            <th>Usage</th>
+            <th>Score</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for d in data_mapping %}
+          <tr>
+            <td><strong>{{ d.column }}</strong></td>
+            <td>{{ d.usage }}</td>
+            <td><span class="badge {{ 'badge-green' if d.score >= 80 else ('badge-amber' if d.score >= 60 else 'badge-red') }}">{{ d.score }}</span></td>
+            <td style="color: var(--text-muted); font-size: 12px;">{{ d.notes }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+</div>
+
+<!-- MIGRATION COMPARISON -->
+{% if migration %}
+<div class="section">
+  <div class="section-title">Migration Comparison</div>
+  <div class="card">
+    <div class="migration-grid">
+      <div class="migration-col replicated">
+        <h4>Replicated</h4>
+        <ul>
+          {% for item in migration.replicated %}
+          <li>{{ item }}</li>
+          {% endfor %}
+        </ul>
+      </div>
+      <div class="migration-col missing">
+        <h4>Not Replicated</h4>
+        <ul>
+          {% for item in migration.not_replicated %}
+          <li>{{ item }}</li>
+          {% endfor %}
+        </ul>
+      </div>
+      <div class="migration-col improved">
+        <h4>Improvements</h4>
+        <ul>
+          {% for item in migration.improvements %}
+          <li>{{ item }}</li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+    <div class="migration-stats">
+      <div class="migration-stat">
+        <div class="big" style="color: {{ 'var(--green)' if migration.completeness_pct >= 80 else ('var(--amber)' if migration.completeness_pct >= 60 else 'var(--red)') }};">{{ migration.completeness_pct }}%</div>
+        <div class="small">Migration Completeness</div>
+      </div>
+      <div class="migration-stat">
+        <div class="big" style="color: var(--amber);">{{ migration.manual_hours_remaining }}h</div>
+        <div class="small">Est. Manual Effort Remaining</div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- CRITICAL ISSUES -->
+{% if critical_issues %}
+<div class="section">
+  <div class="section-title">Critical Issues</div>
+  <div class="card">
+    {% for issue in critical_issues %}
+    <div class="risk-flag red" style="margin-bottom: 8px;">{{ issue }}</div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<!-- RECOMMENDATIONS -->
+{% if recommendations %}
+<div class="section">
+  <div class="section-title">Recommendations</div>
+  <div class="card">
+    {% for rec in recommendations %}
+    <div class="improvement" style="margin-bottom: 8px;">{{ loop.index }}. {{ rec }}</div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+</div>
+
+<!-- FOOTER -->
+<div class="footer">
+  <div class="container">
+    <p>This report was generated by Dashboard Intelligence Platform</p>
+    <p>Confidence scores are AI-estimated and should be validated by a human analyst</p>
+    <p>{{ generated_date }}</p>
+  </div>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,48 @@
+# Environment
+.env
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# Output files
+output/
+*.pbix
+*_PBIP/
+_pbix_parts/
+
+# Temp and patch files
+temp_*
+patch*.py
+
+# Debug dumps
+debug_*.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+*.txt
+!requirements.txt
+
+# Data files
+*.twbx
+*.twb
+*.xlsx
+*.csv

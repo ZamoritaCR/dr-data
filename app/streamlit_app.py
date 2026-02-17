@@ -1,0 +1,797 @@
+"""
+Dr. Data -- Dashboard Intelligence Platform
+Split-panel layout: Workspace (center) + Chat (right)
++ Iteration 2: Audit layer, audience toggle, Dr. Data avatar
+"""
+import sys
+import io
+import os
+import json
+import time
+import html as html_module
+import tempfile
+from pathlib import Path
+from datetime import datetime
+
+# Windows encoding fix
+if sys.platform == "win32" and getattr(sys.stdout, "encoding", "") != "utf-8":
+    sys.stdout = io.TextIOWrapper(
+        sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True
+    )
+    sys.stderr = io.TextIOWrapper(
+        sys.stderr.buffer, encoding="utf-8", errors="replace", line_buffering=True
+    )
+
+import streamlit as st
+import streamlit.components.v1 as components
+import pandas as pd
+
+PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from app.dr_data_agent import DrDataAgent
+from app.file_handler import ingest_file, ALL_SUPPORTED
+from core.multi_file_handler import MultiFileSession
+from core.audit_engine import AuditEngine
+
+
+# === PAGE CONFIG (must be first Streamlit call) ===
+st.set_page_config(
+    page_title="Dr. Data -- Dashboard Intelligence",
+    page_icon=None,
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+
+# =============================================================================
+# DR. DATA AVATAR (inline SVG)
+# =============================================================================
+
+DR_DATA_AVATAR = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="36" height="36"><defs><linearGradient id="abg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#0d1117"/><stop offset="100%" style="stop-color:#161b22"/></linearGradient><linearGradient id="agl" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#1c2128"/><stop offset="100%" style="stop-color:#1a1f35"/></linearGradient></defs><circle cx="24" cy="24" r="23" fill="url(#abg)" stroke="#30363d" stroke-width="1"/><rect x="10" y="9" width="28" height="24" rx="8" fill="url(#agl)" stroke="#1f6feb" stroke-width="1"/><rect x="13" y="15" width="22" height="8" rx="4" fill="#0d1117" stroke="#1f6feb" stroke-width="0.8"/><circle cx="19" cy="19" r="2" fill="#1f6feb"/><circle cx="29" cy="19" r="2" fill="#1f6feb"/><path d="M 18 28 Q 24 33 30 28" fill="none" stroke="#1f6feb" stroke-width="1.5" stroke-linecap="round"/><line x1="24" y1="9" x2="24" y2="4" stroke="#30363d" stroke-width="1.5"/><circle cx="24" cy="3" r="2" fill="#238636"/><rect x="12" y="38" width="24" height="6" rx="2" fill="#0d1117" stroke="#30363d" stroke-width="0.5"/><text x="24" y="43" text-anchor="middle" fill="#1f6feb" font-family="monospace" font-size="4" font-weight="bold">DR.DATA</text></svg>'
+
+
+# === CUSTOM CSS -- THE ENTIRE LOOK ===
+st.markdown("""
+<style>
+    /* Kill Streamlit defaults */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    .stDeployButton {display: none;}
+
+    /* Dark foundation */
+    .stApp {
+        background-color: #0d1117;
+    }
+
+    /* === HEADER BAR === */
+    .top-header {
+        background: linear-gradient(135deg, #0d1117 0%, #161b22 50%, #1a1f35 100%);
+        border-bottom: 1px solid #30363d;
+        padding: 16px 24px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        position: relative;
+    }
+    .top-header::before {
+        content: "";
+        position: absolute;
+        top: 0; left: 0; right: 0;
+        height: 2px;
+        background: linear-gradient(90deg, #1f6feb, #238636, #1f6feb);
+    }
+    .header-left {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+    .top-header h1 {
+        font-size: 18px;
+        font-weight: 600;
+        color: #e6edf3;
+        margin: 0;
+        letter-spacing: -0.3px;
+    }
+    .top-header .role {
+        font-size: 11px;
+        color: #8b949e;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+    }
+
+    /* === WORKSPACE AREA (center) === */
+    .workspace-card {
+        background: #161b22;
+        border: 1px solid #30363d;
+        border-radius: 10px;
+        padding: 24px;
+        margin-bottom: 16px;
+    }
+    .workspace-card h3 {
+        font-size: 14px;
+        font-weight: 600;
+        color: #e6edf3;
+        margin: 0 0 16px 0;
+        padding-bottom: 8px;
+        border-bottom: 1px solid #30363d;
+    }
+
+    /* === KPI CARDS === */
+    .kpi-row {
+        display: flex;
+        gap: 12px;
+        margin-bottom: 20px;
+    }
+    .kpi-card {
+        flex: 1;
+        background: linear-gradient(135deg, #161b22, #1c2128);
+        border: 1px solid #30363d;
+        border-radius: 10px;
+        padding: 16px 20px;
+        text-align: center;
+    }
+    .kpi-card .kpi-value {
+        font-size: 26px;
+        font-weight: 700;
+        color: #1f6feb;
+        line-height: 1.2;
+    }
+    .kpi-card .kpi-label {
+        font-size: 10px;
+        color: #8b949e;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+        margin-top: 4px;
+    }
+
+    /* === SCORE BADGE === */
+    .score-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 56px;
+        height: 56px;
+        border-radius: 50%;
+        font-size: 20px;
+        font-weight: 700;
+        border: 3px solid;
+    }
+    .score-green { color: #238636; border-color: #238636; }
+    .score-amber { color: #d29922; border-color: #d29922; }
+    .score-red { color: #da3633; border-color: #da3633; }
+
+    /* === PROGRESS INDICATOR === */
+    .phase-status {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 16px;
+        background: #1c2128;
+        border: 1px solid #30363d;
+        border-left: 3px solid #1f6feb;
+        border-radius: 6px;
+        margin-bottom: 12px;
+        font-size: 13px;
+        color: #e6edf3;
+    }
+    .phase-status.complete {
+        border-left-color: #238636;
+    }
+    .phase-status .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #1f6feb;
+        animation: pulse 1.5s infinite;
+    }
+    .phase-status.complete .dot {
+        background: #238636;
+        animation: none;
+    }
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.3; }
+    }
+
+    /* === CHAT PANEL STYLING === */
+    div[data-testid="column"]:last-child {
+        border-left: 1px solid #30363d;
+        padding-left: 16px !important;
+    }
+
+    /* Chat input fix -- ALWAYS visible and readable */
+    div[data-testid="stChatInput"] textarea,
+    div[data-testid="stChatInput"] textarea:active,
+    div[data-testid="stChatInput"] textarea:enabled,
+    div[data-testid="stChatInput"] div[contenteditable="true"],
+    .stChatInput textarea,
+    .stChatInput div[contenteditable="true"] {
+        background: #0d1117 !important;
+        border: 2px solid #1f6feb !important;
+        color: #ffffff !important;
+        caret-color: #ffffff !important;
+        font-size: 14px !important;
+        -webkit-text-fill-color: #ffffff !important;
+    }
+    div[data-testid="stChatInput"] textarea:focus {
+        border-color: #1f6feb !important;
+        box-shadow: 0 0 8px rgba(31,111,235,0.2) !important;
+        color: #ffffff !important;
+    }
+    div[data-testid="stChatInput"] textarea::placeholder {
+        color: #484f58 !important;
+    }
+
+    /* Chat messages */
+    .dr-msg {
+        background: #161b22;
+        border: 1px solid #30363d;
+        border-radius: 10px;
+        padding: 12px 16px;
+        margin-bottom: 10px;
+        font-size: 13px;
+        line-height: 1.6;
+        color: #e6edf3;
+    }
+    .user-msg {
+        background: #1c2128;
+        border: 1px solid #30363d;
+        border-radius: 10px;
+        padding: 10px 14px;
+        margin-bottom: 10px;
+        font-size: 13px;
+        color: #8b949e;
+        text-align: right;
+    }
+    .dr-name {
+        font-size: 11px;
+        font-weight: 600;
+        color: #1f6feb;
+        margin-bottom: 4px;
+        letter-spacing: 0.3px;
+    }
+
+    /* Download cards */
+    .dl-card {
+        background: #1c2128;
+        border: 1px solid #238636;
+        border-radius: 8px;
+        padding: 10px 14px;
+        margin: 8px 0;
+    }
+    .dl-card .dl-name {
+        font-size: 12px;
+        font-weight: 600;
+        color: #238636;
+    }
+    .dl-card .dl-desc {
+        font-size: 11px;
+        color: #8b949e;
+    }
+
+    /* Make data tables dark */
+    .stDataFrame {
+        border: 1px solid #30363d;
+        border-radius: 8px;
+    }
+
+    /* Sidebar refinement */
+    section[data-testid="stSidebar"] {
+        background-color: #0d1117;
+        border-right: 1px solid #30363d;
+    }
+    section[data-testid="stSidebar"] .stFileUploader {
+        border: 1px dashed #30363d;
+        border-radius: 8px;
+        padding: 12px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+
+# ============================================
+# SESSION STATE
+# ============================================
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+if "uploaded_files" not in st.session_state:
+    st.session_state.uploaded_files = {}
+
+if "workspace_content" not in st.session_state:
+    st.session_state.workspace_content = {
+        "phase": "waiting",
+        "data_preview": None,
+        "charts": [],
+        "kpis": [],
+        "scores": None,
+        "deliverables": [],
+        "progress_messages": [],
+        "audit_html": None,        # NEW: audit report HTML
+        "audit_summary": None,     # NEW: executive summary text
+        "audit_releasable": None,  # NEW: release gate
+    }
+
+if "agent" not in st.session_state:
+    try:
+        st.session_state.agent = DrDataAgent()
+    except Exception as e:
+        st.error(f"Failed to initialize Dr. Data: {e}")
+        st.session_state.agent = None
+
+if "multi_session" not in st.session_state:
+    st.session_state.multi_session = MultiFileSession()
+
+if "file_just_uploaded" not in st.session_state:
+    st.session_state.file_just_uploaded = None
+
+if "audit_engine" not in st.session_state:
+    st.session_state.audit_engine = AuditEngine()
+
+if "audience_mode" not in st.session_state:
+    st.session_state.audience_mode = "analyst"
+
+
+# ============================================
+# HEADER (with avatar)
+# ============================================
+st.markdown(f'<div class="top-header"><div class="header-left">{DR_DATA_AVATAR}<div><h1>Dr. Data</h1><div class="role">Chief Data Intelligence Officer</div></div></div><div style="font-size:11px;color:#8b949e;">Dashboard Intelligence Platform</div></div>', unsafe_allow_html=True)
+
+
+# ============================================
+# SIDEBAR -- File Upload + Audience Toggle
+# ============================================
+with st.sidebar:
+    st.markdown("**Upload Data**")
+    ext_list = sorted(ALL_SUPPORTED)
+    uploaded_files_list = st.file_uploader(
+        "Drop files here",
+        type=ext_list,
+        accept_multiple_files=True,
+        label_visibility="collapsed",
+    )
+
+    # Handle uploads through MultiFileSession
+    if uploaded_files_list:
+        session = st.session_state.multi_session
+        new_files = []
+        for uf in uploaded_files_list:
+            if uf.name not in st.session_state.uploaded_files:
+                session.add_file(uf.name, uf)
+                file_info = session.files.get(uf.name, {})
+                st.session_state.uploaded_files[uf.name] = {
+                    "path": file_info.get("path", ""),
+                    "ext": file_info.get("ext", ""),
+                    "size": uf.size,
+                }
+                new_files.append(uf.name)
+
+        if new_files:
+            primary_df = session.get_primary_dataframe()
+            if primary_df is not None:
+                st.session_state.workspace_content["data_preview"] = primary_df
+
+                # --- AUDIT on upload ---
+                audit = st.session_state.audit_engine.audit_dataframe(
+                    primary_df, source_name=", ".join(new_files)
+                )
+                audit.compute_scores()
+                ws = st.session_state.workspace_content
+                ws["audit_html"] = audit.to_html(
+                    audience=st.session_state.audience_mode
+                )
+                ws["audit_summary"] = audit.to_executive_summary()
+                ws["audit_releasable"] = audit.is_releasable
+
+            if st.session_state.agent:
+                st.session_state.agent.set_session(session)
+
+            st.session_state.file_just_uploaded = {"names": new_files}
+
+    # Show uploaded files
+    if st.session_state.uploaded_files:
+        st.markdown("---")
+        st.markdown("**Session Files**")
+        for name, info in st.session_state.uploaded_files.items():
+            size_str = (
+                f"{info['size']/1024:.0f} KB"
+                if info["size"] < 1024 * 1024
+                else f"{info['size']/1024/1024:.1f} MB"
+            )
+            st.markdown(f"**{name}** ({size_str})")
+
+    # --- AUDIENCE TOGGLE ---
+    st.markdown("---")
+    st.markdown("**Report Audience**")
+    audience = st.radio(
+        "Detail level",
+        ["analyst", "executive"],
+        index=0 if st.session_state.audience_mode == "analyst" else 1,
+        format_func=lambda x: "Analyst -- full technical detail" if x == "analyst" else "Executive -- summary + decisions",
+        label_visibility="collapsed",
+    )
+    if audience != st.session_state.audience_mode:
+        st.session_state.audience_mode = audience
+        # Re-render audit if we have data
+        ws = st.session_state.workspace_content
+        if ws.get("data_preview") is not None:
+            audit = st.session_state.audit_engine.audit_dataframe(
+                ws["data_preview"],
+                source_name="session data"
+            )
+            audit.compute_scores()
+            ws["audit_html"] = audit.to_html(audience=audience)
+            ws["audit_summary"] = audit.to_executive_summary()
+
+    # Deliverables in sidebar
+    ws = st.session_state.workspace_content
+    if ws["deliverables"]:
+        st.markdown("---")
+        st.markdown("**Downloads**")
+        for dl in ws["deliverables"]:
+            if os.path.exists(dl["path"]):
+                with open(dl["path"], "rb") as f:
+                    st.download_button(
+                        label=dl["name"],
+                        data=f.read(),
+                        file_name=dl["filename"],
+                        key=f"sb_dl_{dl['filename']}",
+                    )
+
+    st.markdown("---")
+    if st.button("New Session", use_container_width=True):
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        st.rerun()
+
+
+# ============================================
+# MAIN LAYOUT: Workspace (left 65%) + Chat (right 35%)
+# ============================================
+workspace_col, chat_col = st.columns([65, 35])
+
+
+# ============================================
+# LEFT: WORKSPACE -- Shows Dr. Data's work
+# ============================================
+with workspace_col:
+    ws = st.session_state.workspace_content
+
+    if ws["phase"] == "waiting" and ws.get("data_preview") is None:
+        # Empty state
+        avatar_lg = DR_DATA_AVATAR.replace('width="36" height="36"', 'width="64" height="64"')
+        st.markdown(f'<div style="text-align:center;padding:80px 40px;color:#8b949e;"><div style="margin-bottom:16px;opacity:0.6;">{avatar_lg}</div><div style="font-size:16px;font-weight:500;color:#e6edf3;margin-bottom:8px;">Welcome to Dr. Data</div><div style="font-size:13px;max-width:400px;margin:0 auto;line-height:1.6;">Upload a data file in the sidebar to begin. I work with CSV, Excel, Tableau, Alteryx, Business Objects, and more. Tell me what you need, and I handle the rest.</div></div>', unsafe_allow_html=True)
+
+    else:
+        # === KPI CARDS ===
+        if ws["kpis"]:
+            kpi_cols = st.columns(len(ws["kpis"]))
+            for col, kpi in zip(kpi_cols, ws["kpis"]):
+                with col:
+                    color = kpi.get("color", "#1f6feb")
+                    st.markdown(f"""
+                    <div class="kpi-card">
+                        <div class="kpi-value" style="color:{color};">{html_module.escape(str(kpi['value']))}</div>
+                        <div class="kpi-label">{html_module.escape(str(kpi['label']))}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+        # === PROGRESS MESSAGES ===
+        if ws["progress_messages"]:
+            for i, msg in enumerate(ws["progress_messages"]):
+                is_last = i == len(ws["progress_messages"]) - 1
+                status_class = "" if is_last else "complete"
+                st.markdown(f"""
+                <div class="phase-status {status_class}">
+                    <div class="dot"></div>
+                    {html_module.escape(str(msg))}
+                </div>
+                """, unsafe_allow_html=True)
+
+        # === DATA QUALITY AUDIT (shows BEFORE data preview) ===
+        if ws.get("audit_html"):
+            st.markdown("""
+            <div class="workspace-card">
+                <h3>Data Quality Audit</h3>
+            </div>
+            """, unsafe_allow_html=True)
+            components.html(ws["audit_html"], height=600, scrolling=True)
+
+            # Executive summary always accessible
+            if st.session_state.audience_mode == "analyst" and ws.get("audit_summary"):
+                with st.expander("Executive Summary"):
+                    st.write(ws["audit_summary"])
+            elif st.session_state.audience_mode == "executive" and ws.get("audit_summary"):
+                st.info(ws["audit_summary"])
+
+        # === DATA PREVIEW ===
+        if ws.get("data_preview") is not None:
+            df_preview = ws["data_preview"]
+            st.markdown("""
+            <div class="workspace-card">
+                <h3>Data Preview</h3>
+            </div>
+            """, unsafe_allow_html=True)
+            st.dataframe(
+                df_preview.head(20),
+                use_container_width=True,
+                height=250,
+            )
+            st.caption(f"{len(df_preview):,} rows x {len(df_preview.columns)} columns")
+
+        # === SCORES ===
+        if ws["scores"]:
+            scores = ws["scores"]
+            st.markdown("""
+            <div class="workspace-card">
+                <h3>Quality Scorecard</h3>
+            </div>
+            """, unsafe_allow_html=True)
+            score_cols = st.columns(5)
+            labels = [
+                ("Overall", "total_score"),
+                ("Data", "data_accuracy"),
+                ("Measures", "measure_quality"),
+                ("Visuals", "visual_effectiveness"),
+                ("UX", "user_experience"),
+            ]
+            for col, (label, key) in zip(score_cols, labels):
+                val = scores.get(key, 0)
+                css_class = (
+                    "score-green" if val >= 80
+                    else "score-amber" if val >= 60
+                    else "score-red"
+                )
+                with col:
+                    st.markdown(f"""
+                    <div style="text-align:center;">
+                        <div class="score-badge {css_class}">{val}</div>
+                        <div style="font-size:11px; color:#8b949e; margin-top:6px;">{label}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+        # === DELIVERABLES (with audit gate) ===
+        if ws["deliverables"]:
+            st.markdown("""
+            <div class="workspace-card">
+                <h3>Your Deliverables</h3>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # Audit gate message
+            if ws.get("audit_releasable") is False:
+                st.warning(
+                    "Data quality audit flagged issues. "
+                    "Review the audit findings above before distributing deliverables."
+                )
+
+            for dl in ws["deliverables"]:
+                dl_col1, dl_col2 = st.columns([3, 1])
+                with dl_col1:
+                    st.markdown(f"""
+                    <div class="dl-card">
+                        <div class="dl-name">{html_module.escape(dl['name'])}</div>
+                        <div class="dl-desc">{html_module.escape(dl.get('description', ''))}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                with dl_col2:
+                    if os.path.exists(dl["path"]):
+                        # Audit each deliverable file
+                        dl_audit = st.session_state.audit_engine.audit_deliverable(
+                            dl["path"],
+                            file_type=dl.get("filename", "").split(".")[-1]
+                        )
+                        dl_audit.compute_scores()
+
+                        with open(dl["path"], "rb") as f:
+                            label = "Download"
+                            if not dl_audit.is_releasable:
+                                label = "Download (review flagged)"
+                            st.download_button(
+                                label=label,
+                                data=f.read(),
+                                file_name=dl["filename"],
+                                key=f"ws_dl_{dl['filename']}",
+                            )
+
+
+# ============================================
+# RIGHT: CHAT PANEL -- Conversation with Dr. Data
+# ============================================
+with chat_col:
+    st.markdown(f'<div style="padding:8px 0 12px 0;border-bottom:1px solid #30363d;margin-bottom:12px;display:flex;align-items:center;gap:10px;">{DR_DATA_AVATAR}<div><div style="font-size:13px;font-weight:600;color:#e6edf3;">Chat with Dr. Data</div><div style="font-size:11px;color:#8b949e;">Your data intelligence advisor</div></div></div>', unsafe_allow_html=True)
+
+    # Chat container with scroll
+    chat_container = st.container(height=500)
+
+    with chat_container:
+        # Opening message if empty
+        if not st.session_state.messages:
+            st.markdown(f"""
+            <div class="dr-msg">
+                <div class="dr-name">Dr. Data</div>
+                I am your data intelligence strategist. Upload a file in the
+                sidebar -- CSV, Excel, Tableau, Alteryx, whatever you have --
+                and tell me what you need. I will analyze the data, design the
+                dashboard, and build it while we talk.
+            </div>
+            """, unsafe_allow_html=True)
+
+        # Render chat history
+        for msg in st.session_state.messages:
+            escaped = html_module.escape(msg["content"])
+            escaped = escaped.replace("\n", "<br>")
+            if msg["role"] == "assistant":
+                st.markdown(f"""
+                <div class="dr-msg">
+                    <div class="dr-name">Dr. Data</div>
+                    {escaped}
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown(f"""
+                <div class="user-msg">{escaped}</div>
+                """, unsafe_allow_html=True)
+
+    # === HANDLE AUTO-ANALYSIS ON FILE UPLOAD ===
+    if st.session_state.file_just_uploaded:
+        file_info = st.session_state.file_just_uploaded
+        st.session_state.file_just_uploaded = None
+
+        names = file_info.get("names", [])
+        name_str = ", ".join(names)
+
+        ws = st.session_state.workspace_content
+        ws["phase"] = "analyzing"
+        ws["progress_messages"].append(f"Loaded {name_str}")
+        ws["progress_messages"].append("Running deep analysis...")
+
+        if st.session_state.agent:
+            status_container = st.status(
+                f"Analyzing {name_str}...", expanded=True
+            )
+            try:
+                status_container.write(f"Loaded: {name_str}")
+                status_container.write("Running data quality audit...")
+
+                response = st.session_state.agent.analyze_uploaded_file()
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": response,
+                })
+                ws["phase"] = "analyzed"
+                ws["progress_messages"].append("Analysis complete -- audit passed" if ws.get("audit_releasable") else "Analysis complete -- review audit findings")
+
+                status_container.update(
+                    label="Analysis complete", state="complete",
+                    expanded=False,
+                )
+
+                agent = st.session_state.agent
+                if agent.dataframe is not None and ws.get("data_preview") is None:
+                    ws["data_preview"] = agent.dataframe
+
+            except Exception as e:
+                status_container.update(
+                    label="Files loaded", state="complete",
+                    expanded=False,
+                )
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": (
+                        f"I have loaded your files: {name_str}. "
+                        f"The data is ready for analysis. What would "
+                        f"you like me to build?"
+                    ),
+                })
+        else:
+            preview_note = ""
+            if ws.get("data_preview") is not None:
+                df = ws["data_preview"]
+                preview_note = (
+                    f" I can see {len(df):,} rows and {len(df.columns)} columns: "
+                    f"{', '.join(df.columns[:6].tolist())}"
+                    f"{'...' if len(df.columns) > 6 else ''}."
+                )
+
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": (
+                    f"I have loaded {name_str}.{preview_note} "
+                    f"What would you like me to build? I can create "
+                    f"interactive HTML dashboards, PDF reports, Power BI "
+                    f"projects, or a full documentation package. "
+                    f"Tell me who the audience is and what questions "
+                    f"the dashboard should answer."
+                ),
+            })
+
+        st.rerun()
+
+    # === CHAT INPUT ===
+    if prompt := st.chat_input("Tell Dr. Data what you need...", key="chat_input"):
+        st.session_state.messages.append({
+            "role": "user",
+            "content": prompt,
+        })
+
+        if st.session_state.agent:
+            status_container = st.status(
+                "Dr. Data is working...", expanded=True
+            )
+            try:
+                def progress_cb(msg):
+                    status_container.write(msg)
+                    status_container.update(label=msg)
+
+                response_data = st.session_state.agent.respond(
+                    prompt,
+                    st.session_state.messages,
+                    st.session_state.uploaded_files,
+                    progress_callback=progress_cb,
+                )
+
+                status_container.update(
+                    label="Complete", state="complete", expanded=False
+                )
+
+                content = (
+                    response_data.get("content", "")
+                    if isinstance(response_data, dict)
+                    else str(response_data)
+                )
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": content,
+                })
+
+                ws = st.session_state.workspace_content
+                if isinstance(response_data, dict):
+                    if response_data.get("downloads"):
+                        # --- AUDIT each deliverable before adding ---
+                        for dl in response_data["downloads"]:
+                            if os.path.exists(dl.get("path", "")):
+                                dl_audit = st.session_state.audit_engine.audit_deliverable(
+                                    dl["path"],
+                                    file_type=dl.get("filename", "").split(".")[-1]
+                                )
+                                dl_audit.compute_scores()
+                                dl["audit_score"] = dl_audit.overall_score
+                                dl["audit_releasable"] = dl_audit.is_releasable
+
+                        ws["deliverables"].extend(response_data["downloads"])
+                        ws["phase"] = "complete"
+                        ws["progress_messages"].append("Deliverables ready -- audited")
+
+                    if response_data.get("scores"):
+                        ws["scores"] = response_data["scores"]
+
+                agent = st.session_state.agent
+                if agent.dataframe is not None and ws.get("data_preview") is None:
+                    ws["data_preview"] = agent.dataframe
+
+            except Exception as e:
+                status_container.update(
+                    label="Error", state="error", expanded=False
+                )
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": (
+                        f"I encountered an issue processing that request. "
+                        f"The error was: {str(e)[:200]}. "
+                        f"Let me try a different approach -- can you "
+                        f"rephrase what you need?"
+                    ),
+                })
+        else:
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": (
+                    "I am still initializing my analysis engines. "
+                    "Give me a moment and try again."
+                ),
+            })
+
+        st.rerun()

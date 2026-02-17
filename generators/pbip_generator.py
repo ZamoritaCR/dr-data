@@ -167,7 +167,16 @@ class PBIPGenerator:
         # 8. Theme file (copy from reference)
         self._write_theme(theme_dir)
 
-        # 15. README for the user
+        # 15. Auto-launcher .bat (patches data path + opens .pbip)
+        data_filename = ""
+        if data_file_path:
+            try:
+                data_filename = Path(data_file_path).name
+            except Exception:
+                data_filename = str(data_file_path).split("/")[-1].split("\\")[-1]
+        self._write_launcher(project_dir, safe, data_filename)
+
+        # 16. README for the user
         self._write_readme(project_dir, safe, title)
 
         # Summary
@@ -187,26 +196,63 @@ class PBIPGenerator:
         self._write_json(project_dir / f"{safe}.pbip", doc)
         print(f"    [+] {safe}.pbip")
 
+    def _write_launcher(self, project_dir, safe, data_filename):
+        """Write Open_Dashboard.bat + setup.ps1 for one-click opening.
+
+        The launcher:
+        1. setup.ps1 detects the extraction folder
+        2. Replaces the placeholder C:\\PBI_Data\\ in all .tmdl files
+           with the actual folder so PBI Desktop finds the data file
+        3. Opens the .pbip in Power BI Desktop
+        """
+        # PowerShell setup script (reliable string replacement)
+        ps1 = (
+            '$folder = Split-Path -Parent $MyInvocation.MyCommand.Path\r\n'
+            '$folder = $folder + "\\"\r\n'
+            'Get-ChildItem -Path $folder -Recurse -Filter "*.tmdl" '
+            '| ForEach-Object {\r\n'
+            '    $c = [IO.File]::ReadAllText($_.FullName)\r\n'
+            '    if ($c.Contains("C:\\PBI_Data\\")) {\r\n'
+            '        $c = $c.Replace("C:\\PBI_Data\\", $folder)\r\n'
+            '        [IO.File]::WriteAllText($_.FullName, $c)\r\n'
+            '        Write-Host "  Updated:" $_.Name\r\n'
+            '    }\r\n'
+            '}\r\n'
+        )
+        (project_dir / "setup.ps1").write_text(ps1, encoding="utf-8")
+
+        # Batch launcher (calls PS1 then opens .pbip)
+        bat = (
+            '@echo off\r\n'
+            'cd /d "%~dp0"\r\n'
+            'echo Setting up data source path...\r\n'
+            'powershell -NoProfile -ExecutionPolicy Bypass '
+            '-File "setup.ps1"\r\n'
+            'echo.\r\n'
+            f'echo Opening {safe}.pbip in Power BI Desktop...\r\n'
+            f'start "" "{safe}.pbip"\r\n'
+        )
+        (project_dir / "Open_Dashboard.bat").write_text(bat, encoding="utf-8")
+        print(f"    [+] Open_Dashboard.bat + setup.ps1")
+
     def _write_readme(self, project_dir, safe, title):
         """Write a README so the user knows how to open the project."""
         readme = (
             f"Power BI Project: {title}\n"
             f"{'=' * (len(title) + 21)}\n\n"
             f"HOW TO OPEN:\n"
-            f"  1. Extract this ZIP to a folder on your computer\n"
-            f"  2. Open Power BI Desktop (January 2026 or later)\n"
-            f"  3. Enable preview features if not already enabled:\n"
-            f"     File > Options > Preview features > check all PBIP options\n"
-            f"  4. Double-click the file: {safe}.pbip\n"
-            f"  5. Power BI Desktop will open with all visuals, measures, and data model\n\n"
+            f"  1. Extract this entire ZIP to a folder on your computer\n"
+            f"  2. Double-click: Open_Dashboard.bat\n"
+            f"     (This sets up the data source path and opens Power BI)\n\n"
+            f"REQUIREMENTS:\n"
+            f"  - Power BI Desktop (January 2026 or later)\n"
+            f"  - Enable preview features if not already enabled:\n"
+            f"    File > Options > Preview features > check all PBIP options\n\n"
             f"FILES:\n"
-            f"  {safe}.pbip              -- Open this file in PBI Desktop\n"
-            f"  {safe}.Report/           -- Report layout, pages, visuals\n"
-            f"  {safe}.SemanticModel/    -- Data model, DAX measures, table definitions\n\n"
-            f"NOTES:\n"
-            f"  - This is a Power BI Project (.pbip) format, NOT the legacy .pbix format\n"
-            f"  - PBIP is the modern format used by PBI Desktop for version control and collaboration\n"
-            f"  - If PBI Desktop does not recognize the .pbip file, enable the preview features above\n"
+            f"  Open_Dashboard.bat        -- Double-click this to open\n"
+            f"  {safe}.pbip               -- Power BI project file\n"
+            f"  {safe}.Report/            -- Report layout, pages, visuals\n"
+            f"  {safe}.SemanticModel/     -- Data model, DAX measures\n"
         )
         self._write_text(project_dir / "README.txt", readme)
 

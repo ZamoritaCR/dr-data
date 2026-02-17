@@ -1038,12 +1038,10 @@ class DrDataAgent:
                 "visuals": visual_count,
                 "measures": len(dashboard_spec.get("measures", [])),
                 "instructions": (
-                    f"Extract the ZIP to a folder. The data file "
-                    f"({data_filename}) is included. Double-click "
-                    f"{safe_name}.pbip to open in Power BI Desktop. "
-                    f"If Power BI says 'file not found', update the "
-                    f"data source path in Power Query Editor to point "
-                    f"to {data_filename} in the extracted folder."
+                    f"Extract the ZIP to a folder, then double-click "
+                    f"Open_Dashboard.bat -- it will set up the data "
+                    f"source and open the dashboard in Power BI Desktop "
+                    f"automatically."
                 ),
             })
 

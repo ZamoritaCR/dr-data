@@ -468,7 +468,7 @@ with st.sidebar:
                     )
 
     st.markdown("---")
-    if st.button("New Session", use_container_width=True):
+    if st.button("New Session", width="stretch"):
         for key in list(st.session_state.keys()):
             del st.session_state[key]
         st.rerun()
@@ -525,7 +525,7 @@ with workspace_col:
             _safe_html('<div class="workspace-card"><h3>Data Preview</h3></div>', "**Data Preview**")
             st.dataframe(
                 df_preview.head(20),
-                use_container_width=True,
+                width="stretch",
                 height=250,
             )
             st.caption(f"{len(df_preview):,} rows x {len(df_preview.columns)} columns")

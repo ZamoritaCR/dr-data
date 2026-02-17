@@ -16,6 +16,7 @@ from datetime import datetime
 
 import anthropic
 import pandas as pd
+import numpy as np
 
 # Windows encoding fix
 if sys.platform == "win32" and getattr(sys.stdout, "encoding", "") != "utf-8":
@@ -497,15 +498,14 @@ class DrDataAgent:
 
         # Route through the LLM so Dr. Data's voice comes through
         internal_prompt = (
-            f"[SYSTEM: The user just uploaded a file. Here is what you have:\n"
-            f"{context}\n"
-            f"Greet the user warmly. Tell them the most interesting thing you "
-            f"see in the data -- lead with an insight, not just metadata. "
-            f"Then naturally mention what you can build for them (interactive "
-            f"dashboards, Power BI projects, PDF reports, PowerPoint "
-            f"presentations, Word documents). Do NOT use a numbered list -- "
-            f"weave the options into your conversation naturally. Ask who the "
-            f"audience is. Remember The Art of the Possible.]"
+            f"[SYSTEM: A new file was uploaded. Here is what I computed from "
+            f"the raw data:\n\n{context}\n\n"
+            f"Use these specific numbers in your analysis. Lead with the most "
+            f"interesting finding -- a correlation, an outlier, a trend, a "
+            f"concentration risk, whatever jumps out. Be specific with numbers. "
+            f"Suggest what to build based on what the data is telling you. "
+            f"Do NOT use numbered lists or bullet points. Do NOT just describe "
+            f"the file metadata. Find the STORY in the data.]"
         )
 
         result = self.chat(internal_prompt)
@@ -592,7 +592,7 @@ class DrDataAgent:
         )
 
     def _format_data_context(self, file_names, extra=None, needs_data=False):
-        """Format data stats into a context string for the LLM prompt."""
+        """Compute deep insights from the DataFrame and format for the LLM."""
         parts = [f"Files loaded: {', '.join(file_names)}."]
 
         if self.dataframe is not None:
@@ -602,29 +602,179 @@ class DrDataAgent:
             )
             parts.append(f"Columns: {', '.join(df.columns.tolist())}.")
 
-            # Numeric summary
             num_cols = df.select_dtypes(include="number").columns.tolist()
+            cat_cols = df.select_dtypes(include="object").columns.tolist()
+
+            # --- Numeric column stats ---
             if num_cols:
                 stats_lines = []
-                for col in num_cols[:6]:
+                for col in num_cols[:10]:
+                    s = df[col].dropna()
+                    if len(s) == 0:
+                        continue
                     stats_lines.append(
-                        f"  {col}: min={df[col].min():,.2f}, "
-                        f"max={df[col].max():,.2f}, "
-                        f"mean={df[col].mean():,.2f}"
+                        f"  {col}: min={s.min():,.2f}, max={s.max():,.2f}, "
+                        f"mean={s.mean():,.2f}, median={s.median():,.2f}, "
+                        f"std={s.std():,.2f}"
                     )
-                parts.append("Numeric summary:\n" + "\n".join(stats_lines))
+                parts.append("NUMERIC STATS:\n" + "\n".join(stats_lines))
 
-            # Null info
-            total_nulls = int(df.isna().sum().sum())
-            if total_nulls > 0:
-                parts.append(f"Total null cells: {total_nulls:,}.")
+            # --- Top correlations ---
+            if len(num_cols) >= 2:
+                try:
+                    corr = df[num_cols].corr()
+                    # Get upper triangle pairs
+                    pairs = []
+                    for i in range(len(corr.columns)):
+                        for j in range(i + 1, len(corr.columns)):
+                            val = corr.iloc[i, j]
+                            if pd.notna(val):
+                                pairs.append((
+                                    corr.columns[i], corr.columns[j],
+                                    val
+                                ))
+                    pairs.sort(key=lambda x: abs(x[2]), reverse=True)
+                    if pairs:
+                        corr_lines = []
+                        for a, b, r in pairs[:5]:
+                            direction = "positive" if r > 0 else "negative"
+                            corr_lines.append(
+                                f"  {a} <-> {b}: r={r:.3f} ({direction})"
+                            )
+                        parts.append(
+                            "TOP CORRELATIONS:\n" + "\n".join(corr_lines)
+                        )
+                except Exception:
+                    pass
+
+            # --- Outliers (>3 std from mean) ---
+            outlier_findings = []
+            for col in num_cols[:10]:
+                s = df[col].dropna()
+                if len(s) < 10:
+                    continue
+                mean, std = s.mean(), s.std()
+                if std == 0:
+                    continue
+                outlier_mask = (s - mean).abs() > 3 * std
+                n_outliers = int(outlier_mask.sum())
+                if n_outliers > 0:
+                    pct = n_outliers / len(s) * 100
+                    outlier_findings.append(
+                        f"  {col}: {n_outliers} outliers ({pct:.1f}% of values)"
+                    )
+            if outlier_findings:
+                parts.append(
+                    "OUTLIERS (>3 std from mean):\n"
+                    + "\n".join(outlier_findings)
+                )
+
+            # --- Null analysis per column ---
+            null_cols = []
+            for col in df.columns:
+                n_null = int(df[col].isna().sum())
+                if n_null > 0:
+                    pct = n_null / len(df) * 100
+                    null_cols.append(f"  {col}: {n_null:,} nulls ({pct:.1f}%)")
+            if null_cols:
+                parts.append(
+                    "NULL ANALYSIS:\n" + "\n".join(null_cols[:10])
+                )
+
+            # --- Date/time analysis ---
+            date_cols = [
+                c for c in df.columns
+                if pd.api.types.is_datetime64_any_dtype(df[c])
+            ]
+            # Also try to detect string date columns
+            if not date_cols:
+                for col in cat_cols[:5]:
+                    try:
+                        parsed = pd.to_datetime(
+                            df[col], infer_datetime_format=True, errors="raise"
+                        )
+                        date_cols.append(col)
+                        df[col] = parsed  # convert in place for trend calc
+                        break
+                    except Exception:
+                        pass
+
+            if date_cols:
+                dc = date_cols[0]
+                d_series = df[dc].dropna()
+                if len(d_series) > 0:
+                    parts.append(
+                        f"TIME RANGE: {dc} spans from {d_series.min()} "
+                        f"to {d_series.max()}."
+                    )
+                    # Trend direction for numeric cols
+                    if num_cols:
+                        trend_lines = []
+                        sorted_df = df.dropna(subset=[dc]).sort_values(dc)
+                        n = len(sorted_df)
+                        if n >= 4:
+                            first_q = sorted_df.head(n // 4)
+                            last_q = sorted_df.tail(n // 4)
+                            for col in num_cols[:5]:
+                                early = first_q[col].mean()
+                                late = last_q[col].mean()
+                                if early != 0:
+                                    change = (late - early) / abs(early) * 100
+                                    direction = "UP" if change > 0 else "DOWN"
+                                    trend_lines.append(
+                                        f"  {col}: {direction} {abs(change):.1f}% "
+                                        f"(first quarter avg {early:,.2f} -> "
+                                        f"last quarter avg {late:,.2f})"
+                                    )
+                            if trend_lines:
+                                parts.append(
+                                    "TREND DIRECTION (first vs last quarter "
+                                    "of date range):\n"
+                                    + "\n".join(trend_lines)
+                                )
+
+            # --- Categorical value counts ---
+            cat_insights = []
+            for col in cat_cols[:8]:
+                nunique = df[col].nunique()
+                if 1 < nunique <= 20:
+                    top = df[col].value_counts().head(5)
+                    top_str = ", ".join(
+                        f"{v}={c}" for v, c in top.items()
+                    )
+                    cat_insights.append(
+                        f"  {col} ({nunique} unique): top values: {top_str}"
+                    )
+            if cat_insights:
+                parts.append(
+                    "CATEGORICAL BREAKDOWN:\n" + "\n".join(cat_insights)
+                )
+
+            # --- Concentration analysis ---
+            if num_cols and cat_cols:
+                try:
+                    nc = num_cols[0]
+                    cc = cat_cols[0]
+                    grouped = df.groupby(cc)[nc].sum().sort_values(
+                        ascending=False
+                    )
+                    total = grouped.sum()
+                    if total > 0 and len(grouped) >= 3:
+                        top_n = min(5, len(grouped))
+                        top_share = grouped.head(top_n).sum() / total * 100
+                        parts.append(
+                            f"CONCENTRATION: Top {top_n} values of '{cc}' "
+                            f"account for {top_share:.1f}% of total '{nc}'."
+                        )
+                except Exception:
+                    pass
 
             # Quick insights from profiler
             if self.data_profile:
                 insights = self.data_profile.get("quick_insights", [])
                 if insights:
                     parts.append(
-                        "Profiler insights: " + " ".join(insights[:4])
+                        "PROFILER INSIGHTS: " + " ".join(insights[:4])
                     )
 
         if self.tableau_spec:

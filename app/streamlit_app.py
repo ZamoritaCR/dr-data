@@ -1125,20 +1125,7 @@ with chat_col:
                 ])
 
                 if is_export:
-                    # ====== EXPORT PATH -- status widget + blocking respond() ======
-                    status = st.status("Dr. Data is working...", expanded=True)
-                    response_container = st.empty()
-
-                    status.write("Received your request.")
-
-                    if any(kw in msg_lower for kw in ["power bi", "powerbi", "pbi"]):
-                        status.write("Preparing Power BI generation pipeline...")
-                        status.write("Step 1: Profiling your data...")
-                    if any(kw in msg_lower for kw in ["dashboard", "html"]):
-                        status.write("Preparing interactive dashboard builder...")
-                    if any(kw in msg_lower for kw in ["powerpoint", "pptx", "slides"]):
-                        status.write("Preparing PowerPoint generator...")
-
+                    # ====== EXPORT PATH -- clean, no spinner ======
                     response = None
                     try:
                         response = agent.respond(
@@ -1147,20 +1134,14 @@ with chat_col:
                             st.session_state.uploaded_files,
                         )
 
-                        status.write("Building your deliverables...")
-
                         if response is None:
-                            status.update(label="Something went wrong", state="error", expanded=False)
-                            response_container.warning("Dr. Data hit a snag. Try again.")
+                            st.markdown("Something went wrong. Try again.")
 
                         elif isinstance(response, dict):
                             content = response.get("content", "")
                             downloads = response.get("downloads", []) or []
-                            engine = response.get("engine", "claude")
 
                             if downloads:
-                                status.update(label="Done", state="complete", expanded=False)
-                                # Brief chat message -- downloads go to workspace
                                 file_names = [dl.get("filename", dl.get("name", "file")) for dl in downloads]
                                 workspace_note = (
                                     f"Built {len(downloads)} deliverable(s): "
@@ -1168,37 +1149,25 @@ with chat_col:
                                     f"Check the workspace for downloads."
                                 )
                                 if content:
-                                    response_container.markdown(content + "\n\n" + workspace_note)
+                                    st.markdown(content + "\n\n" + workspace_note)
                                 else:
-                                    response_container.markdown(workspace_note)
+                                    st.markdown(workspace_note)
                             else:
-                                status.update(label="Done", state="complete", expanded=False)
                                 if content:
-                                    response_container.markdown(content)
+                                    st.markdown(content)
                                 else:
-                                    response_container.warning("No output generated. Check terminal for errors.")
-
-                            engine_colors = {"claude": "#B39DDB", "openai": "#81C784", "gemini": "#FFB74D"}
-                            st.markdown(
-                                f'<div style="text-align:right;font-size:10px;'
-                                f'color:{engine_colors.get(engine, "#808080")};'
-                                f'opacity:0.5;">{engine.title()}</div>',
-                                unsafe_allow_html=True,
-                            )
+                                    st.markdown("No output generated. Try rephrasing your request.")
 
                         elif isinstance(response, str) and response.strip():
-                            status.update(label="Done", state="complete", expanded=False)
-                            response_container.markdown(response)
+                            st.markdown(response)
 
                         else:
-                            status.update(label="No response", state="error", expanded=False)
-                            response_container.warning("Dr. Data returned empty. Try rephrasing.")
+                            st.markdown("No response. Try rephrasing your request.")
 
                     except Exception as e:
                         import traceback
                         traceback.print_exc()
-                        status.update(label="Error", state="error", expanded=False)
-                        response_container.error(f"Error: {str(e)[:300]}")
+                        st.markdown(f"Hit a snag: {str(e)[:200]}")
 
                     # Save export response to history
                     if response:

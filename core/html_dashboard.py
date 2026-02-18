@@ -293,6 +293,8 @@ background-repeat:no-repeat;background-position:right 8px center;}}
 .cgrid{{display:flex;flex-wrap:wrap;gap:16px;}}
 .cbox{{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px;min-height:340px;transition:border-color .2s;}}
 .cbox:hover{{border-color:var(--accent);}}
+.cbox .insight{{font-size:11px;color:var(--text2);padding:8px 4px 0;line-height:1.5;border-top:1px solid var(--border);margin-top:8px;}}
+.cbox .insight strong{{color:var(--accent);font-weight:600;}}
 
 .footer{{border-top:1px solid var(--border);padding:16px 32px;text-align:center;font-size:11px;color:var(--muted);margin-top:32px;}}
 .filtered-badge{{display:inline-block;background:var(--accent);color:#000;font-size:10px;font-weight:600;padding:2px 8px;border-radius:10px;margin-left:8px;}}
@@ -503,16 +505,75 @@ function timeAggregate(data, dateCol, yCol, agg) {{
   return {{x:x, y:y}};
 }}
 
+function chartInsight(chart, data) {{
+  var type = chart.type, xCol = chart.x, yCol = chart.y;
+  var agg = chart.agg || 'sum';
+  var yLabel = (yCol||'').replace(/_/g,' ');
+  var xLabel = (xCol||'').replace(/_/g,' ');
+
+  if (type === 'line' || type === 'area') {{
+    var ta = timeAggregate(data, xCol, yCol, agg);
+    if (ta.y.length < 2) return '';
+    var total = ta.y.reduce(function(a,b){{return a+b;}},0);
+    var maxIdx = ta.y.indexOf(Math.max.apply(null, ta.y));
+    var first = ta.y[0], last = ta.y[ta.y.length-1];
+    var pctChange = first !== 0 ? Math.round((last - first) / Math.abs(first) * 100) : 0;
+    var trend = pctChange > 5 ? 'upward' : pctChange < -5 ? 'downward' : 'stable';
+    return '<strong>Talking point:</strong> Total ' + yLabel + ' of ' + formatNum(total) +
+      '. Peaked at ' + ta.x[maxIdx] + ' (' + formatNum(ta.y[maxIdx]) + '). ' +
+      'Overall <strong>' + trend + '</strong> trend (' + (pctChange >= 0 ? '+' : '') + pctChange + '%).';
+  }}
+
+  if (type === 'bar' || type === 'hbar') {{
+    var ag = aggregate(data, xCol, yCol, agg, 'desc', chart.top_n || 15);
+    if (ag.length === 0) return '';
+    var total = ag.reduce(function(a,r){{return a + r.y;}}, 0);
+    var topPct = total > 0 ? Math.round(ag[0].y / total * 100) : 0;
+    var msg = '<strong>Talking point:</strong> Top ' + xLabel + ' is <strong>' + ag[0].x + '</strong> at ' + formatNum(ag[0].y) + ' (' + topPct + '% of total).';
+    if (ag.length >= 3) {{
+      var top3 = ag.slice(0,3).reduce(function(a,r){{return a + r.y;}}, 0);
+      var top3Pct = total > 0 ? Math.round(top3 / total * 100) : 0;
+      msg += ' Top 3 account for ' + top3Pct + '% of all ' + yLabel + '.';
+    }}
+    return msg;
+  }}
+
+  if (type === 'donut') {{
+    var ag = aggregate(data, xCol, yCol, agg, 'desc', 8);
+    if (ag.length === 0) return '';
+    var total = ag.reduce(function(a,r){{return a + r.y;}}, 0);
+    var topPct = total > 0 ? Math.round(ag[0].y / total * 100) : 0;
+    return '<strong>Talking point:</strong> <strong>' + ag[0].x + '</strong> dominates at ' + topPct + '% of ' + yLabel + '. ' + ag.length + ' segments shown.';
+  }}
+
+  if (type === 'scatter') {{
+    var pts = data.map(function(r){{return {{x:parseFloat(r[xCol]),y:parseFloat(r[yCol])}};
+    }}).filter(function(r){{return !isNaN(r.x) && !isNaN(r.y);}});
+    if (pts.length < 5) return '';
+    var mx = pts.reduce(function(a,r){{return a+r.x;}},0)/pts.length;
+    var my = pts.reduce(function(a,r){{return a+r.y;}},0)/pts.length;
+    var num=0, dx2=0, dy2=0;
+    pts.forEach(function(r){{ num+=(r.x-mx)*(r.y-my); dx2+=(r.x-mx)*(r.x-mx); dy2+=(r.y-my)*(r.y-my); }});
+    var corr = (dx2>0&&dy2>0) ? num/Math.sqrt(dx2*dy2) : 0;
+    var strength = Math.abs(corr) > 0.7 ? 'strong' : Math.abs(corr) > 0.3 ? 'moderate' : 'weak';
+    var dir = corr > 0.1 ? 'positive' : corr < -0.1 ? 'negative' : 'no clear';
+    return '<strong>Talking point:</strong> ' + pts.length + ' data points. Shows a <strong>' + strength + ' ' + dir + '</strong> relationship (r=' + corr.toFixed(2) + ') between ' + xLabel + ' and ' + yLabel + '.';
+  }}
+
+  return '';
+}}
+
 function renderCharts(data) {{
   var grid = document.getElementById('chartGrid');
   grid.innerHTML = '';
 
   CHARTS.forEach(function(chart, i) {{
     var divId = 'chart_' + i;
+    var insId = 'insight_' + i;
     var w = chart.width === 'full' ? '100%' : 'calc(50% - 8px)';
     var wrapper = document.createElement('div');
     wrapper.style.cssText = 'width:'+w+';min-width:300px;';
-    wrapper.innerHTML = '<div class="cbox" id="'+divId+'"></div>';
+    wrapper.innerHTML = '<div class="cbox"><div id="'+divId+'"></div><div class="insight" id="'+insId+'"></div></div>';
     grid.appendChild(wrapper);
 
     var type = chart.type;
@@ -582,6 +643,10 @@ function renderCharts(data) {{
         yaxis:{{title:yCol.replace(/_/g,' ')}}
       }}), PC);
     }}
+
+    // Talking point below each chart
+    var ins = chartInsight(chart, data);
+    if (ins) document.getElementById(insId).innerHTML = ins;
   }});
 }}
 

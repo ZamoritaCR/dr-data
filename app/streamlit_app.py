@@ -374,16 +374,24 @@ with st.sidebar:
     if uploaded_files_list:
         session = st.session_state.multi_session
         new_files = []
+        file_errors = []
         for uf in uploaded_files_list:
             if uf.name not in st.session_state.uploaded_files:
-                session.add_file(uf.name, uf)
-                file_info = session.files.get(uf.name, {})
-                st.session_state.uploaded_files[uf.name] = {
-                    "path": file_info.get("path", ""),
-                    "ext": file_info.get("ext", ""),
-                    "size": uf.size,
-                }
-                new_files.append(uf.name)
+                try:
+                    session.add_file(uf.name, uf)
+                    file_info = session.files.get(uf.name, {})
+                    st.session_state.uploaded_files[uf.name] = {
+                        "path": file_info.get("path", ""),
+                        "ext": file_info.get("ext", ""),
+                        "size": uf.size,
+                    }
+                    new_files.append(uf.name)
+                except Exception as e:
+                    file_errors.append(f"{uf.name}: {str(e)[:100]}")
+
+        if file_errors:
+            for err in file_errors:
+                st.warning(f"Could not process {err}")
 
         if new_files:
             # Auto-unify if 2+ data files
@@ -396,24 +404,34 @@ with st.sidebar:
                 except Exception:
                     pass
 
-            primary_df = session.get_primary_dataframe()
+            try:
+                primary_df = session.get_primary_dataframe()
+            except Exception:
+                primary_df = None
+
             if primary_df is not None:
                 st.session_state.workspace_content["data_preview"] = primary_df
 
                 # --- AUDIT on upload ---
-                audit = st.session_state.audit_engine.audit_dataframe(
-                    primary_df, source_name=", ".join(new_files)
-                )
-                audit.compute_scores()
-                ws = st.session_state.workspace_content
-                ws["audit_html"] = audit.to_html(
-                    audience=st.session_state.audience_mode
-                )
-                ws["audit_summary"] = audit.to_executive_summary()
-                ws["audit_releasable"] = audit.is_releasable
+                try:
+                    audit = st.session_state.audit_engine.audit_dataframe(
+                        primary_df, source_name=", ".join(new_files)
+                    )
+                    audit.compute_scores()
+                    ws = st.session_state.workspace_content
+                    ws["audit_html"] = audit.to_html(
+                        audience=st.session_state.audience_mode
+                    )
+                    ws["audit_summary"] = audit.to_executive_summary()
+                    ws["audit_releasable"] = audit.is_releasable
+                except Exception:
+                    pass
 
             if st.session_state.agent:
-                st.session_state.agent.set_session(session)
+                try:
+                    st.session_state.agent.set_session(session)
+                except Exception:
+                    pass
 
             st.session_state.file_just_uploaded = {"names": new_files}
 
@@ -468,10 +486,19 @@ with st.sidebar:
                     )
 
     st.markdown("---")
-    if st.button("New Session", width="stretch"):
-        for key in list(st.session_state.keys()):
-            del st.session_state[key]
-        st.rerun()
+    col_reset, col_new = st.columns(2)
+    with col_reset:
+        if st.button("Reset Session", width="stretch"):
+            keep = dict(st.session_state.uploaded_files) if st.session_state.get("uploaded_files") else {}
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.session_state.uploaded_files = keep
+            st.rerun()
+    with col_new:
+        if st.button("New Session", width="stretch"):
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.rerun()
 
 
 # ============================================

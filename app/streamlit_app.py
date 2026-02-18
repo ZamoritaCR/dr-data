@@ -35,6 +35,7 @@ from core.multi_file_handler import MultiFileSession
 from core.audit_engine import AuditEngine
 from core.deliverable_registry import get_recent as _get_recent_deliverables
 from core.dq_engine import DataQualityEngine
+from core.data_catalog import DataCatalog
 
 
 def _safe_html(html_str, fallback_text=""):
@@ -1447,465 +1448,750 @@ with tab2:
             "MySQL, SQL Server, SQLite"
         )
     else:
-        # ── Header row ──
-        _dqh1, _dqh2 = st.columns([3, 1])
-        with _dqh1:
-            st.markdown("#### Data Quality Scanner")
-        with _dqh2:
-            _dq_scan_all = st.button(
-                "Scan All Tables", type="primary", key="dq_scan_all")
+        dq_subtab1, dq_subtab2, dq_subtab3, dq_subtab4, dq_subtab5 = st.tabs([
+            "Quality Scanner",
+            "Data Catalog",
+            "Business Rules",
+            "Trending",
+            "Observability",
+        ])
 
-        _dq_selected = st.multiselect(
-            "Select tables to scan",
-            list(_dq_tables.keys()),
-            default=list(_dq_tables.keys()),
-            key="dq_table_select",
-        )
+        # ============================================================
+        # SUBTAB 1: Quality Scanner (all existing DQ content)
+        # ============================================================
+        with dq_subtab1:
+            # ── Header row ──
+            _dqh1, _dqh2 = st.columns([3, 1])
+            with _dqh1:
+                st.markdown("#### Data Quality Scanner")
+            with _dqh2:
+                _dq_scan_all = st.button(
+                    "Scan All Tables", type="primary", key="dq_scan_all")
 
-        # ── Threshold config ──
-        with st.expander("Quality Thresholds (DAMA Defaults)"):
-            _tc1, _tc2, _tc3, _tc4 = st.columns(4)
-            with _tc1:
-                _dq.thresholds["completeness_warn"] = st.number_input(
-                    "Completeness Warn %", value=95,
-                    min_value=50, max_value=100, key="dq_comp_warn")
-                _dq.thresholds["completeness_fail"] = st.number_input(
-                    "Completeness Fail %", value=80,
-                    min_value=0, max_value=100, key="dq_comp_fail")
-            with _tc2:
-                _dq.thresholds["uniqueness_warn"] = st.number_input(
-                    "Uniqueness Warn %", value=99,
-                    min_value=50, max_value=100, key="dq_uniq_warn")
-                _dq.thresholds["uniqueness_fail"] = st.number_input(
-                    "Uniqueness Fail %", value=95,
-                    min_value=0, max_value=100, key="dq_uniq_fail")
-            with _tc3:
-                _dq.thresholds["validity_warn"] = st.number_input(
-                    "Validity Warn %", value=95,
-                    min_value=50, max_value=100, key="dq_val_warn")
-                _dq.thresholds["validity_fail"] = st.number_input(
-                    "Validity Fail %", value=85,
-                    min_value=0, max_value=100, key="dq_val_fail")
-            with _tc4:
-                _dq.thresholds["freshness_hours_warn"] = st.number_input(
-                    "Freshness Warn (hrs)", value=24,
-                    min_value=1, max_value=720, key="dq_fresh_warn")
-                _dq.thresholds["freshness_hours_fail"] = st.number_input(
-                    "Freshness Fail (hrs)", value=72,
-                    min_value=1, max_value=720, key="dq_fresh_fail")
+            _dq_selected = st.multiselect(
+                "Select tables to scan",
+                list(_dq_tables.keys()),
+                default=list(_dq_tables.keys()),
+                key="dq_table_select",
+            )
 
-        # ── Run scan ──
-        if _dq_scan_all or st.button("Scan Selected", key="dq_scan_selected"):
-            _dq_to_scan = {
-                t: _dq_tables[t] for t in _dq_selected
-                if t in _dq_tables
-            }
-            if _dq_to_scan:
-                with st.status(
-                    "Running DAMA-DMBOK Quality Assessment...",
-                    expanded=True,
-                ) as _dq_status:
-                    for _tn, _td in _dq_to_scan.items():
-                        _dq_status.write(
-                            f"Scanning {_tn} ({len(_td):,} rows x "
-                            f"{len(_td.columns)} cols)..."
-                        )
-                        try:
-                            _dq.scan_table(_td, _tn)
+            # ── Threshold config ──
+            with st.expander("Quality Thresholds (DAMA Defaults)"):
+                _tc1, _tc2, _tc3, _tc4 = st.columns(4)
+                with _tc1:
+                    _dq.thresholds["completeness_warn"] = st.number_input(
+                        "Completeness Warn %", value=95,
+                        min_value=50, max_value=100, key="dq_comp_warn")
+                    _dq.thresholds["completeness_fail"] = st.number_input(
+                        "Completeness Fail %", value=80,
+                        min_value=0, max_value=100, key="dq_comp_fail")
+                with _tc2:
+                    _dq.thresholds["uniqueness_warn"] = st.number_input(
+                        "Uniqueness Warn %", value=99,
+                        min_value=50, max_value=100, key="dq_uniq_warn")
+                    _dq.thresholds["uniqueness_fail"] = st.number_input(
+                        "Uniqueness Fail %", value=95,
+                        min_value=0, max_value=100, key="dq_uniq_fail")
+                with _tc3:
+                    _dq.thresholds["validity_warn"] = st.number_input(
+                        "Validity Warn %", value=95,
+                        min_value=50, max_value=100, key="dq_val_warn")
+                    _dq.thresholds["validity_fail"] = st.number_input(
+                        "Validity Fail %", value=85,
+                        min_value=0, max_value=100, key="dq_val_fail")
+                with _tc4:
+                    _dq.thresholds["freshness_hours_warn"] = st.number_input(
+                        "Freshness Warn (hrs)", value=24,
+                        min_value=1, max_value=720, key="dq_fresh_warn")
+                    _dq.thresholds["freshness_hours_fail"] = st.number_input(
+                        "Freshness Fail (hrs)", value=72,
+                        min_value=1, max_value=720, key="dq_fresh_fail")
+
+            # ── Run scan ──
+            if _dq_scan_all or st.button("Scan Selected", key="dq_scan_selected"):
+                _dq_to_scan = {
+                    t: _dq_tables[t] for t in _dq_selected
+                    if t in _dq_tables
+                }
+                if _dq_to_scan:
+                    with st.status(
+                        "Running DAMA-DMBOK Quality Assessment...",
+                        expanded=True,
+                    ) as _dq_status:
+                        for _tn, _td in _dq_to_scan.items():
                             _dq_status.write(
-                                f"{_tn}: Score = "
-                                f"{_dq.scan_results[_tn]['overall_score']:.1f}"
-                                f"/100"
+                                f"Scanning {_tn} ({len(_td):,} rows x "
+                                f"{len(_td.columns)} cols)..."
                             )
-                        except Exception as _e:
-                            _dq_status.write(
-                                f"{_tn}: Error - {str(_e)[:200]}")
+                            try:
+                                _dq.scan_table(_td, _tn)
+                                _dq_status.write(
+                                    f"{_tn}: Score = "
+                                    f"{_dq.scan_results[_tn]['overall_score']:.1f}"
+                                    f"/100"
+                                )
+                            except Exception as _e:
+                                _dq_status.write(
+                                    f"{_tn}: Error - {str(_e)[:200]}")
 
-                    if len(_dq_to_scan) > 1:
-                        _dq_status.write("Running cross-table analysis...")
-                        try:
-                            _dq_cross = _dq.scan_multiple_tables(_dq_to_scan)
-                            st.session_state.dq_cross_results = _dq_cross
-                        except Exception as _e:
-                            _dq_status.write(
-                                f"Cross-table error: {str(_e)[:200]}")
+                        if len(_dq_to_scan) > 1:
+                            _dq_status.write("Running cross-table analysis...")
+                            try:
+                                _dq_cross = _dq.scan_multiple_tables(_dq_to_scan)
+                                st.session_state.dq_cross_results = _dq_cross
+                            except Exception as _e:
+                                _dq_status.write(
+                                    f"Cross-table error: {str(_e)[:200]}")
 
-                    _dq_status.update(
-                        label=f"Scan complete: {len(_dq_to_scan)} table(s) "
-                              f"assessed",
-                        state="complete",
-                    )
+                        _dq_status.update(
+                            label=f"Scan complete: {len(_dq_to_scan)} table(s) "
+                                  f"assessed",
+                            state="complete",
+                        )
 
-                    # Bridge: pass DQ results into Dr. Data agent context
-                    if "agent" in st.session_state and st.session_state.agent:
-                        st.session_state.agent.set_dq_results(
-                            _dq.scan_results)
+                        # Bridge: pass DQ results into Dr. Data agent context
+                        if "agent" in st.session_state and st.session_state.agent:
+                            st.session_state.agent.set_dq_results(
+                                _dq.scan_results)
 
-                st.rerun()
+                    st.rerun()
 
-        # ── Display results ──
-        if _dq.scan_results:
-            _dq_sc = _dq.generate_scorecard_data()
-
-            st.markdown("---")
-            st.markdown("#### Overall Data Quality Scorecard")
-
-            _sc1, _sc2, _sc3, _sc4, _sc5 = st.columns(5)
-            _sc1.metric("Overall Score",
-                        f"{_dq_sc['overall_score']:.1f}/100")
-            _sc2.metric("Tables Scanned", _dq_sc["tables_scanned"])
-            _sc3.metric("Total Columns", _dq_sc["total_columns"])
-            _sc4.metric("Critical Issues", _dq_sc["critical_issues"])
-            _sc5.metric("Auto-Fixable", _dq_sc["auto_fixable_count"])
-
-            # ── Dimension scores ──
-            st.markdown("#### DAMA Dimension Scores")
-            _dim_cols = st.columns(6)
-            _dim_keys = [
-                "completeness", "accuracy", "consistency",
-                "timeliness", "uniqueness", "validity",
-            ]
-            _dim_labels = [
-                "Completeness", "Accuracy", "Consistency",
-                "Timeliness", "Uniqueness", "Validity",
-            ]
-            _dims = _dq_sc.get("dimension_scores", {})
-            for _i, (_dk, _dl) in enumerate(zip(_dim_keys, _dim_labels)):
-                _dscore = _dims.get(_dk, 0)
-                if _dscore is None:
-                    _dim_cols[_i].metric(_dl, "N/A")
-                else:
-                    _dim_cols[_i].metric(_dl, f"{_dscore:.1f}%")
-
-            # ── Per-table details ──
+            # ── Display results ──
             if _dq.scan_results:
+                _dq_sc = _dq.generate_scorecard_data()
+
                 st.markdown("---")
-                st.markdown("#### Table Details")
-                _tbl_tabs = st.tabs(list(_dq.scan_results.keys()))
+                st.markdown("#### Overall Data Quality Scorecard")
 
-                for _ttab, (_tname, _tres) in zip(
-                    _tbl_tabs, _dq.scan_results.items()
-                ):
-                    with _ttab:
-                        _tc1, _tc2, _tc3 = st.columns(3)
-                        _tc1.metric(
-                            "Score",
-                            f"{_tres['overall_score']:.1f}/100")
-                        _tc2.metric("Rows", f"{_tres['row_count']:,}")
-                        _tc3.metric("Columns", _tres["column_count"])
+                _sc1, _sc2, _sc3, _sc4, _sc5 = st.columns(5)
+                _sc1.metric("Overall Score",
+                            f"{_dq_sc['overall_score']:.1f}/100")
+                _sc2.metric("Tables Scanned", _dq_sc["tables_scanned"])
+                _sc3.metric("Total Columns", _dq_sc["total_columns"])
+                _sc4.metric("Critical Issues", _dq_sc["critical_issues"])
+                _sc5.metric("Auto-Fixable", _dq_sc["auto_fixable_count"])
 
-                        _ddims = _tres.get("dimensions", {})
+                # ── Dimension scores ──
+                st.markdown("#### DAMA Dimension Scores")
+                _dim_cols = st.columns(6)
+                _dim_keys = [
+                    "completeness", "accuracy", "consistency",
+                    "timeliness", "uniqueness", "validity",
+                ]
+                _dim_labels = [
+                    "Completeness", "Accuracy", "Consistency",
+                    "Timeliness", "Uniqueness", "Validity",
+                ]
+                _dims = _dq_sc.get("dimension_scores", {})
+                for _i, (_dk, _dl) in enumerate(zip(_dim_keys, _dim_labels)):
+                    _dscore = _dims.get(_dk, 0)
+                    if _dscore is None:
+                        _dim_cols[_i].metric(_dl, "N/A")
+                    else:
+                        _dim_cols[_i].metric(_dl, f"{_dscore:.1f}%")
 
-                        with st.expander("Completeness Details"):
-                            _comp = _ddims.get("completeness", {})
-                            if _comp:
-                                st.write(
-                                    f"Table Score: {_comp.get('score', 0):.1f}%"
-                                    f" ({_comp.get('status', 'N/A')})")
-                                _cc = _comp.get("columns", {})
-                                if _cc:
-                                    _comp_df = pd.DataFrame([
-                                        {
-                                            "Column": c,
-                                            "Complete %": f"{v['score']:.1f}%",
-                                            "Nulls": v.get("null_count", 0),
-                                            "Status": v.get("status", ""),
-                                        }
-                                        for c, v in _cc.items()
-                                    ])
-                                    st.dataframe(
-                                        _comp_df,
-                                        use_container_width=True,
-                                        hide_index=True,
-                                    )
+                # ── Per-table details ──
+                if _dq.scan_results:
+                    st.markdown("---")
+                    st.markdown("#### Table Details")
+                    _tbl_tabs = st.tabs(list(_dq.scan_results.keys()))
 
-                        with st.expander("Accuracy Details"):
-                            _acc = _ddims.get("accuracy", {})
-                            if _acc:
-                                st.write(
-                                    f"Table Score: {_acc.get('score', 0):.1f}%"
-                                    f" ({_acc.get('status', 'N/A')})")
-                                for _acol, _ainfo in _acc.get(
-                                    "outliers", {}
-                                ).items():
-                                    if _ainfo.get("count", 0) > 0:
+                    for _ttab, (_tname, _tres) in zip(
+                        _tbl_tabs, _dq.scan_results.items()
+                    ):
+                        with _ttab:
+                            _tc1, _tc2, _tc3 = st.columns(3)
+                            _tc1.metric(
+                                "Score",
+                                f"{_tres['overall_score']:.1f}/100")
+                            _tc2.metric("Rows", f"{_tres['row_count']:,}")
+                            _tc3.metric("Columns", _tres["column_count"])
+
+                            _ddims = _tres.get("dimensions", {})
+
+                            with st.expander("Completeness Details"):
+                                _comp = _ddims.get("completeness", {})
+                                if _comp:
+                                    st.write(
+                                        f"Table Score: {_comp.get('score', 0):.1f}%"
+                                        f" ({_comp.get('status', 'N/A')})")
+                                    _cc = _comp.get("columns", {})
+                                    if _cc:
+                                        _comp_df = pd.DataFrame([
+                                            {
+                                                "Column": c,
+                                                "Complete %": f"{v['score']:.1f}%",
+                                                "Nulls": v.get("null_count", 0),
+                                                "Status": v.get("status", ""),
+                                            }
+                                            for c, v in _cc.items()
+                                        ])
+                                        st.dataframe(
+                                            _comp_df,
+                                            use_container_width=True,
+                                            hide_index=True,
+                                        )
+
+                            with st.expander("Accuracy Details"):
+                                _acc = _ddims.get("accuracy", {})
+                                if _acc:
+                                    st.write(
+                                        f"Table Score: {_acc.get('score', 0):.1f}%"
+                                        f" ({_acc.get('status', 'N/A')})")
+                                    for _acol, _ainfo in _acc.get(
+                                        "outliers", {}
+                                    ).items():
+                                        if _ainfo.get("count", 0) > 0:
+                                            st.write(
+                                                f"**{_acol}**: "
+                                                f"{_ainfo['count']} outliers "
+                                                f"({_ainfo.get('pct', 0):.1f}%)")
+                                            if _ainfo.get("examples"):
+                                                st.caption(
+                                                    "Examples: " + ", ".join(
+                                                        str(x) for x in
+                                                        _ainfo["examples"][:5]))
+
+                            with st.expander("Uniqueness Details"):
+                                _uniq = _ddims.get("uniqueness", {})
+                                if _uniq:
+                                    st.write(
+                                        f"Table Score: "
+                                        f"{_uniq.get('score', 0):.1f}%"
+                                        f" ({_uniq.get('status', 'N/A')})")
+                                    _frd = _uniq.get(
+                                        "full_row_duplicates", {})
+                                    if _frd:
                                         st.write(
-                                            f"**{_acol}**: "
-                                            f"{_ainfo['count']} outliers "
-                                            f"({_ainfo.get('pct', 0):.1f}%)")
-                                        if _ainfo.get("examples"):
-                                            st.caption(
-                                                "Examples: " + ", ".join(
-                                                    str(x) for x in
-                                                    _ainfo["examples"][:5]))
-
-                        with st.expander("Uniqueness Details"):
-                            _uniq = _ddims.get("uniqueness", {})
-                            if _uniq:
-                                st.write(
-                                    f"Table Score: "
-                                    f"{_uniq.get('score', 0):.1f}%"
-                                    f" ({_uniq.get('status', 'N/A')})")
-                                _frd = _uniq.get(
-                                    "full_row_duplicates", {})
-                                if _frd:
-                                    st.write(
-                                        f"Full row duplicates: "
-                                        f"{_frd.get('count', 0)} "
-                                        f"({_frd.get('pct', 0):.1f}%)")
-                                _pks = _uniq.get(
-                                    "potential_primary_keys", [])
-                                if _pks:
-                                    st.write(
-                                        f"Potential primary keys: "
-                                        f"{', '.join(_pks)}")
-
-                        with st.expander("Validity Details"):
-                            _val = _ddims.get("validity", {})
-                            if _val:
-                                st.write(
-                                    f"Table Score: "
-                                    f"{_val.get('score', 0):.1f}%"
-                                    f" ({_val.get('status', 'N/A')})")
-                                for _vcol, _vinfo in _val.get(
-                                    "column_validity", {}
-                                ).items():
-                                    if _vinfo.get("violations", 0) > 0:
+                                            f"Full row duplicates: "
+                                            f"{_frd.get('count', 0)} "
+                                            f"({_frd.get('pct', 0):.1f}%)")
+                                    _pks = _uniq.get(
+                                        "potential_primary_keys", [])
+                                    if _pks:
                                         st.write(
-                                            f"**{_vcol}**: "
-                                            f"{_vinfo['violations']} "
-                                            f"violations (rule: "
-                                            f"{_vinfo.get('rule', 'N/A')})")
+                                            f"Potential primary keys: "
+                                            f"{', '.join(_pks)}")
 
-                        with st.expander("Consistency Details"):
-                            _cons = _ddims.get("consistency", {})
-                            if _cons:
-                                st.write(
-                                    f"Table Score: "
-                                    f"{_cons.get('score', 0):.1f}%"
-                                    f" ({_cons.get('status', 'N/A')})")
-                                for _fcol, _finfo in _cons.get(
-                                    "format_issues", {}
-                                ).items():
+                            with st.expander("Validity Details"):
+                                _val = _ddims.get("validity", {})
+                                if _val:
                                     st.write(
-                                        f"**{_fcol}**: "
-                                        f"{_finfo.get('conforming_pct', 0):.1f}% "
-                                        f"conform to "
-                                        f"{_finfo.get('dominant_pattern', '?')}")
+                                        f"Table Score: "
+                                        f"{_val.get('score', 0):.1f}%"
+                                        f" ({_val.get('status', 'N/A')})")
+                                    for _vcol, _vinfo in _val.get(
+                                        "column_validity", {}
+                                    ).items():
+                                        if _vinfo.get("violations", 0) > 0:
+                                            st.write(
+                                                f"**{_vcol}**: "
+                                                f"{_vinfo['violations']} "
+                                                f"violations (rule: "
+                                                f"{_vinfo.get('rule', 'N/A')})")
 
-                        with st.expander("Timeliness Details"):
-                            _timed = _ddims.get("timeliness", {})
-                            if _timed:
-                                _tscore = _timed.get("score")
-                                if _tscore is not None:
+                            with st.expander("Consistency Details"):
+                                _cons = _ddims.get("consistency", {})
+                                if _cons:
                                     st.write(
-                                        f"Table Score: {_tscore:.1f}%"
-                                        f" ({_timed.get('status', 'N/A')})")
-                                    for _dcol, _dinfo in _timed.get(
-                                        "datetime_columns", {}
+                                        f"Table Score: "
+                                        f"{_cons.get('score', 0):.1f}%"
+                                        f" ({_cons.get('status', 'N/A')})")
+                                    for _fcol, _finfo in _cons.get(
+                                        "format_issues", {}
                                     ).items():
                                         st.write(
-                                            f"**{_dcol}**: most recent "
-                                            f"{_dinfo.get('most_recent', '?')}"
-                                            f", staleness "
-                                            f"{_dinfo.get('staleness_hours', 0):.0f}h"
-                                            f", {_dinfo.get('gaps_detected', 0)}"
-                                            f" gap(s)")
-                                else:
-                                    st.write(
-                                        "No temporal columns detected "
-                                        "in this table.")
+                                            f"**{_fcol}**: "
+                                            f"{_finfo.get('conforming_pct', 0):.1f}% "
+                                            f"conform to "
+                                            f"{_finfo.get('dominant_pattern', '?')}")
 
-            # ── Recommendations ──
-            st.markdown("---")
-            st.markdown("#### Recommendations & Remediation")
+                            with st.expander("Timeliness Details"):
+                                _timed = _ddims.get("timeliness", {})
+                                if _timed:
+                                    _tscore = _timed.get("score")
+                                    if _tscore is not None:
+                                        st.write(
+                                            f"Table Score: {_tscore:.1f}%"
+                                            f" ({_timed.get('status', 'N/A')})")
+                                        for _dcol, _dinfo in _timed.get(
+                                            "datetime_columns", {}
+                                        ).items():
+                                            st.write(
+                                                f"**{_dcol}**: most recent "
+                                                f"{_dinfo.get('most_recent', '?')}"
+                                                f", staleness "
+                                                f"{_dinfo.get('staleness_hours', 0):.0f}h"
+                                                f", {_dinfo.get('gaps_detected', 0)}"
+                                                f" gap(s)")
+                                    else:
+                                        st.write(
+                                            "No temporal columns detected "
+                                            "in this table.")
 
-            _all_recs = []
-            for _rn, _rr in _dq.scan_results.items():
-                for _rec in _rr.get("recommendations", []):
-                    _rec["table"] = _rn
-                    _all_recs.append(_rec)
+                # ── Recommendations ──
+                st.markdown("---")
+                st.markdown("#### Recommendations & Remediation")
 
-            if _all_recs:
-                _pri_order = {
-                    "CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
-                _all_recs.sort(
-                    key=lambda r: _pri_order.get(
-                        r.get("priority", "LOW"), 4))
+                _all_recs = []
+                for _rn, _rr in _dq.scan_results.items():
+                    for _rec in _rr.get("recommendations", []):
+                        _rec["table"] = _rn
+                        _all_recs.append(_rec)
 
-                for _ri, _rec in enumerate(_all_recs[:20]):
-                    _pri = _rec.get("priority", "LOW")
-                    _pri_colors = {
-                        "CRITICAL": "#da3633",
-                        "HIGH": "#d29922",
-                        "MEDIUM": "#FFE600",
-                        "LOW": "#238636",
-                    }
-                    _pc = _pri_colors.get(_pri, "#808080")
-                    with st.expander(
-                        f"[{_pri}] {_rec.get('table', '')} -- "
-                        f"{_rec.get('finding', '')[:80]}"
-                    ):
-                        st.write(
-                            f"**Dimension:** "
-                            f"{_rec.get('dimension', 'N/A')}")
-                        st.write(
-                            f"**Finding:** "
-                            f"{_rec.get('finding', '')}")
-                        st.write(
-                            f"**Recommendation:** "
-                            f"{_rec.get('recommendation', '')}")
-                        st.write(
-                            f"**Impact:** "
-                            f"{_rec.get('impact', '')}")
-                        if _rec.get("auto_fixable"):
-                            if st.button(
-                                f"Auto-Fix: {_rec.get('fix_type', '')}",
-                                key=f"fix_{_rec.get('table')}_"
-                                    f"{_rec.get('dimension')}_{_ri}",
-                            ):
-                                with st.spinner("Applying fix..."):
-                                    try:
-                                        _fix = _dq.auto_remediate(
-                                            _dq_tables[_rec["table"]],
-                                            _rec["table"],
-                                            fix_types=[
-                                                _rec.get("fix_type")],
-                                        )
-                                        if _fix and "fixed_df" in _fix:
-                                            _dq_tables[_rec["table"]] = (
-                                                _fix["fixed_df"])
-                                            _changes = _fix.get(
-                                                "changes_made", [])
-                                            st.success(
-                                                f"Fixed. {len(_changes)} "
-                                                f"change(s) applied.")
-                                    except Exception as _e:
-                                        st.error(
-                                            f"Fix failed: "
-                                            f"{str(_e)[:200]}")
-            else:
-                st.info(
-                    "Run a scan to see recommendations.")
+                if _all_recs:
+                    _pri_order = {
+                        "CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
+                    _all_recs.sort(
+                        key=lambda r: _pri_order.get(
+                            r.get("priority", "LOW"), 4))
 
-            # ── Export ──
-            st.markdown("---")
-            _exc1, _exc2 = st.columns(2)
-            with _exc1:
-                if st.button(
-                    "Export Scorecard as JSON", key="dq_export_json"
-                ):
-                    _sc_json = json.dumps(
-                        _dq_sc, indent=2, default=str)
-                    st.download_button(
-                        "Download JSON", _sc_json,
-                        "dq_scorecard.json", "application/json",
-                        key="dq_dl_json",
-                    )
-            with _exc2:
-                if st.button(
-                    "Ask Dr. Data to analyze DQ results",
-                    key="dq_ask_agent",
-                ):
-                    st.session_state.dq_analysis_requested = True
+                    for _ri, _rec in enumerate(_all_recs[:20]):
+                        _pri = _rec.get("priority", "LOW")
+                        _pri_colors = {
+                            "CRITICAL": "#da3633",
+                            "HIGH": "#d29922",
+                            "MEDIUM": "#FFE600",
+                            "LOW": "#238636",
+                        }
+                        _pc = _pri_colors.get(_pri, "#808080")
+                        with st.expander(
+                            f"[{_pri}] {_rec.get('table', '')} -- "
+                            f"{_rec.get('finding', '')[:80]}"
+                        ):
+                            st.write(
+                                f"**Dimension:** "
+                                f"{_rec.get('dimension', 'N/A')}")
+                            st.write(
+                                f"**Finding:** "
+                                f"{_rec.get('finding', '')}")
+                            st.write(
+                                f"**Recommendation:** "
+                                f"{_rec.get('recommendation', '')}")
+                            st.write(
+                                f"**Impact:** "
+                                f"{_rec.get('impact', '')}")
+                            if _rec.get("auto_fixable"):
+                                if st.button(
+                                    f"Auto-Fix: {_rec.get('fix_type', '')}",
+                                    key=f"fix_{_rec.get('table')}_"
+                                        f"{_rec.get('dimension')}_{_ri}",
+                                ):
+                                    with st.spinner("Applying fix..."):
+                                        try:
+                                            _fix = _dq.auto_remediate(
+                                                _dq_tables[_rec["table"]],
+                                                _rec["table"],
+                                                fix_types=[
+                                                    _rec.get("fix_type")],
+                                            )
+                                            if _fix and "fixed_df" in _fix:
+                                                _dq_tables[_rec["table"]] = (
+                                                    _fix["fixed_df"])
+                                                _changes = _fix.get(
+                                                    "changes_made", [])
+                                                st.success(
+                                                    f"Fixed. {len(_changes)} "
+                                                    f"change(s) applied.")
+                                        except Exception as _e:
+                                            st.error(
+                                                f"Fix failed: "
+                                                f"{str(_e)[:200]}")
+                else:
                     st.info(
-                        "Switch to the Dr. Data Agent tab. "
-                        "Dr. Data now has your DQ scan results in context."
-                    )
+                        "Run a scan to see recommendations.")
 
-            # ── HTML Scorecard Report ──
+                # ── Export ──
+                st.markdown("---")
+                _exc1, _exc2 = st.columns(2)
+                with _exc1:
+                    if st.button(
+                        "Export Scorecard as JSON", key="dq_export_json"
+                    ):
+                        _sc_json = json.dumps(
+                            _dq_sc, indent=2, default=str)
+                        st.download_button(
+                            "Download JSON", _sc_json,
+                            "dq_scorecard.json", "application/json",
+                            key="dq_dl_json",
+                        )
+                with _exc2:
+                    if st.button(
+                        "Ask Dr. Data to analyze DQ results",
+                        key="dq_ask_agent",
+                    ):
+                        st.session_state.dq_analysis_requested = True
+                        st.info(
+                            "Switch to the Dr. Data Agent tab. "
+                            "Dr. Data now has your DQ scan results in context."
+                        )
+
+                # ── HTML Scorecard Report ──
+                st.markdown("---")
+                if st.button(
+                    "Generate DQ Scorecard Report",
+                    key="dq_export_html",
+                ):
+                    _html = _dq.generate_html_scorecard()
+                    if _html:
+                        st.download_button(
+                            "Download HTML Scorecard", _html,
+                            "dq_scorecard.html", "text/html",
+                            key="dq_dl_html",
+                        )
+                        components.html(_html, height=800, scrolling=True)
+
+        # ============================================================
+        # SUBTAB 2: Data Catalog & Business Glossary
+        # ============================================================
+        with dq_subtab2:
+            if "data_catalog" not in st.session_state:
+                st.session_state.data_catalog = DataCatalog()
+
+            catalog = st.session_state.data_catalog
+            stats = catalog.get_catalog_stats()
+
+            st.markdown("#### Data Catalog & Business Glossary")
+
+            # Stats row
+            cat_c1, cat_c2, cat_c3, cat_c4, cat_c5 = st.columns(5)
+            cat_c1.metric("Tables Cataloged", stats.get("tables_cataloged", 0))
+            cat_c2.metric("Columns Cataloged", stats.get("columns_cataloged", 0))
+            cat_c3.metric("Glossary Terms", stats.get("glossary_terms", 0))
+            cat_c4.metric("PII Columns", stats.get("pii_columns", 0))
+            _cov = stats.get("coverage_pct", 0) or 0
+            cat_c5.metric("Catalog Coverage", f"{_cov:.0f}%")
+
+            # Auto-catalog button
+            if _dq_tables:
+                if st.button("Auto-Catalog All Loaded Tables", type="primary", key="cat_auto"):
+                    with st.status("Cataloging...", expanded=True) as cat_status:
+                        for tname, tdf in _dq_tables.items():
+                            cat_status.write(f"Cataloging {tname}...")
+                            _src = "Snowflake" if (
+                                hasattr(st.session_state.get("agent", None), "snowflake_tables")
+                                and tname in getattr(st.session_state.agent, "snowflake_tables", {})
+                            ) else "File Upload"
+                            catalog.auto_catalog_from_dataframe(tdf, tname, source_system=_src)
+                            cat_status.write(f"Generating glossary for {tname}...")
+                            catalog.auto_generate_glossary(tdf, tname)
+                        cat_status.update(
+                            label=f"Cataloged {len(_dq_tables)} tables", state="complete")
+                    st.rerun()
+
+            # Search
+            search_query = st.text_input(
+                "Search catalog...", key="cat_search",
+                placeholder="Search tables, columns, glossary terms...")
+            if search_query:
+                results = catalog.search_catalog(search_query)
+                if results:
+                    for r in results[:20]:
+                        st.write(
+                            f"**[{r['type'].upper()}]** {r['name']} - "
+                            f"{r.get('context', '')[:100]}")
+                else:
+                    st.info("No results found.")
+
+            # Catalog tabs
+            cat_tab1, cat_tab2, cat_tab3, cat_tab4 = st.tabs(
+                ["Tables", "Glossary", "Domains", "Classifications"])
+
+            with cat_tab1:
+                table_catalog = catalog.catalog.get("tables", {})
+                if table_catalog:
+                    for tname, tinfo in table_catalog.items():
+                        cert = tinfo.get("certification_status", "Uncertified")
+                        _cert_icons = {
+                            "Certified": "[OK]", "Warning": "[!!]",
+                            "Quarantined": "[XX]", "Uncertified": "[--]",
+                        }
+                        cert_icon = _cert_icons.get(cert, "[--]")
+                        with st.expander(
+                            f"{cert_icon} {tinfo.get('business_name', tname)} ({tname})"
+                        ):
+                            ec1, ec2, ec3 = st.columns(3)
+                            ec1.write(f"**Domain:** {tinfo.get('domain', 'Unassigned')}")
+                            ec2.write(f"**Owner:** {tinfo.get('owner', 'Unassigned')}")
+                            ec3.write(f"**Source:** {tinfo.get('source_system', 'Unknown')}")
+
+                            desc = st.text_area(
+                                "Description",
+                                value=tinfo.get("description", ""),
+                                key=f"cat_desc_{tname}", height=60)
+                            if desc != tinfo.get("description", ""):
+                                catalog.catalog["tables"][tname]["description"] = desc
+                                catalog._save_catalog()
+
+                            # Certification
+                            _cert_opts = ["Uncertified", "Certified", "Warning", "Quarantined"]
+                            _cert_idx = _cert_opts.index(cert) if cert in _cert_opts else 0
+                            new_cert = st.selectbox(
+                                "Certification", _cert_opts,
+                                index=_cert_idx, key=f"cat_cert_{tname}")
+                            if new_cert != cert:
+                                catalog.set_certification(tname, new_cert)
+
+                            # DQ info
+                            last_score = tinfo.get("last_dq_score")
+                            if last_score is not None:
+                                st.write(
+                                    f"**Last DQ Score:** {last_score:.1f}/100 "
+                                    f"(scanned: {tinfo.get('last_dq_scan', 'never')})")
+
+                            # Columns
+                            cols = tinfo.get("columns", {})
+                            if cols:
+                                st.write(f"**Columns ({len(cols)}):**")
+                                col_rows = []
+                                for cname, cinfo in cols.items():
+                                    col_rows.append({
+                                        "Column": cname,
+                                        "Business Name": cinfo.get("business_name", cname),
+                                        "Type": cinfo.get("data_type", ""),
+                                        "Classification": cinfo.get("classification", "General"),
+                                        "PII": "Yes" if cinfo.get("pii") else "",
+                                        "Nullable": "Yes" if cinfo.get("nullable") else "No",
+                                    })
+                                st.dataframe(
+                                    pd.DataFrame(col_rows),
+                                    use_container_width=True, hide_index=True)
+
+                            # Edit column metadata
+                            if cols:
+                                with st.expander("Edit Column Metadata"):
+                                    col_to_edit = st.selectbox(
+                                        "Column", list(cols.keys()),
+                                        key=f"cat_coledit_{tname}")
+                                    if col_to_edit and col_to_edit in cols:
+                                        cdata = cols[col_to_edit]
+                                        new_bname = st.text_input(
+                                            "Business Name",
+                                            value=cdata.get("business_name", ""),
+                                            key=f"cat_bn_{tname}_{col_to_edit}")
+                                        new_cdesc = st.text_area(
+                                            "Description",
+                                            value=cdata.get("description", ""),
+                                            key=f"cat_cd_{tname}_{col_to_edit}",
+                                            height=60)
+                                        _class_opts = [
+                                            "General", "PII", "Financial",
+                                            "Reference", "Identifier"]
+                                        _cur_class = cdata.get("classification", "General")
+                                        _class_idx = (
+                                            _class_opts.index(_cur_class)
+                                            if _cur_class in _class_opts else 0)
+                                        new_class = st.selectbox(
+                                            "Classification", _class_opts,
+                                            index=_class_idx,
+                                            key=f"cat_cl_{tname}_{col_to_edit}")
+                                        new_pii = st.checkbox(
+                                            "Contains PII",
+                                            value=cdata.get("pii", False),
+                                            key=f"cat_pii_{tname}_{col_to_edit}")
+                                        if st.button(
+                                            "Save Column Metadata",
+                                            key=f"cat_save_{tname}_{col_to_edit}",
+                                        ):
+                                            catalog.catalog["tables"][tname]["columns"][col_to_edit].update({
+                                                "business_name": new_bname,
+                                                "description": new_cdesc,
+                                                "classification": new_class,
+                                                "pii": new_pii,
+                                            })
+                                            catalog._save_catalog()
+                                            st.success("Saved")
+                else:
+                    st.info("No tables cataloged yet. Load data and click Auto-Catalog.")
+
+            with cat_tab2:
+                glossary = catalog.get_glossary()
+                if glossary:
+                    st.write(f"**{len(glossary)} terms defined**")
+                    for term_data in glossary:
+                        _term_key = term_data.get("term", "").lower()
+                        with st.expander(term_data.get("term", "?")):
+                            st.write(f"**Definition:** {term_data.get('definition', '')}")
+                            st.write(f"**Domain:** {term_data.get('domain', 'General')}")
+                            if term_data.get("synonyms"):
+                                st.write(
+                                    f"**Synonyms:** {', '.join(term_data['synonyms'])}")
+                            # Edit definition
+                            new_def = st.text_area(
+                                "Edit definition",
+                                value=term_data.get("definition", ""),
+                                key=f"glos_{_term_key}", height=60)
+                            if new_def != term_data.get("definition", ""):
+                                catalog.catalog["glossary"][_term_key]["definition"] = new_def
+                                catalog._save_catalog()
+                else:
+                    st.info("No glossary terms yet. Auto-catalog tables to generate glossary.")
+
+                # Add manual term
+                with st.expander("Add Glossary Term Manually"):
+                    new_term = st.text_input("Term", key="glos_new_term")
+                    new_gdef = st.text_area("Definition", key="glos_new_def", height=60)
+                    new_domain = st.selectbox(
+                        "Domain",
+                        ["General", "Customer", "Transaction", "Compliance",
+                         "Operations", "Financial", "Reference"],
+                        key="glos_new_domain")
+                    if st.button("Add Term", key="glos_add") and new_term and new_gdef:
+                        catalog.add_glossary_term(new_term, new_gdef, domain=new_domain)
+                        st.success(f"Added: {new_term}")
+                        st.rerun()
+
+            with cat_tab3:
+                domains = catalog.catalog.get("domains", {})
+                if domains:
+                    for dname, dinfo in domains.items():
+                        with st.expander(dname):
+                            st.write(f"**Description:** {dinfo.get('description', '')}")
+                            st.write(f"**Owner:** {dinfo.get('owner', 'Unassigned')}")
+                            st.write(f"**Steward:** {dinfo.get('steward', 'Unassigned')}")
+                else:
+                    st.info("No domains configured.")
+
+                with st.expander("Add Domain"):
+                    new_dname = st.text_input("Domain Name", key="dom_new_name")
+                    new_ddesc = st.text_area("Description", key="dom_new_desc", height=60)
+                    new_downer = st.text_input("Owner", key="dom_new_owner")
+                    if st.button("Add Domain", key="dom_add") and new_dname:
+                        catalog.add_domain(new_dname, new_ddesc, owner=new_downer)
+                        st.success(f"Added domain: {new_dname}")
+                        st.rerun()
+
+            with cat_tab4:
+                classifications = catalog.catalog.get("classifications", {})
+                if classifications:
+                    class_rows = []
+                    for cname, cinfo in classifications.items():
+                        class_rows.append({
+                            "Name": cname,
+                            "Sensitivity": cinfo.get("sensitivity_level", ""),
+                            "Description": cinfo.get("description", "")[:80],
+                            "Handling Rules": len(cinfo.get("handling_rules", [])),
+                        })
+                    st.dataframe(
+                        pd.DataFrame(class_rows),
+                        use_container_width=True, hide_index=True)
+                else:
+                    st.info("No classifications configured.")
+
+            # Export catalog
             st.markdown("---")
-            if st.button(
-                "Generate DQ Scorecard Report",
-                key="dq_export_html",
-            ):
-                _html = _dq.generate_html_scorecard()
-                if _html:
+            exp1, exp2 = st.columns(2)
+            with exp1:
+                if st.button("Export Catalog (JSON)", key="cat_export_json"):
+                    cat_json = catalog.export_catalog(fmt="json")
                     st.download_button(
-                        "Download HTML Scorecard", _html,
-                        "dq_scorecard.html", "text/html",
-                        key="dq_dl_html",
-                    )
-                    import streamlit.components.v1 as _components
-                    _components.html(_html, height=800, scrolling=True)
+                        "Download", cat_json,
+                        "data_catalog.json", "application/json",
+                        key="cat_dl_json")
+            with exp2:
+                if st.button("Export Catalog (Markdown)", key="cat_export_md"):
+                    cat_md = catalog.export_catalog(fmt="markdown")
+                    st.download_button(
+                        "Download", cat_md,
+                        "data_catalog.md", "text/markdown",
+                        key="cat_dl_md")
 
-            # ── Data Observability (Monte Carlo Style) ──
-            st.markdown("---")
+        # ============================================================
+        # SUBTAB 3: Business Rules (placeholder)
+        # ============================================================
+        with dq_subtab3:
+            st.markdown("#### Custom Business Rules Engine")
+            st.info("Coming next - custom validation rules for WU-specific data quality requirements.")
+
+        # ============================================================
+        # SUBTAB 4: Trending (placeholder)
+        # ============================================================
+        with dq_subtab4:
+            st.markdown("#### Quality Trending")
+            st.info("Coming next - historical DQ score tracking and trend analysis.")
+
+        # ============================================================
+        # SUBTAB 5: Data Observability (Monte Carlo Style)
+        # ============================================================
+        with dq_subtab5:
             st.markdown("#### Data Observability (Monte Carlo Style)")
 
-            _obs1, _obs2, _obs3 = st.columns(3)
-            with _obs1:
-                st.markdown("**Schema Drift**")
-                if st.button("Check Schema", key="dq_schema_check"):
-                    for _otn in list(_dq.scan_results.keys()):
-                        if _otn in _dq_tables:
-                            _drift = _dq.detect_schema_drift(
-                                _dq_tables[_otn], _otn)
-                            if _drift.get("has_drift"):
-                                st.warning(
-                                    f"{_otn}: Schema drift detected "
-                                    f"({_drift['severity']})")
-                                if _drift.get("new_columns"):
-                                    st.write(
-                                        f"New columns: "
-                                        f"{_drift['new_columns']}")
-                                if _drift.get("removed_columns"):
-                                    st.write(
-                                        f"Removed: "
-                                        f"{_drift['removed_columns']}")
-                                for _tc in _drift.get(
-                                        "type_changes", []):
-                                    st.write(
-                                        f"{_tc['column']}: "
-                                        f"{_tc['old_type']} -> "
-                                        f"{_tc['new_type']}")
-                            else:
-                                st.success(f"{_otn}: No drift")
+            if not _dq.scan_results:
+                st.info("Run a quality scan first (Quality Scanner tab) to enable observability checks.")
+            else:
+                _obs1, _obs2, _obs3 = st.columns(3)
+                with _obs1:
+                    st.markdown("**Schema Drift**")
+                    if st.button("Check Schema", key="dq_schema_check"):
+                        for _otn in list(_dq.scan_results.keys()):
+                            if _otn in _dq_tables:
+                                _drift = _dq.detect_schema_drift(
+                                    _dq_tables[_otn], _otn)
+                                if _drift.get("has_drift"):
+                                    st.warning(
+                                        f"{_otn}: Schema drift detected "
+                                        f"({_drift['severity']})")
+                                    if _drift.get("new_columns"):
+                                        st.write(
+                                            f"New columns: "
+                                            f"{_drift['new_columns']}")
+                                    if _drift.get("removed_columns"):
+                                        st.write(
+                                            f"Removed: "
+                                            f"{_drift['removed_columns']}")
+                                    for _tc in _drift.get(
+                                            "type_changes", []):
+                                        st.write(
+                                            f"{_tc['column']}: "
+                                            f"{_tc['old_type']} -> "
+                                            f"{_tc['new_type']}")
+                                else:
+                                    st.success(f"{_otn}: No drift")
 
-            with _obs2:
-                st.markdown("**Volume Monitoring**")
-                if st.button("Check Volume", key="dq_volume_check"):
-                    for _otn in list(_dq.scan_results.keys()):
-                        if _otn in _dq_tables:
-                            _vol = _dq.detect_volume_anomaly(
-                                _dq_tables[_otn], _otn)
-                            if _vol.get("is_anomaly"):
-                                st.warning(
-                                    f"{_otn}: Volume anomaly "
-                                    f"({_vol['severity']}) - "
-                                    f"{_vol.get('change_pct', 0):.1f}%"
-                                    f" change")
-                            else:
-                                st.success(
-                                    f"{_otn}: Volume normal "
-                                    f"({_vol['current_rows']:,} rows)")
+                with _obs2:
+                    st.markdown("**Volume Monitoring**")
+                    if st.button("Check Volume", key="dq_volume_check"):
+                        for _otn in list(_dq.scan_results.keys()):
+                            if _otn in _dq_tables:
+                                _vol = _dq.detect_volume_anomaly(
+                                    _dq_tables[_otn], _otn)
+                                if _vol.get("is_anomaly"):
+                                    st.warning(
+                                        f"{_otn}: Volume anomaly "
+                                        f"({_vol['severity']}) - "
+                                        f"{_vol.get('change_pct', 0):.1f}%"
+                                        f" change")
+                                else:
+                                    st.success(
+                                        f"{_otn}: Volume normal "
+                                        f"({_vol['current_rows']:,} rows)")
 
-            with _obs3:
-                st.markdown("**Distribution Drift**")
+                with _obs3:
+                    st.markdown("**Distribution Drift**")
+                    if st.button(
+                        "Check Distributions", key="dq_dist_check"
+                    ):
+                        for _otn in list(_dq.scan_results.keys()):
+                            if _otn in _dq_tables:
+                                _dist = _dq.detect_distribution_drift(
+                                    _dq_tables[_otn], _otn)
+                                _dcols = _dist.get("drifted_columns", [])
+                                if _dcols:
+                                    st.warning(
+                                        f"{_otn}: {len(_dcols)} "
+                                        f"columns drifted")
+                                    for _dc in _dcols[:5]:
+                                        st.write(f"  {_dc}")
+                                else:
+                                    st.success(
+                                        f"{_otn}: No distribution drift")
+
                 if st.button(
-                    "Check Distributions", key="dq_dist_check"
+                    "Store Current as Baseline", key="dq_baseline"
                 ):
                     for _otn in list(_dq.scan_results.keys()):
-                        if _otn in _dq_tables:
-                            _dist = _dq.detect_distribution_drift(
-                                _dq_tables[_otn], _otn)
-                            _dcols = _dist.get("drifted_columns", [])
-                            if _dcols:
-                                st.warning(
-                                    f"{_otn}: {len(_dcols)} "
-                                    f"columns drifted")
-                                for _dc in _dcols[:5]:
-                                    st.write(f"  {_dc}")
-                            else:
-                                st.success(
-                                    f"{_otn}: No distribution drift")
-
-            if st.button(
-                "Store Current as Baseline", key="dq_baseline"
-            ):
-                for _otn in list(_dq.scan_results.keys()):
-                    _bl_df = _dq_tables.get(_otn)
-                    _dq.store_baseline(_otn, df=_bl_df)
-                st.success(
-                    f"Baseline stored for "
-                    f"{len(_dq.scan_results)} table(s)")
+                        _bl_df = _dq_tables.get(_otn)
+                        _dq.store_baseline(_otn, df=_bl_df)
+                    st.success(
+                        f"Baseline stored for "
+                        f"{len(_dq.scan_results)} table(s)")

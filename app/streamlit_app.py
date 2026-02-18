@@ -52,402 +52,348 @@ st.set_page_config(
 )
 
 
-# === UNIFIED CSS -- Western Union Enterprise Theme ===
-st.markdown('''<style>
-/* ===== WU GLOBAL THEME ===== */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+# =============================================================================
+# DR. DATA AVATAR (inline SVG)
+# =============================================================================
 
-* { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important; }
+DR_DATA_AVATAR = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="36" height="36"><defs><linearGradient id="abg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#1a1a1a"/><stop offset="100%" style="stop-color:#2d2d2d"/></linearGradient><linearGradient id="agl" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#3a3a3a"/><stop offset="100%" style="stop-color:#2d2d2d"/></linearGradient></defs><circle cx="24" cy="24" r="23" fill="url(#abg)" stroke="#4a4a4a" stroke-width="1"/><rect x="10" y="9" width="28" height="24" rx="8" fill="url(#agl)" stroke="#FFDE00" stroke-width="1"/><rect x="13" y="15" width="22" height="8" rx="4" fill="#1a1a1a" stroke="#FFDE00" stroke-width="0.8"/><circle cx="19" cy="19" r="2" fill="#FFDE00"/><circle cx="29" cy="19" r="2" fill="#FFDE00"/><path d="M 18 28 Q 24 33 30 28" fill="none" stroke="#FFDE00" stroke-width="1.5" stroke-linecap="round"/><line x1="24" y1="9" x2="24" y2="4" stroke="#4a4a4a" stroke-width="1.5"/><circle cx="24" cy="3" r="2" fill="#FFE600"/><rect x="12" y="38" width="24" height="6" rx="2" fill="#1a1a1a" stroke="#4a4a4a" stroke-width="0.5"/><text x="24" y="43" text-anchor="middle" fill="#FFDE00" font-family="monospace" font-size="4" font-weight="bold">DR.DATA</text></svg>'
 
-/* Main app background */
-.stApp, [data-testid="stAppViewContainer"] {
-    background: #0D0D0D !important;
-}
+WU_LOGO = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 40" width="120" height="24"><rect width="200" height="40" rx="4" fill="#FFDE00"/><text x="12" y="28" font-family="Arial,Helvetica,sans-serif" font-size="20" font-weight="900" fill="#1a1a1a" letter-spacing="1">WESTERN UNION</text></svg>'
 
-/* Remove default Streamlit padding/margins */
-section.main > div.block-container {
-    max-width: 100% !important;
-    padding: 0 1.5rem 140px 1.5rem !important;
-}
-header[data-testid="stHeader"] { display: none !important; }
 
-/* ===== SIDEBAR ===== */
-section[data-testid="stSidebar"] {
-    background: #1A1A1A !important;
-    border-right: 1px solid #3D3D3D !important;
-    width: 300px !important;
-    min-width: 300px !important;
-}
-section[data-testid="stSidebar"] .block-container {
-    padding: 1rem 1rem 2rem 1rem !important;
-}
-section[data-testid="stSidebar"] h1,
-section[data-testid="stSidebar"] h2,
-section[data-testid="stSidebar"] h3,
-section[data-testid="stSidebar"] label,
-section[data-testid="stSidebar"] p,
-section[data-testid="stSidebar"] span {
-    color: #FFFFFF !important;
-}
-section[data-testid="stSidebar"] .stMarkdown p {
-    color: #B3B3B3 !important;
-    font-size: 13px !important;
-}
+# === CUSTOM CSS -- THE ENTIRE LOOK (Western Union) ===
+st.markdown("""
+<style>
+    /* Kill Streamlit defaults */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    .stDeployButton {display: none;}
 
-/* Sidebar buttons */
-section[data-testid="stSidebar"] .stButton button {
-    background: #FFE600 !important;
-    color: #000000 !important;
-    font-weight: 600 !important;
-    border: none !important;
-    border-radius: 6px !important;
-    padding: 8px 16px !important;
-    font-size: 13px !important;
-    width: 100% !important;
-    transition: all 0.2s ease !important;
-}
-section[data-testid="stSidebar"] .stButton button:hover {
-    background: #E6CF00 !important;
-    transform: translateY(-1px) !important;
-}
+    /* Dark foundation */
+    .stApp {
+        background-color: #1a1a1a;
+    }
 
-/* File uploader */
-section[data-testid="stSidebar"] [data-testid="stFileUploader"] {
-    background: #262626 !important;
-    border: 1px dashed #3D3D3D !important;
-    border-radius: 8px !important;
-    padding: 12px !important;
-}
-section[data-testid="stSidebar"] [data-testid="stFileUploader"]:hover {
-    border-color: #FFE600 !important;
-}
-section[data-testid="stSidebar"] [data-testid="stFileUploader"] span,
-section[data-testid="stSidebar"] [data-testid="stFileUploader"] small {
-    color: #B3B3B3 !important;
-    font-size: 12px !important;
-}
+    /* === FULL HEIGHT CHAT LAYOUT === */
+    section.main > div.block-container {
+        max-width: 100% !important;
+        padding: 0 2rem 120px 2rem !important;
+    }
 
-/* Sidebar selectbox / multiselect */
-section[data-testid="stSidebar"] [data-testid="stSelectbox"],
-section[data-testid="stSidebar"] [data-testid="stMultiSelect"] {
-    background: #262626 !important;
-}
-section[data-testid="stSidebar"] .stSelectbox > div > div,
-section[data-testid="stSidebar"] .stMultiSelect > div > div {
-    background: #262626 !important;
-    border: 1px solid #3D3D3D !important;
-    color: #FFFFFF !important;
-}
+    /* Chat messages container -- full viewport height */
+    div[data-testid='stChatMessageContainer'] {
+        height: calc(100vh - 200px) !important;
+        max-height: calc(100vh - 200px) !important;
+        overflow-y: auto !important;
+        padding: 1rem !important;
+        scroll-behavior: smooth !important;
+    }
 
-/* Sidebar text input */
-section[data-testid="stSidebar"] .stTextInput input {
-    background: #262626 !important;
-    border: 1px solid #3D3D3D !important;
-    color: #FFFFFF !important;
-    border-radius: 6px !important;
-}
-section[data-testid="stSidebar"] .stTextInput input:focus {
-    border-color: #FFE600 !important;
-    box-shadow: 0 0 0 1px #FFE600 !important;
-}
+    /* Chat input pinned to bottom */
+    div[data-testid='stBottom'] {
+        position: fixed !important;
+        bottom: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
+        background: #1a1a1a !important;
+        border-top: 2px solid #FFDE00 !important;
+        padding: 12px 2rem !important;
+        z-index: 999 !important;
+    }
+    div[data-testid="stBottomBlockContainer"] {
+        background: #1a1a1a !important;
+        padding: 10px 20px !important;
+        border-top: 2px solid #FFDE00 !important;
+    }
 
-/* Sidebar slider */
-section[data-testid="stSidebar"] .stSlider [data-testid="stThumbValue"] { color: #FFE600 !important; }
-section[data-testid="stSidebar"] .stSlider [role="slider"] { background: #FFE600 !important; }
+    /* Chat input wider and styled */
+    div[data-testid='stChatInput'] {
+        max-width: 100% !important;
+    }
+    div[data-testid='stChatInput'] textarea,
+    div[data-testid='stChatInput'] div[contenteditable='true'] {
+        background: #0d1117 !important;
+        border: 2px solid #FFDE00 !important;
+        color: #ffffff !important;
+        caret-color: #ffffff !important;
+        -webkit-text-fill-color: #ffffff !important;
+        font-size: 15px !important;
+        min-height: 50px !important;
+        border-radius: 8px !important;
+    }
+    div[data-testid='stChatInput'] textarea::placeholder {
+        color: #808080 !important;
+        -webkit-text-fill-color: #808080 !important;
+    }
 
-/* Sidebar success/info/warning boxes */
-section[data-testid="stSidebar"] .stAlert { border-radius: 6px !important; font-size: 12px !important; }
-div[data-testid="stNotification"] { border-radius: 6px !important; }
+    /* Assistant messages -- wider, more readable */
+    div[data-testid='stChatMessage'] {
+        max-width: 90% !important;
+        padding: 12px 16px !important;
+        margin-bottom: 8px !important;
+        line-height: 1.7 !important;
+        font-size: 15px !important;
+    }
 
-/* Sidebar expander */
-section[data-testid="stSidebar"] [data-testid="stExpander"] {
-    background: #262626 !important;
-    border: 1px solid #3D3D3D !important;
-    border-radius: 6px !important;
-}
+    /* Scrollbar styling */
+    div[data-testid='stChatMessageContainer']::-webkit-scrollbar {
+        width: 6px;
+    }
+    div[data-testid='stChatMessageContainer']::-webkit-scrollbar-thumb {
+        background: #4a4a4a;
+        border-radius: 3px;
+    }
+    div[data-testid='stChatMessageContainer']::-webkit-scrollbar-track {
+        background: #1a1a1a;
+    }
 
-/* Sidebar dividers */
-section[data-testid="stSidebar"] hr { border-color: #3D3D3D !important; margin: 12px 0 !important; }
+    /* Download buttons inside chat */
+    div[data-testid='stChatMessage'] .stDownloadButton button {
+        background: #FFDE00 !important;
+        color: #1a1a1a !important;
+        font-weight: 700 !important;
+        border: none !important;
+        border-radius: 6px !important;
+        padding: 8px 16px !important;
+        margin-top: 6px !important;
+        font-size: 13px !important;
+    }
 
-/* ===== CHAT AREA ===== */
-div[data-testid="stChatMessageContainer"] {
-    height: calc(100vh - 180px) !important;
-    max-height: calc(100vh - 180px) !important;
-    overflow-y: auto !important;
-    padding: 16px 8px !important;
-    scroll-behavior: smooth !important;
-}
+    /* Status containers inside chat */
+    div[data-testid='stChatMessage'] div[data-testid='stStatusWidget'] {
+        background: #2d2d2d !important;
+        border: 1px solid #4a4a4a !important;
+        border-radius: 8px !important;
+        margin: 8px 0 !important;
+    }
 
-/* Chat input pinned to bottom */
-div[data-testid="stBottom"] {
-    position: fixed !important;
-    bottom: 0 !important;
-    background: linear-gradient(transparent, #0D0D0D 20%) !important;
-    padding: 20px 1.5rem 16px 1.5rem !important;
-    z-index: 999 !important;
-}
+    /* === COMPACT HEADER BAR === */
+    .top-header {
+        background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+        border-bottom: 1px solid #4a4a4a;
+        padding: 6px 24px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        height: 50px;
+        max-height: 50px;
+        position: relative;
+    }
+    .top-header::before {
+        content: "";
+        position: absolute;
+        top: 0; left: 0; right: 0;
+        height: 2px;
+        background: linear-gradient(90deg, #FFDE00, #FFE600, #FFDE00);
+    }
+    .header-left {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+    .top-header h1 {
+        font-size: 16px;
+        font-weight: 600;
+        color: #FFFFFF;
+        margin: 0;
+        letter-spacing: -0.3px;
+        display: inline;
+    }
+    .top-header .role {
+        font-size: 11px;
+        color: #B0B0B0;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        display: inline;
+        margin-left: 8px;
+    }
 
-/* Chat input box */
-div[data-testid="stChatInput"] textarea {
-    background: #1A1A1A !important;
-    border: 2px solid #3D3D3D !important;
-    color: #FFFFFF !important;
-    -webkit-text-fill-color: #FFFFFF !important;
-    font-size: 14px !important;
-    border-radius: 12px !important;
-    padding: 12px 16px !important;
-    min-height: 48px !important;
-    transition: border-color 0.2s ease !important;
-}
-div[data-testid="stChatInput"] textarea:focus {
-    border-color: #FFE600 !important;
-    box-shadow: 0 0 0 1px rgba(255,230,0,0.3) !important;
-}
-div[data-testid="stChatInput"] textarea::placeholder {
-    color: #808080 !important;
-    -webkit-text-fill-color: #808080 !important;
-}
-div[data-testid="stChatInput"] button {
-    color: #FFE600 !important;
-}
+    /* === COMPACT SIDEBAR === */
+    section[data-testid='stSidebar'] {
+        width: 280px !important;
+        min-width: 280px !important;
+        background: #1a1a1a !important;
+        border-right: 1px solid #4a4a4a;
+    }
+    section[data-testid='stSidebar'] .block-container {
+        padding: 1rem !important;
+    }
+    section[data-testid="stSidebar"] .stFileUploader {
+        border: 1px dashed #4a4a4a;
+        border-radius: 8px;
+        padding: 12px;
+    }
 
-/* Chat messages */
-div[data-testid="stChatMessage"] {
-    background: transparent !important;
-    padding: 12px 16px !important;
-    margin-bottom: 4px !important;
-    line-height: 1.65 !important;
-    font-size: 14px !important;
-    color: #FFFFFF !important;
-    max-width: 95% !important;
-    border-radius: 0 !important;
-    border-bottom: 1px solid rgba(61,61,61,0.3) !important;
-}
-div[data-testid="stChatMessage"] p { color: #FFFFFF !important; line-height: 1.65 !important; }
-div[data-testid="stChatMessage"] li { color: #E0E0E0 !important; }
-div[data-testid="stChatMessage"] strong { color: #FFE600 !important; }
-div[data-testid="stChatMessage"] code { background: #262626 !important; color: #FFE600 !important; padding: 2px 6px !important; border-radius: 4px !important; font-size: 12px !important; }
-div[data-testid="stChatMessage"] a { color: #FFE600 !important; text-decoration: none !important; }
-div[data-testid="stChatMessage"] a:hover { text-decoration: underline !important; }
+    /* === CHAT PANEL BORDER === */
+    div[data-testid="column"]:last-child {
+        border-left: 1px solid #4a4a4a;
+        padding-left: 16px !important;
+    }
 
-/* User message avatar area */
-div[data-testid="stChatMessage"][data-testid*="user"] {
-    background: rgba(255,230,0,0.03) !important;
-}
+    /* === WORKSPACE AREA === */
+    .workspace-card {
+        background: #2d2d2d;
+        border: 1px solid #4a4a4a;
+        border-radius: 10px;
+        padding: 24px;
+        margin-bottom: 16px;
+    }
+    .workspace-card h3 {
+        font-size: 14px;
+        font-weight: 600;
+        color: #FFFFFF;
+        margin: 0 0 16px 0;
+        padding-bottom: 8px;
+        border-bottom: 1px solid #4a4a4a;
+    }
 
-/* ===== STATUS WIDGET (Progress) ===== */
-div[data-testid="stStatusWidget"] {
-    background: #1A1A1A !important;
-    border: 1px solid #3D3D3D !important;
-    border-radius: 8px !important;
-    margin: 8px 0 !important;
-}
-div[data-testid="stStatusWidget"] p { color: #B3B3B3 !important; font-size: 13px !important; }
-div[data-testid="stStatusWidget"] summary { color: #FFFFFF !important; font-weight: 500 !important; }
+    /* === KPI CARDS === */
+    .kpi-row {
+        display: flex;
+        gap: 12px;
+        margin-bottom: 20px;
+    }
+    .kpi-card {
+        flex: 1;
+        background: linear-gradient(135deg, #2d2d2d, #3a3a3a);
+        border: 1px solid #4a4a4a;
+        border-radius: 10px;
+        padding: 16px 20px;
+        text-align: center;
+    }
+    .kpi-card .kpi-value {
+        font-size: 26px;
+        font-weight: 700;
+        color: #FFDE00;
+        line-height: 1.2;
+    }
+    .kpi-card .kpi-label {
+        font-size: 10px;
+        color: #B0B0B0;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+        margin-top: 4px;
+    }
 
-/* ===== DOWNLOAD BUTTONS ===== */
-.stDownloadButton button {
-    background: #FFE600 !important;
-    color: #000000 !important;
-    font-weight: 600 !important;
-    border: none !important;
-    border-radius: 8px !important;
-    padding: 10px 20px !important;
-    font-size: 13px !important;
-    letter-spacing: 0.3px !important;
-    transition: all 0.2s ease !important;
-    box-shadow: 0 2px 8px rgba(255,230,0,0.15) !important;
-}
-.stDownloadButton button:hover {
-    background: #E6CF00 !important;
-    transform: translateY(-1px) !important;
-    box-shadow: 0 4px 12px rgba(255,230,0,0.25) !important;
-}
+    /* === SCORE BADGE === */
+    .score-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 56px;
+        height: 56px;
+        border-radius: 50%;
+        font-size: 20px;
+        font-weight: 700;
+        border: 3px solid;
+    }
+    .score-green { color: #238636; border-color: #238636; }
+    .score-amber { color: #d29922; border-color: #d29922; }
+    .score-red { color: #da3633; border-color: #da3633; }
 
-/* ===== DATA TABLES ===== */
-div[data-testid="stDataFrame"] {
-    background: #1A1A1A !important;
-    border: 1px solid #3D3D3D !important;
-    border-radius: 8px !important;
-}
+    /* === PROGRESS INDICATOR === */
+    .phase-status {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 16px;
+        background: #3a3a3a;
+        border: 1px solid #4a4a4a;
+        border-left: 3px solid #FFDE00;
+        border-radius: 6px;
+        margin-bottom: 12px;
+        font-size: 13px;
+        color: #FFFFFF;
+    }
+    .phase-status.complete {
+        border-left-color: #FFE600;
+    }
+    .phase-status .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #FFDE00;
+        animation: pulse 1.5s infinite;
+    }
+    .phase-status.complete .dot {
+        background: #FFE600;
+        animation: none;
+    }
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.3; }
+    }
 
-/* ===== TABS ===== */
-button[data-baseweb="tab"] { color: #B3B3B3 !important; }
-button[data-baseweb="tab"][aria-selected="true"] { color: #FFE600 !important; border-bottom-color: #FFE600 !important; }
+    /* Chat messages custom classes */
+    .dr-msg {
+        background: #2d2d2d;
+        border: 1px solid #4a4a4a;
+        border-radius: 10px;
+        padding: 12px 16px;
+        margin-bottom: 10px;
+        font-size: 13px;
+        line-height: 1.6;
+        color: #FFFFFF;
+    }
+    .user-msg {
+        background: #3a3a3a;
+        border: 1px solid #4a4a4a;
+        border-radius: 10px;
+        padding: 10px 14px;
+        margin-bottom: 10px;
+        font-size: 13px;
+        color: #B0B0B0;
+        text-align: right;
+    }
+    .dr-name {
+        font-size: 11px;
+        font-weight: 600;
+        color: #FFDE00;
+        margin-bottom: 4px;
+        letter-spacing: 0.3px;
+    }
 
-/* ===== SCROLLBAR ===== */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: #0D0D0D; }
-::-webkit-scrollbar-thumb { background: #3D3D3D; border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #FFE600; }
+    /* Download cards */
+    .dl-card {
+        background: #3a3a3a;
+        border: 1px solid #FFDE00;
+        border-radius: 8px;
+        padding: 10px 14px;
+        margin: 8px 0;
+    }
+    .dl-card .dl-name {
+        font-size: 12px;
+        font-weight: 600;
+        color: #FFDE00;
+    }
+    .dl-card .dl-desc {
+        font-size: 11px;
+        color: #B0B0B0;
+    }
 
-/* ===== METRICS ===== */
-div[data-testid="stMetric"] {
-    background: #1A1A1A !important;
-    border: 1px solid #3D3D3D !important;
-    border-radius: 8px !important;
-    padding: 12px !important;
-}
-div[data-testid="stMetric"] label { color: #B3B3B3 !important; font-size: 12px !important; }
-div[data-testid="stMetric"] [data-testid="stMetricValue"] { color: #FFE600 !important; }
+    /* Download buttons -- WU branding */
+    div.stDownloadButton > button {
+        background-color: #FFDE00 !important;
+        color: #1a1a1a !important;
+        font-weight: 700 !important;
+        border: none !important;
+        padding: 8px 20px !important;
+        border-radius: 6px !important;
+        width: 100% !important;
+        margin-top: 4px !important;
+    }
+    div.stDownloadButton > button:hover {
+        background-color: #FFE600 !important;
+    }
 
-/* ===== SPINNER ===== */
-.stSpinner > div { border-top-color: #FFE600 !important; }
-
-/* ===== RADIO / CHECKBOX ===== */
-.stRadio label, .stCheckbox label { color: #FFFFFF !important; }
-
-/* ===== CHAT PANEL BORDER ===== */
-div[data-testid="column"]:last-child {
-    border-left: 1px solid #3D3D3D;
-    padding-left: 16px !important;
-}
-
-/* ===== WORKSPACE AREA ===== */
-.workspace-card {
-    background: #1A1A1A;
-    border: 1px solid #3D3D3D;
-    border-radius: 10px;
-    padding: 24px;
-    margin-bottom: 16px;
-}
-.workspace-card h3 {
-    font-size: 14px;
-    font-weight: 600;
-    color: #FFFFFF;
-    margin: 0 0 16px 0;
-    padding-bottom: 8px;
-    border-bottom: 1px solid #3D3D3D;
-}
-
-/* ===== KPI CARDS ===== */
-.kpi-row {
-    display: flex;
-    gap: 12px;
-    margin-bottom: 20px;
-}
-.kpi-card {
-    flex: 1;
-    background: linear-gradient(135deg, #1A1A1A, #262626);
-    border: 1px solid #3D3D3D;
-    border-radius: 10px;
-    padding: 16px 20px;
-    text-align: center;
-}
-.kpi-card .kpi-value {
-    font-size: 26px;
-    font-weight: 700;
-    color: #FFE600;
-    line-height: 1.2;
-}
-.kpi-card .kpi-label {
-    font-size: 10px;
-    color: #808080;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
-    margin-top: 4px;
-}
-
-/* ===== SCORE BADGE ===== */
-.score-badge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 56px;
-    height: 56px;
-    border-radius: 50%;
-    font-size: 20px;
-    font-weight: 700;
-    border: 3px solid;
-}
-.score-green { color: #34D399; border-color: #34D399; }
-.score-amber { color: #FBBF24; border-color: #FBBF24; }
-.score-red { color: #F87171; border-color: #F87171; }
-
-/* ===== PROGRESS INDICATOR ===== */
-.phase-status {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 12px 16px;
-    background: #262626;
-    border: 1px solid #3D3D3D;
-    border-left: 3px solid #FFE600;
-    border-radius: 6px;
-    margin-bottom: 12px;
-    font-size: 13px;
-    color: #FFFFFF;
-}
-.phase-status.complete {
-    border-left-color: #34D399;
-}
-.phase-status .dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: #FFE600;
-    animation: pulse 1.5s infinite;
-}
-.phase-status.complete .dot {
-    background: #34D399;
-    animation: none;
-}
-@keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.3; }
-}
-
-/* Chat messages custom classes */
-.dr-msg {
-    background: #1A1A1A;
-    border: 1px solid #3D3D3D;
-    border-radius: 10px;
-    padding: 12px 16px;
-    margin-bottom: 10px;
-    font-size: 13px;
-    line-height: 1.6;
-    color: #FFFFFF;
-}
-.user-msg {
-    background: #262626;
-    border: 1px solid #3D3D3D;
-    border-radius: 10px;
-    padding: 10px 14px;
-    margin-bottom: 10px;
-    font-size: 13px;
-    color: #B3B3B3;
-    text-align: right;
-}
-.dr-name {
-    font-size: 11px;
-    font-weight: 600;
-    color: #FFE600;
-    margin-bottom: 4px;
-    letter-spacing: 0.3px;
-}
-
-/* Download cards */
-.dl-card {
-    background: #262626;
-    border: 1px solid #FFE600;
-    border-radius: 8px;
-    padding: 10px 14px;
-    margin: 8px 0;
-}
-.dl-card .dl-name {
-    font-size: 12px;
-    font-weight: 600;
-    color: #FFE600;
-}
-.dl-card .dl-desc {
-    font-size: 11px;
-    color: #B3B3B3;
-}
-
-/* ===== HIDE STREAMLIT BRANDING ===== */
-#MainMenu, footer, [data-testid="stDecoration"] { display: none !important; }
-
-</style>''', unsafe_allow_html=True)
+    /* Make data tables dark */
+    .stDataFrame {
+        border: 1px solid #4a4a4a;
+        border-radius: 8px;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 
 # ============================================
@@ -494,37 +440,15 @@ if "audience_mode" not in st.session_state:
 
 
 # ============================================
-# HEADER BAR
+# HEADER (with avatar)
 # ============================================
-st.markdown('''
-<div style="background:linear-gradient(135deg,#0D0D0D 0%,#1A1A1A 100%);padding:12px 24px;display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid #FFE600;margin:-1rem -1.5rem 1rem -1.5rem;">
-    <div style="display:flex;align-items:center;gap:14px;">
-        <div style="width:36px;height:36px;background:#FFE600;border-radius:8px;display:flex;align-items:center;justify-content:center;">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="#000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        </div>
-        <div>
-            <span style="font-size:18px;font-weight:700;color:#FFFFFF;letter-spacing:-0.3px;">Dr. Data</span>
-            <span style="font-size:11px;color:#808080;margin-left:12px;font-weight:400;">Agentic Data Intelligence Platform</span>
-        </div>
-    </div>
-    <div style="display:flex;align-items:center;gap:8px;">
-        <span style="font-size:10px;color:#808080;letter-spacing:1px;text-transform:uppercase;">Powered by</span>
-        <span style="font-size:13px;font-weight:700;color:#FFE600;letter-spacing:0.5px;">Western Union</span>
-    </div>
-</div>
-''', unsafe_allow_html=True)
+_safe_html(f'<div class="top-header"><div class="header-left">{DR_DATA_AVATAR}<h1>Dr. Data</h1><span class="role">|&nbsp; Chief Data Intelligence Officer</span></div><div>{WU_LOGO}</div></div>', "Dr. Data -- Chief Data Intelligence Officer")
 
 
 # ============================================
 # SIDEBAR -- File Upload + Audience Toggle
 # ============================================
 with st.sidebar:
-    st.markdown('''
-<div style="text-align:center;padding:8px 0 16px 0;border-bottom:1px solid #3D3D3D;margin-bottom:16px;">
-    <div style="font-size:14px;font-weight:700;color:#FFE600;letter-spacing:0.5px;">DR. DATA</div>
-    <div style="font-size:10px;color:#808080;letter-spacing:1px;text-transform:uppercase;margin-top:2px;">Intelligence Suite</div>
-</div>
-''', unsafe_allow_html=True)
     st.markdown("**Upload Data**")
     ext_list = sorted(ALL_SUPPORTED)
     uploaded_files_list = st.file_uploader(
@@ -830,7 +754,8 @@ with workspace_col:
 
     if ws["phase"] == "waiting" and ws.get("data_preview") is None:
         # Empty state
-        _safe_html('<div style="text-align:center;padding:80px 40px;"><div style="width:64px;height:64px;background:#FFE600;border-radius:14px;display:flex;align-items:center;justify-content:center;margin:0 auto 20px auto;"><svg width="32" height="32" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="#000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div style="font-size:18px;font-weight:600;color:#FFFFFF;margin-bottom:8px;">Welcome. I am Dr. Data.</div><div style="font-size:13px;max-width:440px;margin:0 auto;line-height:1.7;color:#B3B3B3;">I am here to help you unlock the full potential of your data. Upload a file in the sidebar -- CSV, Excel, Tableau, Alteryx, whatever you have -- and let me show you <span style="color:#FFE600;font-weight:500;">The Art of the Possible</span>. I can build dashboards, reports, PowerPoints, and more.</div></div>', "Welcome! I am Dr. Data. Upload a file in the sidebar to get started.")
+        avatar_lg = DR_DATA_AVATAR.replace('width="36" height="36"', 'width="64" height="64"')
+        _safe_html(f'<div style="text-align:center;padding:80px 40px;color:#B0B0B0;"><div style="margin-bottom:16px;opacity:0.6;">{avatar_lg}</div><div style="font-size:16px;font-weight:500;color:#FFFFFF;margin-bottom:8px;">Welcome! I am Dr. Data.</div><div style="font-size:13px;max-width:440px;margin:0 auto;line-height:1.6;">I am here to help you unlock the full potential of your data. Upload a file in the sidebar -- CSV, Excel, Tableau, Alteryx, whatever you have -- and let me show you The Art of the Possible. I can build dashboards, reports, PowerPoints, and more. Let us get started!</div></div>', "Welcome! I am Dr. Data. Upload a file in the sidebar to get started.")
 
     else:
         # === KPI CARDS ===
@@ -974,7 +899,7 @@ def _render_downloads(downloads, key_prefix, ts):
 # RIGHT: CHAT PANEL -- Conversation with Dr. Data
 # ============================================
 with chat_col:
-    _safe_html('<div style="padding:4px 0 8px 0;border-bottom:1px solid #3D3D3D;margin-bottom:8px;display:flex;align-items:center;gap:10px;"><div style="width:28px;height:28px;background:#FFE600;border-radius:6px;display:flex;align-items:center;justify-content:center;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" stroke="#000" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div><span style="font-size:13px;font-weight:600;color:#FFFFFF;">Chat with Dr. Data</span><span style="font-size:11px;color:#808080;">|&nbsp; The Art of the Possible</span></div>', "Chat with Dr. Data -- The Art of the Possible")
+    _safe_html(f'<div style="padding:4px 0 8px 0;border-bottom:1px solid #4a4a4a;margin-bottom:8px;display:flex;align-items:center;gap:8px;">{DR_DATA_AVATAR}<span style="font-size:13px;font-weight:600;color:#FFFFFF;">Chat with Dr. Data</span><span style="font-size:11px;color:#B0B0B0;">|&nbsp; The Art of the Possible</span></div>', "Chat with Dr. Data -- The Art of the Possible")
 
     # Chat container with scroll
     chat_container = st.container()

@@ -34,6 +34,7 @@ from app.file_handler import ingest_file, ALL_SUPPORTED
 from core.multi_file_handler import MultiFileSession
 from core.audit_engine import AuditEngine
 from core.deliverable_registry import get_recent as _get_recent_deliverables
+from core.dq_engine import DataQualityEngine
 
 
 def _safe_html(html_str, fallback_text=""):
@@ -1407,6 +1408,400 @@ with tab1:
 
 
 with tab2:
-    st.markdown("### Data Quality Engine")
-    st.markdown("*Enterprise data quality assessment powered by DAMA-DMBOK*")
-    st.info("Connect a data source in the sidebar, then select tables to scan.")
+    # ── DQ Engine session state ──
+    if "dq_engine" not in st.session_state:
+        st.session_state.dq_engine = DataQualityEngine()
+
+    _dq = st.session_state.dq_engine
+
+    # Collect available tables from all sources
+    _dq_tables = {}
+    if "agent" in st.session_state and st.session_state.agent:
+        _dq_agent = st.session_state.agent
+        if hasattr(_dq_agent, "dataframe") and _dq_agent.dataframe is not None:
+            _dq_name = getattr(_dq_agent, "current_file_name", "Uploaded File")
+            _dq_tables[_dq_name] = _dq_agent.dataframe
+        if hasattr(_dq_agent, "loaded_tables"):
+            for _tn, _td in _dq_agent.loaded_tables.items():
+                _dq_tables[_tn] = _td
+        if hasattr(_dq_agent, "snowflake_tables"):
+            for _tn, _td in _dq_agent.snowflake_tables.items():
+                _dq_tables[_tn] = _td
+
+    # Also check multi-file session
+    if "multi_session" in st.session_state:
+        _ms = st.session_state.multi_session
+        for _fn, _fi in getattr(_ms, "data_files", {}).items():
+            if _fn not in _dq_tables and "dataframe" in _fi:
+                _dq_tables[_fn] = _fi["dataframe"]
+
+    if not _dq_tables:
+        st.markdown("#### No Data Sources Connected")
+        st.markdown(
+            "Use the sidebar to either upload files or connect to a "
+            "database. Then return here to run a full data quality assessment."
+        )
+        st.markdown(
+            "**Supported sources:** CSV, Excel, Snowflake, PostgreSQL, "
+            "MySQL, SQL Server, SQLite"
+        )
+    else:
+        # ── Header row ──
+        _dqh1, _dqh2 = st.columns([3, 1])
+        with _dqh1:
+            st.markdown("#### Data Quality Scanner")
+        with _dqh2:
+            _dq_scan_all = st.button(
+                "Scan All Tables", type="primary", key="dq_scan_all")
+
+        _dq_selected = st.multiselect(
+            "Select tables to scan",
+            list(_dq_tables.keys()),
+            default=list(_dq_tables.keys()),
+            key="dq_table_select",
+        )
+
+        # ── Threshold config ──
+        with st.expander("Quality Thresholds (DAMA Defaults)"):
+            _tc1, _tc2, _tc3, _tc4 = st.columns(4)
+            with _tc1:
+                _dq.thresholds["completeness_warn"] = st.number_input(
+                    "Completeness Warn %", value=95,
+                    min_value=50, max_value=100, key="dq_comp_warn")
+                _dq.thresholds["completeness_fail"] = st.number_input(
+                    "Completeness Fail %", value=80,
+                    min_value=0, max_value=100, key="dq_comp_fail")
+            with _tc2:
+                _dq.thresholds["uniqueness_warn"] = st.number_input(
+                    "Uniqueness Warn %", value=99,
+                    min_value=50, max_value=100, key="dq_uniq_warn")
+                _dq.thresholds["uniqueness_fail"] = st.number_input(
+                    "Uniqueness Fail %", value=95,
+                    min_value=0, max_value=100, key="dq_uniq_fail")
+            with _tc3:
+                _dq.thresholds["validity_warn"] = st.number_input(
+                    "Validity Warn %", value=95,
+                    min_value=50, max_value=100, key="dq_val_warn")
+                _dq.thresholds["validity_fail"] = st.number_input(
+                    "Validity Fail %", value=85,
+                    min_value=0, max_value=100, key="dq_val_fail")
+            with _tc4:
+                _dq.thresholds["freshness_hours_warn"] = st.number_input(
+                    "Freshness Warn (hrs)", value=24,
+                    min_value=1, max_value=720, key="dq_fresh_warn")
+                _dq.thresholds["freshness_hours_fail"] = st.number_input(
+                    "Freshness Fail (hrs)", value=72,
+                    min_value=1, max_value=720, key="dq_fresh_fail")
+
+        # ── Run scan ──
+        if _dq_scan_all or st.button("Scan Selected", key="dq_scan_selected"):
+            _dq_to_scan = {
+                t: _dq_tables[t] for t in _dq_selected
+                if t in _dq_tables
+            }
+            if _dq_to_scan:
+                with st.status(
+                    "Running DAMA-DMBOK Quality Assessment...",
+                    expanded=True,
+                ) as _dq_status:
+                    for _tn, _td in _dq_to_scan.items():
+                        _dq_status.write(
+                            f"Scanning {_tn} ({len(_td):,} rows x "
+                            f"{len(_td.columns)} cols)..."
+                        )
+                        try:
+                            _dq.scan_table(_td, _tn)
+                            _dq_status.write(
+                                f"{_tn}: Score = "
+                                f"{_dq.scan_results[_tn]['overall_score']:.1f}"
+                                f"/100"
+                            )
+                        except Exception as _e:
+                            _dq_status.write(
+                                f"{_tn}: Error - {str(_e)[:200]}")
+
+                    if len(_dq_to_scan) > 1:
+                        _dq_status.write("Running cross-table analysis...")
+                        try:
+                            _dq_cross = _dq.scan_multiple_tables(_dq_to_scan)
+                            st.session_state.dq_cross_results = _dq_cross
+                        except Exception as _e:
+                            _dq_status.write(
+                                f"Cross-table error: {str(_e)[:200]}")
+
+                    _dq_status.update(
+                        label=f"Scan complete: {len(_dq_to_scan)} table(s) "
+                              f"assessed",
+                        state="complete",
+                    )
+                st.rerun()
+
+        # ── Display results ──
+        if _dq.scan_results:
+            _dq_sc = _dq.generate_scorecard_data()
+
+            st.markdown("---")
+            st.markdown("#### Overall Data Quality Scorecard")
+
+            _sc1, _sc2, _sc3, _sc4, _sc5 = st.columns(5)
+            _sc1.metric("Overall Score",
+                        f"{_dq_sc['overall_score']:.1f}/100")
+            _sc2.metric("Tables Scanned", _dq_sc["tables_scanned"])
+            _sc3.metric("Total Columns", _dq_sc["total_columns"])
+            _sc4.metric("Critical Issues", _dq_sc["critical_issues"])
+            _sc5.metric("Auto-Fixable", _dq_sc["auto_fixable_count"])
+
+            # ── Dimension scores ──
+            st.markdown("#### DAMA Dimension Scores")
+            _dim_cols = st.columns(6)
+            _dim_keys = [
+                "completeness", "accuracy", "consistency",
+                "timeliness", "uniqueness", "validity",
+            ]
+            _dim_labels = [
+                "Completeness", "Accuracy", "Consistency",
+                "Timeliness", "Uniqueness", "Validity",
+            ]
+            _dims = _dq_sc.get("dimension_scores", {})
+            for _i, (_dk, _dl) in enumerate(zip(_dim_keys, _dim_labels)):
+                _dscore = _dims.get(_dk, 0)
+                if _dscore is None:
+                    _dim_cols[_i].metric(_dl, "N/A")
+                else:
+                    _dim_cols[_i].metric(_dl, f"{_dscore:.1f}%")
+
+            # ── Per-table details ──
+            if _dq.scan_results:
+                st.markdown("---")
+                st.markdown("#### Table Details")
+                _tbl_tabs = st.tabs(list(_dq.scan_results.keys()))
+
+                for _ttab, (_tname, _tres) in zip(
+                    _tbl_tabs, _dq.scan_results.items()
+                ):
+                    with _ttab:
+                        _tc1, _tc2, _tc3 = st.columns(3)
+                        _tc1.metric(
+                            "Score",
+                            f"{_tres['overall_score']:.1f}/100")
+                        _tc2.metric("Rows", f"{_tres['row_count']:,}")
+                        _tc3.metric("Columns", _tres["column_count"])
+
+                        _ddims = _tres.get("dimensions", {})
+
+                        with st.expander("Completeness Details"):
+                            _comp = _ddims.get("completeness", {})
+                            if _comp:
+                                st.write(
+                                    f"Table Score: {_comp.get('score', 0):.1f}%"
+                                    f" ({_comp.get('status', 'N/A')})")
+                                _cc = _comp.get("columns", {})
+                                if _cc:
+                                    _comp_df = pd.DataFrame([
+                                        {
+                                            "Column": c,
+                                            "Complete %": f"{v['score']:.1f}%",
+                                            "Nulls": v.get("null_count", 0),
+                                            "Status": v.get("status", ""),
+                                        }
+                                        for c, v in _cc.items()
+                                    ])
+                                    st.dataframe(
+                                        _comp_df,
+                                        use_container_width=True,
+                                        hide_index=True,
+                                    )
+
+                        with st.expander("Accuracy Details"):
+                            _acc = _ddims.get("accuracy", {})
+                            if _acc:
+                                st.write(
+                                    f"Table Score: {_acc.get('score', 0):.1f}%"
+                                    f" ({_acc.get('status', 'N/A')})")
+                                for _acol, _ainfo in _acc.get(
+                                    "outliers", {}
+                                ).items():
+                                    if _ainfo.get("count", 0) > 0:
+                                        st.write(
+                                            f"**{_acol}**: "
+                                            f"{_ainfo['count']} outliers "
+                                            f"({_ainfo.get('pct', 0):.1f}%)")
+                                        if _ainfo.get("examples"):
+                                            st.caption(
+                                                "Examples: " + ", ".join(
+                                                    str(x) for x in
+                                                    _ainfo["examples"][:5]))
+
+                        with st.expander("Uniqueness Details"):
+                            _uniq = _ddims.get("uniqueness", {})
+                            if _uniq:
+                                st.write(
+                                    f"Table Score: "
+                                    f"{_uniq.get('score', 0):.1f}%"
+                                    f" ({_uniq.get('status', 'N/A')})")
+                                _frd = _uniq.get(
+                                    "full_row_duplicates", {})
+                                if _frd:
+                                    st.write(
+                                        f"Full row duplicates: "
+                                        f"{_frd.get('count', 0)} "
+                                        f"({_frd.get('pct', 0):.1f}%)")
+                                _pks = _uniq.get(
+                                    "potential_primary_keys", [])
+                                if _pks:
+                                    st.write(
+                                        f"Potential primary keys: "
+                                        f"{', '.join(_pks)}")
+
+                        with st.expander("Validity Details"):
+                            _val = _ddims.get("validity", {})
+                            if _val:
+                                st.write(
+                                    f"Table Score: "
+                                    f"{_val.get('score', 0):.1f}%"
+                                    f" ({_val.get('status', 'N/A')})")
+                                for _vcol, _vinfo in _val.get(
+                                    "column_validity", {}
+                                ).items():
+                                    if _vinfo.get("violations", 0) > 0:
+                                        st.write(
+                                            f"**{_vcol}**: "
+                                            f"{_vinfo['violations']} "
+                                            f"violations (rule: "
+                                            f"{_vinfo.get('rule', 'N/A')})")
+
+                        with st.expander("Consistency Details"):
+                            _cons = _ddims.get("consistency", {})
+                            if _cons:
+                                st.write(
+                                    f"Table Score: "
+                                    f"{_cons.get('score', 0):.1f}%"
+                                    f" ({_cons.get('status', 'N/A')})")
+                                for _fcol, _finfo in _cons.get(
+                                    "format_issues", {}
+                                ).items():
+                                    st.write(
+                                        f"**{_fcol}**: "
+                                        f"{_finfo.get('conforming_pct', 0):.1f}% "
+                                        f"conform to "
+                                        f"{_finfo.get('dominant_pattern', '?')}")
+
+                        with st.expander("Timeliness Details"):
+                            _timed = _ddims.get("timeliness", {})
+                            if _timed:
+                                _tscore = _timed.get("score")
+                                if _tscore is not None:
+                                    st.write(
+                                        f"Table Score: {_tscore:.1f}%"
+                                        f" ({_timed.get('status', 'N/A')})")
+                                    for _dcol, _dinfo in _timed.get(
+                                        "datetime_columns", {}
+                                    ).items():
+                                        st.write(
+                                            f"**{_dcol}**: most recent "
+                                            f"{_dinfo.get('most_recent', '?')}"
+                                            f", staleness "
+                                            f"{_dinfo.get('staleness_hours', 0):.0f}h"
+                                            f", {_dinfo.get('gaps_detected', 0)}"
+                                            f" gap(s)")
+                                else:
+                                    st.write(
+                                        "No temporal columns detected "
+                                        "in this table.")
+
+            # ── Recommendations ──
+            st.markdown("---")
+            st.markdown("#### Recommendations & Remediation")
+
+            _all_recs = []
+            for _rn, _rr in _dq.scan_results.items():
+                for _rec in _rr.get("recommendations", []):
+                    _rec["table"] = _rn
+                    _all_recs.append(_rec)
+
+            if _all_recs:
+                _pri_order = {
+                    "CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
+                _all_recs.sort(
+                    key=lambda r: _pri_order.get(
+                        r.get("priority", "LOW"), 4))
+
+                for _ri, _rec in enumerate(_all_recs[:20]):
+                    _pri = _rec.get("priority", "LOW")
+                    _pri_colors = {
+                        "CRITICAL": "#da3633",
+                        "HIGH": "#d29922",
+                        "MEDIUM": "#FFE600",
+                        "LOW": "#238636",
+                    }
+                    _pc = _pri_colors.get(_pri, "#808080")
+                    with st.expander(
+                        f"[{_pri}] {_rec.get('table', '')} -- "
+                        f"{_rec.get('finding', '')[:80]}"
+                    ):
+                        st.write(
+                            f"**Dimension:** "
+                            f"{_rec.get('dimension', 'N/A')}")
+                        st.write(
+                            f"**Finding:** "
+                            f"{_rec.get('finding', '')}")
+                        st.write(
+                            f"**Recommendation:** "
+                            f"{_rec.get('recommendation', '')}")
+                        st.write(
+                            f"**Impact:** "
+                            f"{_rec.get('impact', '')}")
+                        if _rec.get("auto_fixable"):
+                            if st.button(
+                                f"Auto-Fix: {_rec.get('fix_type', '')}",
+                                key=f"fix_{_rec.get('table')}_"
+                                    f"{_rec.get('dimension')}_{_ri}",
+                            ):
+                                with st.spinner("Applying fix..."):
+                                    try:
+                                        _fix = _dq.auto_remediate(
+                                            _dq_tables[_rec["table"]],
+                                            _rec["table"],
+                                            fix_types=[
+                                                _rec.get("fix_type")],
+                                        )
+                                        if _fix and "fixed_df" in _fix:
+                                            _dq_tables[_rec["table"]] = (
+                                                _fix["fixed_df"])
+                                            _changes = _fix.get(
+                                                "changes_made", [])
+                                            st.success(
+                                                f"Fixed. {len(_changes)} "
+                                                f"change(s) applied.")
+                                    except Exception as _e:
+                                        st.error(
+                                            f"Fix failed: "
+                                            f"{str(_e)[:200]}")
+            else:
+                st.info(
+                    "Run a scan to see recommendations.")
+
+            # ── Export ──
+            st.markdown("---")
+            _exc1, _exc2 = st.columns(2)
+            with _exc1:
+                if st.button(
+                    "Export Scorecard as JSON", key="dq_export_json"
+                ):
+                    _sc_json = json.dumps(
+                        _dq_sc, indent=2, default=str)
+                    st.download_button(
+                        "Download JSON", _sc_json,
+                        "dq_scorecard.json", "application/json",
+                        key="dq_dl_json",
+                    )
+            with _exc2:
+                if st.button(
+                    "Ask Dr. Data to analyze DQ results",
+                    key="dq_ask_agent",
+                ):
+                    st.session_state.dq_analysis_requested = True
+                    st.info(
+                        "Switch to the Dr. Data Agent tab. "
+                        "Dr. Data now has your DQ scan results in context."
+                    )

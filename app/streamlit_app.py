@@ -2315,6 +2315,81 @@ with tab2:
                 else:
                     st.info("No classifications configured.")
 
+            # Lineage
+            st.markdown("---")
+            st.markdown("##### Data Lineage")
+
+            from core.lineage import DataLineage
+            if "lineage" not in st.session_state:
+                st.session_state.lineage = DataLineage()
+
+            _lin = st.session_state.lineage
+            _lin_stats = _lin.get_lineage_stats()
+
+            _l1, _l2, _l3 = st.columns(3)
+            _l1.metric("Nodes", _lin_stats.get("total_nodes", 0))
+            _l2.metric("Edges", _lin_stats.get("total_edges", 0))
+            _l3.metric(
+                "Coverage",
+                f"{_lin_stats.get('coverage_pct', 0):.0f}%",
+            )
+
+            if _dq_tables:
+                if st.button(
+                    "Build Lineage Graph", type="primary",
+                    key="lin_build",
+                ):
+                    _lin_counts = _lin.auto_build_lineage(
+                        _dq_tables,
+                        source_system="Snowflake",
+                        database="SNOWFLAKE_SAMPLE_DATA",
+                        schema="TPCH_SF1",
+                    )
+                    st.success(
+                        f"Built lineage: "
+                        f"{_lin_counts.get('nodes', 0)} nodes, "
+                        f"{_lin_counts.get('edges', 0)} edges")
+                    st.rerun()
+
+            if _lin_stats.get("total_nodes", 0) > 0:
+                # Mermaid diagram
+                _mermaid = _lin.generate_mermaid_diagram()
+                if _mermaid:
+                    st.markdown("##### Lineage Graph")
+                    st.markdown(
+                        f"```mermaid\n{_mermaid}\n```")
+
+                # Impact analysis
+                st.markdown("##### Impact Analysis")
+                _tbl_nodes = [
+                    nid for nid, n in _lin.data.get(
+                        "nodes", {}).items()
+                    if n.get("type") == "table"
+                ]
+                if _tbl_nodes:
+                    _tbl_names = [
+                        _lin.data["nodes"][n]["name"]
+                        for n in _tbl_nodes
+                    ]
+                    _sel_lin = st.selectbox(
+                        "Select table for impact analysis",
+                        _tbl_names, key="lin_impact_select",
+                    )
+                    if _sel_lin:
+                        _lin_nid = f"table_{_sel_lin.lower()}"
+                        _lin_impact = _lin.impact_analysis(_lin_nid)
+                        if _lin_impact:
+                            st.write(
+                                f"**Total downstream assets:** "
+                                f"{_lin_impact.get('total_downstream', 0)}")
+                            st.write(
+                                f"**Impact severity:** "
+                                f"{_lin_impact.get('impact_severity', 'LOW')}")
+                            _lin_bt = _lin_impact.get("by_type", {})
+                            if _lin_bt:
+                                for _lt, _lc in _lin_bt.items():
+                                    st.write(f"  {_lt}: {_lc}")
+
             # Export catalog
             st.markdown("---")
             exp1, exp2 = st.columns(2)

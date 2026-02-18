@@ -1828,3 +1828,84 @@ with tab2:
                     )
                     import streamlit.components.v1 as _components
                     _components.html(_html, height=800, scrolling=True)
+
+            # ── Data Observability (Monte Carlo Style) ──
+            st.markdown("---")
+            st.markdown("#### Data Observability (Monte Carlo Style)")
+
+            _obs1, _obs2, _obs3 = st.columns(3)
+            with _obs1:
+                st.markdown("**Schema Drift**")
+                if st.button("Check Schema", key="dq_schema_check"):
+                    for _otn in list(_dq.scan_results.keys()):
+                        if _otn in _dq_tables:
+                            _drift = _dq.detect_schema_drift(
+                                _dq_tables[_otn], _otn)
+                            if _drift.get("has_drift"):
+                                st.warning(
+                                    f"{_otn}: Schema drift detected "
+                                    f"({_drift['severity']})")
+                                if _drift.get("new_columns"):
+                                    st.write(
+                                        f"New columns: "
+                                        f"{_drift['new_columns']}")
+                                if _drift.get("removed_columns"):
+                                    st.write(
+                                        f"Removed: "
+                                        f"{_drift['removed_columns']}")
+                                for _tc in _drift.get(
+                                        "type_changes", []):
+                                    st.write(
+                                        f"{_tc['column']}: "
+                                        f"{_tc['old_type']} -> "
+                                        f"{_tc['new_type']}")
+                            else:
+                                st.success(f"{_otn}: No drift")
+
+            with _obs2:
+                st.markdown("**Volume Monitoring**")
+                if st.button("Check Volume", key="dq_volume_check"):
+                    for _otn in list(_dq.scan_results.keys()):
+                        if _otn in _dq_tables:
+                            _vol = _dq.detect_volume_anomaly(
+                                _dq_tables[_otn], _otn)
+                            if _vol.get("is_anomaly"):
+                                st.warning(
+                                    f"{_otn}: Volume anomaly "
+                                    f"({_vol['severity']}) - "
+                                    f"{_vol.get('change_pct', 0):.1f}%"
+                                    f" change")
+                            else:
+                                st.success(
+                                    f"{_otn}: Volume normal "
+                                    f"({_vol['current_rows']:,} rows)")
+
+            with _obs3:
+                st.markdown("**Distribution Drift**")
+                if st.button(
+                    "Check Distributions", key="dq_dist_check"
+                ):
+                    for _otn in list(_dq.scan_results.keys()):
+                        if _otn in _dq_tables:
+                            _dist = _dq.detect_distribution_drift(
+                                _dq_tables[_otn], _otn)
+                            _dcols = _dist.get("drifted_columns", [])
+                            if _dcols:
+                                st.warning(
+                                    f"{_otn}: {len(_dcols)} "
+                                    f"columns drifted")
+                                for _dc in _dcols[:5]:
+                                    st.write(f"  {_dc}")
+                            else:
+                                st.success(
+                                    f"{_otn}: No distribution drift")
+
+            if st.button(
+                "Store Current as Baseline", key="dq_baseline"
+            ):
+                for _otn in list(_dq.scan_results.keys()):
+                    _bl_df = _dq_tables.get(_otn)
+                    _dq.store_baseline(_otn, df=_bl_df)
+                st.success(
+                    f"Baseline stored for "
+                    f"{len(_dq.scan_results)} table(s)")

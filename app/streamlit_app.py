@@ -37,6 +37,7 @@ from core.deliverable_registry import get_recent as _get_recent_deliverables
 from core.dq_engine import DataQualityEngine
 from core.data_catalog import DataCatalog
 from core.rules_engine import BusinessRulesEngine
+from core.dq_history import DQHistory
 
 
 def _safe_html(html_str, fallback_text=""):
@@ -1531,6 +1532,18 @@ with tab2:
                                     f"{_dq.scan_results[_tn]['overall_score']:.1f}"
                                     f"/100"
                                 )
+                                # Record to DQ history
+                                if "dq_history" not in st.session_state:
+                                    st.session_state.dq_history = DQHistory()
+                                st.session_state.dq_history.record_scan(
+                                    _tn, _dq.scan_results[_tn])
+                                # Update data catalog
+                                if "data_catalog" in st.session_state:
+                                    st.session_state.data_catalog.update_table_dq(
+                                        _tn,
+                                        _dq.scan_results[_tn]["overall_score"],
+                                        _dq.scan_results[_tn]["scan_timestamp"],
+                                    )
                             except Exception as _e:
                                 _dq_status.write(
                                     f"{_tn}: Error - {str(_e)[:200]}")
@@ -2108,8 +2121,210 @@ with tab2:
         # SUBTAB 4: Trending (placeholder)
         # ============================================================
         with dq_subtab4:
-            st.markdown("#### Quality Trending")
-            st.info("Coming next - historical DQ score tracking and trend analysis.")
+            if "dq_history" not in st.session_state:
+                st.session_state.dq_history = DQHistory()
+
+            history = st.session_state.dq_history
+
+            st.markdown("#### Quality Score Trending")
+
+            # Check for history data
+            all_latest = history.get_all_table_latest()
+
+            if not all_latest:
+                st.info(
+                    "No scan history yet. Run a quality scan in the "
+                    "Scanner tab first. Each scan is automatically "
+                    "recorded for trending."
+                )
+            else:
+                # Table selector
+                _trend_names = list(all_latest.keys())
+                selected_trend_table = st.selectbox(
+                    "Select table", _trend_names,
+                    key="trend_table_select",
+                )
+
+                if selected_trend_table:
+                    # Degradation check
+                    degradation = history.detect_degradation(
+                        selected_trend_table)
+                    if degradation.get("degraded"):
+                        st.warning(
+                            f"Quality degradation detected: overall score "
+                            f"dropped by "
+                            f"{abs(degradation['overall_change']):.1f} "
+                            f"points since last scan."
+                        )
+                        _deg_dims = degradation.get(
+                            "degraded_dimensions", [])
+                        if _deg_dims:
+                            st.write(
+                                f"Degraded dimensions: "
+                                f"{', '.join(_deg_dims)}"
+                            )
+                    elif degradation.get("overall_change", 0) > 0:
+                        st.success(
+                            f"Quality improved by "
+                            f"{degradation['overall_change']:.1f} "
+                            f"points since last scan."
+                        )
+
+                    # Stats row
+                    best_worst = history.get_best_worst(
+                        selected_trend_table)
+                    freq = history.get_scan_frequency(
+                        selected_trend_table)
+
+                    tw1, tw2, tw3, tw4, tw5 = st.columns(5)
+                    tw1.metric(
+                        "Current",
+                        f"{best_worst.get('current_score', 0):.1f}",
+                    )
+                    tw2.metric(
+                        "Best",
+                        f"{best_worst.get('best_score', 0):.1f}",
+                    )
+                    tw3.metric(
+                        "Worst",
+                        f"{best_worst.get('worst_score', 0):.1f}",
+                    )
+                    tw4.metric(
+                        "Average",
+                        f"{best_worst.get('avg_score', 0):.1f}",
+                    )
+                    tw5.metric(
+                        "Total Scans",
+                        best_worst.get("total_scans", 0),
+                    )
+
+                    # Trend chart
+                    chart_data = history.generate_trend_chart_data(
+                        selected_trend_table, limit=30)
+
+                    if (chart_data
+                            and chart_data.get("timestamps")
+                            and len(chart_data["timestamps"]) > 1):
+
+                        st.markdown("##### Overall Score Trend")
+                        trend_df = pd.DataFrame({
+                            "Scan": range(
+                                1,
+                                len(chart_data["timestamps"]) + 1,
+                            ),
+                            "Overall": chart_data.get("overall", []),
+                        })
+                        st.line_chart(trend_df, x="Scan", y="Overall")
+
+                        st.markdown("##### Dimension Trends")
+                        dim_df = pd.DataFrame({
+                            "Scan": range(
+                                1,
+                                len(chart_data["timestamps"]) + 1,
+                            ),
+                        })
+                        _dim_names = [
+                            "completeness", "accuracy", "consistency",
+                            "timeliness", "uniqueness", "validity",
+                        ]
+                        for _dn in _dim_names:
+                            _ds = chart_data.get(_dn, [])
+                            if _ds and any(s is not None for s in _ds):
+                                dim_df[_dn.title()] = [
+                                    s if s is not None else 0
+                                    for s in _ds
+                                ]
+
+                        if len(dim_df.columns) > 1:
+                            _ycols = [
+                                c for c in dim_df.columns if c != "Scan"
+                            ]
+                            st.line_chart(
+                                dim_df, x="Scan", y=_ycols)
+
+                        # Scan frequency
+                        st.markdown("##### Scan Activity")
+                        sf1, sf2, sf3 = st.columns(3)
+                        sf1.write(
+                            f"**First scan:** "
+                            f"{freq.get('first_scan', 'N/A')[:10]}"
+                        )
+                        sf2.write(
+                            f"**Last scan:** "
+                            f"{freq.get('last_scan', 'N/A')[:10]}"
+                        )
+                        sf3.write(
+                            f"**Avg days between:** "
+                            f"{freq.get('avg_days_between_scans', 0):.1f}"
+                        )
+
+                    elif (chart_data
+                          and len(
+                              chart_data.get("timestamps", [])) == 1):
+                        st.info(
+                            "Only one scan recorded. Run more scans "
+                            "to see trends."
+                        )
+
+                # Cross-table comparison
+                if len(_trend_names) > 1:
+                    st.markdown("---")
+                    st.markdown("##### Cross-Table Comparison")
+                    compare = history.compare_tables(_trend_names)
+
+                    if compare:
+                        comp_rows = []
+                        for _ctn, _ctd in compare.get(
+                                "tables", {}).items():
+                            row = {
+                                "Table": _ctn,
+                                "Overall": f"{_ctd.get('overall', 0):.1f}",
+                            }
+                            _cdims = _ctd.get("dimensions", {})
+                            for _cdn in [
+                                "completeness", "accuracy",
+                                "consistency", "timeliness",
+                                "uniqueness", "validity",
+                            ]:
+                                _cs = _cdims.get(_cdn)
+                                row[_cdn.title()] = (
+                                    f"{_cs:.1f}"
+                                    if _cs is not None else "N/A"
+                                )
+                            comp_rows.append(row)
+
+                        st.dataframe(
+                            pd.DataFrame(comp_rows),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+
+                        cc1, cc2, cc3 = st.columns(3)
+                        cc1.write(
+                            f"**Best:** "
+                            f"{compare.get('best_table', 'N/A')}"
+                        )
+                        cc2.write(
+                            f"**Worst:** "
+                            f"{compare.get('worst_table', 'N/A')}"
+                        )
+                        cc3.write(
+                            f"**Average:** "
+                            f"{compare.get('avg_overall', 0):.1f}"
+                        )
+
+                # Export
+                st.markdown("---")
+                if st.button(
+                    "Export History (CSV)", key="trend_export_csv"
+                ):
+                    csv_data = history.export_history(fmt="csv")
+                    if csv_data:
+                        st.download_button(
+                            "Download CSV", csv_data,
+                            "dq_history.csv", "text/csv",
+                            key="trend_dl_csv",
+                        )
 
         # ============================================================
         # SUBTAB 5: Data Observability (Monte Carlo Style)

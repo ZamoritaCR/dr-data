@@ -1038,21 +1038,23 @@ with chat_col:
 
             with st.chat_message("assistant"):
 
-                # Create a status container that updates in REAL TIME
-                status = st.status("Dr. Data is working...", expanded=True)
-                response_container = st.empty()
-                download_container = st.container()
-
-                # Show initial acknowledgment
-                status.write("Received your request.")
-
                 msg_lower = prompt.lower() if isinstance(prompt, str) else ""
                 is_export = any(kw in msg_lower for kw in [
-                    "power bi", "powerbi", "pbi", "dashboard", "html",
-                    "powerpoint", "pptx", "slides", "pdf", "word", "docx",
+                    "power bi", "powerbi", "pbi", "pbip", "pbix",
+                    "dashboard", "html", "interactive",
+                    "powerpoint", "pptx", "slides", "presentation", "deck",
+                    "pdf", "report", "word", "docx", "document",
+                    "all formats", "all three", "everything",
                 ])
 
                 if is_export:
+                    # ====== EXPORT PATH -- status widget + blocking respond() ======
+                    status = st.status("Dr. Data is working...", expanded=True)
+                    response_container = st.empty()
+                    download_container = st.container()
+
+                    status.write("Received your request.")
+
                     if any(kw in msg_lower for kw in ["power bi", "powerbi", "pbi"]):
                         status.write("Preparing Power BI generation pipeline...")
                         status.write("Step 1: Profiling your data...")
@@ -1060,135 +1062,209 @@ with chat_col:
                         status.write("Preparing interactive dashboard builder...")
                     if any(kw in msg_lower for kw in ["powerpoint", "pptx", "slides"]):
                         status.write("Preparing PowerPoint generator...")
-                else:
-                    status.write("Analyzing your question...")
 
-                # Call the agent -- SINGLE call for all flows
-                response = None
-                try:
-                    response = agent.respond(
-                        prompt,
-                        st.session_state.messages,
-                        st.session_state.uploaded_files,
-                    )
+                    response = None
+                    try:
+                        response = agent.respond(
+                            prompt,
+                            st.session_state.messages,
+                            st.session_state.uploaded_files,
+                        )
 
-                    if is_export:
                         status.write("Building your deliverables...")
 
-                    # Handle response
-                    if response is None:
-                        status.update(label="Something went wrong", state="error", expanded=False)
-                        response_container.warning("Dr. Data hit a snag. Try again.")
+                        if response is None:
+                            status.update(label="Something went wrong", state="error", expanded=False)
+                            response_container.warning("Dr. Data hit a snag. Try again.")
 
-                    elif isinstance(response, dict):
-                        content = response.get("content", "")
-                        downloads = response.get("downloads", []) or []
-                        engine = response.get("engine", "claude")
+                        elif isinstance(response, dict):
+                            content = response.get("content", "")
+                            downloads = response.get("downloads", []) or []
+                            engine = response.get("engine", "claude")
 
-                        if downloads:
-                            status.write(f"Generated {len(downloads)} file(s).")
-                            status.update(label="Done", state="complete", expanded=False)
+                            if downloads:
+                                status.write(f"Generated {len(downloads)} file(s).")
+                                status.update(label="Done", state="complete", expanded=False)
 
-                            if content:
-                                response_container.markdown(content)
+                                if content:
+                                    response_container.markdown(content)
 
-                            with download_container:
-                                for idx, dl in enumerate(downloads):
-                                    file_path = dl.get("path", "")
-                                    file_name = dl.get("filename", dl.get("name", f"file_{idx}"))
-                                    if file_path and os.path.exists(str(file_path)):
-                                        with open(file_path, "rb") as f:
-                                            file_bytes = f.read()
-                                        mime_map = {
-                                            ".html": "text/html",
-                                            ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                                            ".pdf": "application/pdf",
-                                            ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                            ".zip": "application/zip",
-                                            ".csv": "text/csv",
-                                        }
-                                        ext = os.path.splitext(file_name)[1].lower()
-                                        st.download_button(
-                                            label=f"Download {file_name}",
-                                            data=file_bytes,
-                                            file_name=file_name,
-                                            mime=mime_map.get(ext, "application/octet-stream"),
-                                            key=f"dl_{file_name}_{int(time.time() * 1000)}_{idx}",
-                                        )
-                                    else:
-                                        st.warning(f"File not found: {file_path}")
-                        else:
-                            status.update(label="Done", state="complete", expanded=False)
-                            if content:
-                                response_container.markdown(content)
+                                with download_container:
+                                    for idx, dl in enumerate(downloads):
+                                        file_path = dl.get("path", "")
+                                        file_name = dl.get("filename", dl.get("name", f"file_{idx}"))
+                                        if file_path and os.path.exists(str(file_path)):
+                                            with open(file_path, "rb") as f:
+                                                file_bytes = f.read()
+                                            mime_map = {
+                                                ".html": "text/html",
+                                                ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                                                ".pdf": "application/pdf",
+                                                ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                                ".zip": "application/zip",
+                                                ".csv": "text/csv",
+                                            }
+                                            ext = os.path.splitext(file_name)[1].lower()
+                                            st.download_button(
+                                                label=f"Download {file_name}",
+                                                data=file_bytes,
+                                                file_name=file_name,
+                                                mime=mime_map.get(ext, "application/octet-stream"),
+                                                key=f"dl_{file_name}_{int(time.time() * 1000)}_{idx}",
+                                            )
+                                        else:
+                                            st.warning(f"File not found: {file_path}")
                             else:
-                                response_container.warning("No output generated. Check terminal for errors.")
+                                status.update(label="Done", state="complete", expanded=False)
+                                if content:
+                                    response_container.markdown(content)
+                                else:
+                                    response_container.warning("No output generated. Check terminal for errors.")
 
-                        # Engine tag
-                        engine_colors = {"claude": "#B39DDB", "openai": "#81C784", "gemini": "#FFB74D"}
-                        st.markdown(
-                            f'<div style="text-align:right;font-size:10px;'
-                            f'color:{engine_colors.get(engine, "#808080")};'
-                            f'opacity:0.5;">{engine.title()}</div>',
-                            unsafe_allow_html=True,
-                        )
+                            engine_colors = {"claude": "#B39DDB", "openai": "#81C784", "gemini": "#FFB74D"}
+                            st.markdown(
+                                f'<div style="text-align:right;font-size:10px;'
+                                f'color:{engine_colors.get(engine, "#808080")};'
+                                f'opacity:0.5;">{engine.title()}</div>',
+                                unsafe_allow_html=True,
+                            )
 
-                    elif isinstance(response, str) and response.strip():
-                        status.update(label="Done", state="complete", expanded=False)
-                        response_container.markdown(response)
+                        elif isinstance(response, str) and response.strip():
+                            status.update(label="Done", state="complete", expanded=False)
+                            response_container.markdown(response)
 
-                    else:
-                        status.update(label="No response", state="error", expanded=False)
-                        response_container.warning("Dr. Data returned empty. Try rephrasing.")
+                        else:
+                            status.update(label="No response", state="error", expanded=False)
+                            response_container.warning("Dr. Data returned empty. Try rephrasing.")
 
-                except Exception as e:
-                    import traceback
-                    traceback.print_exc()
-                    status.update(label="Error", state="error", expanded=False)
-                    response_container.error(f"Error: {str(e)[:300]}")
+                    except Exception as e:
+                        import traceback
+                        traceback.print_exc()
+                        status.update(label="Error", state="error", expanded=False)
+                        response_container.error(f"Error: {str(e)[:300]}")
 
-                # SAVE TO HISTORY -- always
-                if response:
-                    msg_data = {
-                        "role": "assistant",
-                        "content": (
-                            response.get("content", response)
-                            if isinstance(response, dict) else response
-                        ),
-                        "downloads": (
-                            response.get("downloads", [])
-                            if isinstance(response, dict) else []
-                        ),
-                        "timestamp": now,
-                    }
-                    st.session_state.messages.append(msg_data)
+                    # Save export response to history
+                    if response:
+                        msg_data = {
+                            "role": "assistant",
+                            "content": (
+                                response.get("content", response)
+                                if isinstance(response, dict) else response
+                            ),
+                            "downloads": (
+                                response.get("downloads", [])
+                                if isinstance(response, dict) else []
+                            ),
+                            "timestamp": now,
+                        }
+                        st.session_state.messages.append(msg_data)
 
-                    # Update workspace state
-                    ws = st.session_state.workspace_content
-                    dl_list = msg_data["downloads"] or []
-                    if dl_list:
-                        for dl in dl_list:
-                            if os.path.exists(dl.get("path", "")):
-                                try:
-                                    dl_audit = (
-                                        st.session_state.audit_engine
-                                        .audit_deliverable(
-                                            dl["path"],
-                                            file_type=dl.get(
-                                                "filename", ""
-                                            ).split(".")[-1],
+                        ws = st.session_state.workspace_content
+                        dl_list = msg_data["downloads"] or []
+                        if dl_list:
+                            for dl in dl_list:
+                                if os.path.exists(dl.get("path", "")):
+                                    try:
+                                        dl_audit = (
+                                            st.session_state.audit_engine
+                                            .audit_deliverable(
+                                                dl["path"],
+                                                file_type=dl.get(
+                                                    "filename", ""
+                                                ).split(".")[-1],
+                                            )
                                         )
-                                    )
-                                    dl_audit.compute_scores()
-                                    dl["audit_score"] = dl_audit.overall_score
-                                    dl["audit_releasable"] = dl_audit.is_releasable
+                                        dl_audit.compute_scores()
+                                        dl["audit_score"] = dl_audit.overall_score
+                                        dl["audit_releasable"] = dl_audit.is_releasable
+                                    except Exception:
+                                        pass
+                            ws["deliverables"].extend(dl_list)
+                            ws["phase"] = "complete"
+                            ws["progress_messages"].append(
+                                "Deliverables ready -- audited"
+                            )
+                        if agent.dataframe is not None:
+                            if ws.get("data_preview") is None:
+                                ws["data_preview"] = agent.dataframe
+
+                else:
+                    # ====== CHAT PATH -- streaming, no spinner ======
+
+                    # Auto-load data if the agent hasn't ingested it yet
+                    if st.session_state.uploaded_files and agent.dataframe is None:
+                        for name, info in st.session_state.uploaded_files.items():
+                            path = info.get("path", "")
+                            if path and os.path.exists(path):
+                                agent.data_file_path = path
+                                agent.data_path = path
+                                ext = info.get("ext", path.rsplit(".", 1)[-1].lower())
+                                try:
+                                    if ext == "csv":
+                                        agent.dataframe = pd.read_csv(path)
+                                    elif ext in ("xlsx", "xls"):
+                                        from app.file_handler import load_excel_smart
+                                        agent.dataframe, agent.sheet_name = load_excel_smart(path)
+                                    elif ext == "parquet":
+                                        agent.dataframe = pd.read_parquet(path)
+                                    elif ext == "json":
+                                        agent.dataframe = pd.read_json(path)
+                                    if agent.dataframe is not None and agent.data_profile is None:
+                                        agent.data_profile = agent.analyzer.profile(agent.dataframe)
                                 except Exception:
                                     pass
-                        ws["deliverables"].extend(dl_list)
+                                break
+
+                    # Build context and stream response word-by-word
+                    enriched = agent._build_context_message(prompt)
+                    full_text = st.write_stream(agent.chat_stream(enriched))
+
+                    # Check for any files generated during tool calls
+                    chat_downloads = []
+                    for fpath in agent.generated_files:
+                        if os.path.exists(fpath):
+                            fname = os.path.basename(fpath)
+                            chat_downloads.append({
+                                "name": fname,
+                                "filename": fname,
+                                "path": fpath,
+                                "description": "Generated file",
+                            })
+                    if chat_downloads:
+                        for idx, dl in enumerate(chat_downloads):
+                            fpath = dl["path"]
+                            fname = dl["filename"]
+                            with open(fpath, "rb") as f:
+                                file_bytes = f.read()
+                            mime_map = {
+                                ".html": "text/html",
+                                ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                                ".pdf": "application/pdf",
+                                ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                ".zip": "application/zip",
+                                ".csv": "text/csv",
+                            }
+                            ext = os.path.splitext(fname)[1].lower()
+                            st.download_button(
+                                label=f"Download {fname}",
+                                data=file_bytes,
+                                file_name=fname,
+                                mime=mime_map.get(ext, "application/octet-stream"),
+                                key=f"dl_{fname}_{int(time.time() * 1000)}_{idx}",
+                            )
+
+                    # Save chat response to history
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": full_text or "",
+                        "downloads": chat_downloads,
+                        "timestamp": now,
+                    })
+
+                    ws = st.session_state.workspace_content
+                    if chat_downloads:
+                        ws["deliverables"].extend(chat_downloads)
                         ws["phase"] = "complete"
-                        ws["progress_messages"].append(
-                            "Deliverables ready -- audited"
-                        )
                     if agent.dataframe is not None:
                         if ws.get("data_preview") is None:
                             ws["data_preview"] = agent.dataframe

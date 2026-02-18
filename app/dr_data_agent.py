@@ -518,6 +518,123 @@ class DrDataAgent:
             "spec": self.dashboard_spec,
         }
 
+    def chat_stream(self, user_message, progress_callback=None):
+        """Streaming version of chat() -- yields text chunks as Claude generates.
+
+        Use with st.write_stream() in Streamlit for a live typing effect.
+        Tool-calling rounds run synchronously; the final text response streams.
+        """
+        self.messages.append({"role": "user", "content": user_message})
+        self.generated_files = []
+        self._progress_callback = progress_callback
+        self._fix_orphaned_tool_calls()
+
+        tool_labels = {
+            "analyze_data": "Analyzing your data...",
+            "design_dashboard": "Designing dashboard layout...",
+            "build_html_dashboard": "Building HTML dashboard...",
+            "build_pdf_report": "Generating PDF report...",
+            "build_powerbi": "Building Power BI project...",
+            "build_documentation": "Writing documentation...",
+            "parse_legacy_report": "Parsing legacy report...",
+            "parse_alteryx_workflow": "Parsing Alteryx workflow...",
+        }
+
+        max_iterations = 10
+        for iteration in range(max_iterations):
+
+            # Retry loop
+            response = None
+            last_err = None
+            for attempt in range(3):
+                try:
+                    with self.client.messages.stream(
+                        model=self.MODEL,
+                        max_tokens=self.MAX_TOKENS,
+                        temperature=0,
+                        system=DR_DATA_SYSTEM_PROMPT,
+                        tools=TOOLS,
+                        messages=self.messages,
+                        timeout=120.0,
+                    ) as stream:
+                        for text in stream.text_stream:
+                            yield text
+                        response = stream.get_final_message()
+                    break
+                except anthropic.RateLimitError as e:
+                    last_err = e
+                    if attempt < 2:
+                        time.sleep(2)
+                except anthropic.APIError as e:
+                    last_err = e
+                    if attempt < 2:
+                        time.sleep(2)
+                except Exception as e:
+                    last_err = e
+                    if attempt < 2:
+                        time.sleep(2)
+
+            if response is None:
+                if self.messages and self.messages[-1]["role"] == "user":
+                    self.messages.pop()
+                yield (
+                    "\n\nHit a snag reaching the analysis engine. "
+                    "Give me a second and try again."
+                )
+                return
+
+            # Store assistant message
+            content_dicts = []
+            for block in response.content:
+                if block.type == "text":
+                    content_dicts.append({"type": "text", "text": block.text})
+                elif block.type == "tool_use":
+                    content_dicts.append({
+                        "type": "tool_use",
+                        "id": block.id,
+                        "name": block.name,
+                        "input": block.input,
+                    })
+            self.messages.append({"role": "assistant", "content": content_dicts})
+
+            # Trace
+            _resp_summary = ""
+            for b in response.content:
+                if hasattr(b, "text") and b.text:
+                    _resp_summary = b.text[:200]
+                    break
+                if hasattr(b, "name"):
+                    _resp_summary = f"tool_use:{b.name}"
+                    break
+            self.trace.log_llm_call(
+                "claude", self.MODEL,
+                user_message[:200] if isinstance(user_message, str) else "stream",
+                _resp_summary,
+            )
+
+            # Handle tool calls (blocking -- cannot stream tool execution)
+            if response.stop_reason == "tool_use":
+                tool_results = []
+                for block in response.content:
+                    if block.type == "tool_use":
+                        label = tool_labels.get(block.name, f"Running: {block.name}")
+                        if progress_callback:
+                            progress_callback(label)
+                        result = self._execute_tool(block.name, block.input)
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": result,
+                        })
+                self.messages.append({"role": "user", "content": tool_results})
+                continue  # next iteration streams the tool-result response
+
+            # end_turn -- all text has already been yielded
+            return
+
+        # Safety net
+        yield "\n\nReached maximum processing steps. Try rephrasing your request."
+
     def set_session(self, session):
         """Connect a MultiFileSession to this agent for multi-file support."""
         from core.agent_session import AgentSessionBridge

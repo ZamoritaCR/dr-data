@@ -159,6 +159,32 @@ class MultiFileSession:
         self.files[filename] = info
         return self._describe_session()
 
+    def add_dataframe(self, table_name, df):
+        """Add a pre-loaded DataFrame (e.g. from Snowflake) to the session."""
+        self.data_files.append({
+            "filename": table_name,
+            "df": df,
+            "rows": len(df),
+            "columns": list(df.columns),
+            "sheet_name": table_name,
+        })
+        if self.primary_df is None:
+            self.primary_df = df
+            self.primary_sheet_name = table_name
+        self.files[table_name] = {
+            "filename": table_name,
+            "path": None,
+            "ext": "snowflake",
+            "size": 0,
+            "category": "data",
+            "df": df,
+            "structure": None,
+        }
+        # Auto-detect relationships when 2+ tables loaded
+        if len(self.data_files) >= 2:
+            self.relationships = self.detector.detect_all(self.data_files)
+        return self._describe_session()
+
     def get_summary(self):
         """Get current session state for the agent."""
         return self._describe_session()

@@ -40,6 +40,7 @@ from core.rules_engine import BusinessRulesEngine
 from core.dq_history import DQHistory
 from core.trust_scoring import TrustScorer
 from core.copdq import COPDQCalculator
+from core.stewardship import StewardshipWorkflow
 
 
 def _safe_html(html_str, fallback_text=""):
@@ -1452,11 +1453,12 @@ with tab2:
             "MySQL, SQL Server, SQLite"
         )
     else:
-        dq_subtab1, dq_subtab2, dq_subtab3, dq_subtab4, dq_subtab5 = st.tabs([
+        dq_subtab1, dq_subtab2, dq_subtab3, dq_subtab4, dq_subtab5, dq_subtab6 = st.tabs([
             "Quality Scanner",
             "Data Catalog",
             "Business Rules",
             "Trending",
+            "Stewardship",
             "Observability",
         ])
 
@@ -2547,9 +2549,340 @@ with tab2:
                         )
 
         # ============================================================
-        # SUBTAB 5: Data Observability (Monte Carlo Style)
+        # SUBTAB 5: Stewardship & Issue Tracking
         # ============================================================
         with dq_subtab5:
+            if "stewardship" not in st.session_state:
+                st.session_state.stewardship = StewardshipWorkflow()
+
+            _sw = st.session_state.stewardship
+            _sw_stats = _sw.get_dashboard_stats()
+
+            st.markdown("#### Data Stewardship & Issue Tracking")
+
+            # Dashboard stats row
+            _sw1, _sw2, _sw3, _sw4, _sw5 = st.columns(5)
+            _sw1.metric("Open Issues", _sw_stats.get("total_open", 0))
+            _sw2.metric("Resolved", _sw_stats.get("total_resolved", 0))
+            _sw3.metric("SLA Breaches", _sw_stats.get("sla_breaches", 0))
+            _sw4.metric("Unassigned", _sw_stats.get("unassigned", 0))
+            _sw_avg = _sw_stats.get("avg_resolution_hours")
+            _sw5.metric(
+                "Avg Resolution",
+                f"{_sw_avg:.1f}h" if _sw_avg else "N/A",
+            )
+
+            # SLA breaches warning
+            _sw_breaches = _sw.check_sla_breaches()
+            if _sw_breaches:
+                st.warning(
+                    f"{len(_sw_breaches)} issues have breached their SLA")
+                for _b in _sw_breaches[:5]:
+                    st.write(
+                        f"**{_b.get('issue_id')}** - "
+                        f"{_b.get('title', '')[:60]} "
+                        f"({_b.get('severity')}) - "
+                        f"{_b.get('hours_overdue', 0):.0f}h overdue"
+                    )
+
+            # Auto-create issues from DQ scan
+            if _dq.scan_results:
+                if st.button(
+                    "Create Issues from Latest DQ Scan",
+                    key="sw_auto_create",
+                ):
+                    _sw_total_created = 0
+                    for _swtn, _swres in _dq.scan_results.items():
+                        _swc = _sw.create_issues_from_dq_scan(
+                            _swres, _swtn)
+                        _sw_total_created += _swc if _swc else 0
+                    if _sw_total_created > 0:
+                        st.success(
+                            f"Created {_sw_total_created} new issues "
+                            f"from DQ scan results")
+                    else:
+                        st.info(
+                            "No new issues to create (all CRITICAL/HIGH "
+                            "issues already tracked)")
+                    st.rerun()
+
+            st.markdown("---")
+
+            # Issue list with filters
+            _fc1, _fc2, _fc3 = st.columns(3)
+            with _fc1:
+                _sw_filt_status = st.selectbox(
+                    "Filter by Status",
+                    ["All", "Open", "Assigned", "In Progress",
+                     "Resolved", "Verified", "Closed", "Wont Fix"],
+                    key="sw_filter_status",
+                )
+            with _fc2:
+                _sw_filt_sev = st.selectbox(
+                    "Filter by Severity",
+                    ["All", "CRITICAL", "HIGH", "MEDIUM", "LOW"],
+                    key="sw_filter_severity",
+                )
+            with _fc3:
+                _sw_all_tables = sorted(set(
+                    i.get("table_name", "")
+                    for i in _sw.data.get("issues", {}).values()
+                    if i.get("table_name")
+                ))
+                _sw_filt_tbl = st.selectbox(
+                    "Filter by Table",
+                    ["All"] + _sw_all_tables,
+                    key="sw_filter_table",
+                )
+
+            _sw_issues = _sw.get_issues(
+                status=(
+                    _sw_filt_status
+                    if _sw_filt_status != "All" else None),
+                severity=(
+                    _sw_filt_sev
+                    if _sw_filt_sev != "All" else None),
+                table_name=(
+                    _sw_filt_tbl
+                    if _sw_filt_tbl != "All" else None),
+            )
+
+            if _sw_issues:
+                st.write(f"**{len(_sw_issues)} issues**")
+
+                _sev_icon = {
+                    "CRITICAL": "[CRIT]", "HIGH": "[HIGH]",
+                    "MEDIUM": "[MED]", "LOW": "[LOW]",
+                }
+                _st_icon = {
+                    "Open": "[OPEN]", "Assigned": "[ASGN]",
+                    "In Progress": "[WIP]", "Resolved": "[DONE]",
+                    "Verified": "[OK]", "Closed": "[CLOSED]",
+                    "Wont Fix": "[WFIX]",
+                }
+
+                for _swi in _sw_issues:
+                    _swi_id = _swi.get("id", "")
+                    _swi_sev = _swi.get("severity", "LOW")
+                    _swi_st = _swi.get("status", "Open")
+                    _si = _sev_icon.get(_swi_sev, "")
+                    _sti = _st_icon.get(_swi_st, "")
+
+                    with st.expander(
+                        f"{_si} {_sti} {_swi_id} | "
+                        f"{_swi.get('title', '')[:70]} | {_swi_st} | "
+                        f"{_swi.get('assigned_to', 'Unassigned')}"
+                    ):
+                        st.write(
+                            f"**Table:** {_swi.get('table_name', '')}")
+                        if _swi.get("column_name"):
+                            st.write(
+                                f"**Column:** {_swi['column_name']}")
+                        st.write(
+                            f"**Dimension:** "
+                            f"{_swi.get('dimension', 'N/A')}")
+                        st.write(
+                            f"**Description:** "
+                            f"{_swi.get('description', '')}")
+                        st.write(
+                            f"**Created:** "
+                            f"{_swi.get('created_at', '')[:16]}")
+                        if _swi.get("due_at"):
+                            st.write(
+                                f"**Due:** {_swi['due_at'][:16]}")
+                        if _swi.get("regulatory_tag"):
+                            st.write(
+                                f"**Regulatory:** "
+                                f"{_swi['regulatory_tag']}")
+
+                        # Actions
+                        _ac1, _ac2, _ac3 = st.columns(3)
+
+                        with _ac1:
+                            _stew_list = list(
+                                _sw.data.get("stewards", {}).keys())
+                            _asgn_opts = (
+                                ["Unassigned"] + _stew_list
+                                if _stew_list
+                                else ["Unassigned", "DQ Team",
+                                      "Data Engineering", "Analytics"]
+                            )
+                            _cur_asgn = _swi.get(
+                                "assigned_to", "Unassigned")
+                            _asgn_idx = (
+                                _asgn_opts.index(_cur_asgn)
+                                if _cur_asgn in _asgn_opts else 0
+                            )
+                            _new_asgn = st.selectbox(
+                                "Assign to", _asgn_opts,
+                                index=_asgn_idx,
+                                key=f"sw_assign_{_swi_id}",
+                            )
+                            if (_new_asgn != _cur_asgn
+                                    and st.button(
+                                        "Assign",
+                                        key=f"sw_do_assign_{_swi_id}")):
+                                _sw.assign_issue(_swi_id, _new_asgn)
+                                st.rerun()
+
+                        with _ac2:
+                            _valid_tr = {
+                                "Open": [
+                                    "Assigned", "In Progress",
+                                    "Wont Fix"],
+                                "Assigned": [
+                                    "In Progress", "Resolved",
+                                    "Wont Fix"],
+                                "In Progress": [
+                                    "Resolved", "Wont Fix"],
+                                "Resolved": [
+                                    "Verified", "Closed",
+                                    "In Progress"],
+                                "Verified": ["Closed"],
+                                "Closed": [],
+                                "Wont Fix": ["Open"],
+                            }
+                            _tr = _valid_tr.get(_swi_st, [])
+                            if _tr:
+                                _new_st = st.selectbox(
+                                    "Change status", _tr,
+                                    key=f"sw_status_{_swi_id}",
+                                )
+                                if st.button(
+                                    "Update",
+                                    key=f"sw_do_status_{_swi_id}",
+                                ):
+                                    _notes = None
+                                    if _new_st in (
+                                        "Resolved", "Closed",
+                                        "Wont Fix",
+                                    ):
+                                        _notes = st.session_state.get(
+                                            f"sw_notes_{_swi_id}", "")
+                                    _sw.update_status(
+                                        _swi_id, _new_st,
+                                        notes=_notes)
+                                    st.rerun()
+
+                        with _ac3:
+                            if _swi_st in (
+                                "Open", "Assigned", "In Progress",
+                            ):
+                                if st.button(
+                                    "Escalate",
+                                    key=f"sw_escalate_{_swi_id}",
+                                ):
+                                    _sw.escalate_issue(
+                                        _swi_id,
+                                        reason="Manual escalation",
+                                    )
+                                    st.success("Escalated")
+                                    st.rerun()
+
+                        # Resolution notes
+                        if _swi_st in ("Assigned", "In Progress"):
+                            st.text_area(
+                                "Resolution notes",
+                                key=f"sw_notes_{_swi_id}",
+                                height=60,
+                                placeholder=(
+                                    "Describe what was done to "
+                                    "fix this..."),
+                            )
+
+                        # Comments
+                        if _swi.get("comments"):
+                            st.write("**Comments:**")
+                            for _c in _swi["comments"]:
+                                st.caption(
+                                    f"{_c.get('author', 'User')} "
+                                    f"({_c.get('at', '')[:16]}): "
+                                    f"{_c.get('text', '')}")
+
+                        _cmt = st.text_input(
+                            "Add comment",
+                            key=f"sw_comment_{_swi_id}",
+                            placeholder="Type a comment...",
+                        )
+                        if _cmt and st.button(
+                            "Post", key=f"sw_post_{_swi_id}"
+                        ):
+                            _sw.add_comment(_swi_id, _cmt)
+                            st.rerun()
+
+                        # History
+                        with st.expander("Issue History"):
+                            for _h in _swi.get("history", []):
+                                st.caption(
+                                    f"{_h.get('at', '')[:16]} - "
+                                    f"{_h.get('action', '')} by "
+                                    f"{_h.get('by', 'System')}")
+            else:
+                st.info(
+                    "No issues matching filters. Run a DQ scan and "
+                    "click 'Create Issues from Latest DQ Scan' to "
+                    "populate.")
+
+            # Steward management
+            st.markdown("---")
+            st.markdown("##### Manage Data Stewards")
+
+            _existing_stew = _sw.data.get("stewards", {})
+            if _existing_stew:
+                _stew_rows = [
+                    {
+                        "Name": name,
+                        "Role": info.get("role", ""),
+                        "Email": info.get("email", ""),
+                        "Tables": len(
+                            info.get("assigned_tables", [])),
+                        "Domains": ", ".join(
+                            info.get("domains", [])),
+                    }
+                    for name, info in _existing_stew.items()
+                ]
+                st.dataframe(
+                    pd.DataFrame(_stew_rows),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+            with st.expander("Add Data Steward"):
+                _sn = st.text_input("Name", key="sw_stew_name")
+                _se = st.text_input("Email", key="sw_stew_email")
+                _sr = st.selectbox(
+                    "Role",
+                    ["Data Steward", "Data Owner",
+                     "Domain Lead", "DQ Analyst"],
+                    key="sw_stew_role",
+                )
+                _sd = st.multiselect(
+                    "Domains",
+                    ["Customer", "Transaction", "Compliance",
+                     "Operations", "Financial", "Reference"],
+                    key="sw_stew_domains",
+                )
+                if st.button("Add Steward", key="sw_stew_add") and _sn:
+                    _sw.add_steward(
+                        _sn, email=_se, role=_sr, domains=_sd)
+                    st.success(f"Added steward: {_sn}")
+                    st.rerun()
+
+            # Export
+            st.markdown("---")
+            if st.button("Export Issues (CSV)", key="sw_export"):
+                _sw_csv = _sw.export_issues(fmt="csv")
+                if _sw_csv:
+                    st.download_button(
+                        "Download", _sw_csv,
+                        "dq_issues.csv", "text/csv",
+                        key="sw_dl_csv",
+                    )
+
+        # ============================================================
+        # SUBTAB 6: Data Observability (Monte Carlo Style)
+        # ============================================================
+        with dq_subtab6:
             st.markdown("#### Data Observability (Monte Carlo Style)")
 
             if not _dq.scan_results:

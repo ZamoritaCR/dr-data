@@ -2070,7 +2070,16 @@ with tab2:
                     "Generate DQ Scorecard Report",
                     key="dq_export_html",
                 ):
-                    _html = _dq.generate_html_scorecard()
+                    _html = _dq.generate_html_scorecard(
+                        catalog=st.session_state.get("data_catalog"),
+                        rules_engine=st.session_state.get("rules_engine"),
+                        history=st.session_state.get("dq_history"),
+                        trust_scorer=st.session_state.get("trust_scorer"),
+                        copdq_result=st.session_state.get("copdq_result"),
+                        compliance=st.session_state.get("compliance"),
+                        stewardship=st.session_state.get("stewardship"),
+                        incidents=st.session_state.get("incidents"),
+                    )
                     if _html:
                         st.download_button(
                             "Download HTML Scorecard", _html,

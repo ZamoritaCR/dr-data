@@ -790,297 +790,352 @@ class DataQualityEngine:
     #  HTML Scorecard Export                                               #
     # ------------------------------------------------------------------ #
 
-    def generate_html_scorecard(self):
-        """Generate a self-contained HTML scorecard report. WU dark theme."""
+    def generate_html_scorecard(self, catalog=None, rules_engine=None,
+                                history=None, trust_scorer=None,
+                                copdq_result=None, compliance=None,
+                                stewardship=None, incidents=None):
+        """Generate a comprehensive self-contained HTML report. WU dark theme."""
         if not self.scan_results:
             return ""
+        try:
+            from datetime import datetime as _dt
+            ts = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
+            sc = self.generate_scorecard_data()
+            overall = sc.get("overall_score", 0)
+            total_rows = sum(r.get("row_count", 0) for r in self.scan_results.values())
+            n_tables = len(self.scan_results)
 
-        from datetime import datetime as _dt
-        ts = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
-        sc = self.generate_scorecard_data()
-        overall = sc.get("overall_score", 0)
+            # ── Helpers ──
+            def _c(v, g=90, y=70):
+                if v >= g: return "#27AE60"
+                return "#FFE600" if v >= y else "#E74C3C"
 
-        def _color(val, green=90, yellow=70):
-            if val >= green:
-                return "#238636"
-            if val >= yellow:
-                return "#FFE600"
-            return "#da3633"
+            def _gauge(label, score, sz=90):
+                s = score if score is not None else 0
+                r, circ = 36, 2 * 3.14159 * 36
+                fill, c = circ * s / 100, _c(s, 95, 80)
+                h = sz // 2
+                return (f'<div style="text-align:center;margin:8px">'
+                    f'<svg width="{sz}" height="{sz}" viewBox="0 0 {sz} {sz}">'
+                    f'<circle cx="{h}" cy="{h}" r="{r}" fill="none" stroke="#333" stroke-width="7"/>'
+                    f'<circle cx="{h}" cy="{h}" r="{r}" fill="none" stroke="{c}" stroke-width="7" '
+                    f'stroke-dasharray="{fill:.1f} {circ:.1f}" stroke-linecap="round" '
+                    f'transform="rotate(-90 {h} {h})"/>'
+                    f'<text x="{h}" y="{h+2}" text-anchor="middle" font-size="16" '
+                    f'font-weight="bold" fill="{c}">{s:.0f}</text></svg>'
+                    f'<div style="font-size:11px;color:#aaa;margin-top:2px">{label}</div></div>')
 
-        def _svg_gauge(label, score, size=90):
-            if score is None:
-                score = 0
-            r = 36
-            circ = 2 * 3.14159 * r
-            fill = circ * score / 100
-            c = _color(score, 95, 80)
-            return (
-                f'<div style="text-align:center;margin:8px">'
-                f'<svg width="{size}" height="{size}" viewBox="0 0 {size} {size}">'
-                f'<circle cx="{size//2}" cy="{size//2}" r="{r}" '
-                f'fill="none" stroke="#333" stroke-width="7"/>'
-                f'<circle cx="{size//2}" cy="{size//2}" r="{r}" '
-                f'fill="none" stroke="{c}" stroke-width="7" '
-                f'stroke-dasharray="{fill:.1f} {circ:.1f}" '
-                f'stroke-linecap="round" '
-                f'transform="rotate(-90 {size//2} {size//2})"/>'
-                f'<text x="{size//2}" y="{size//2+2}" text-anchor="middle" '
-                f'font-size="16" font-weight="bold" fill="{c}" '
-                f'font-family="Inter,system-ui,sans-serif">'
-                f'{score:.0f}</text>'
-                f'</svg>'
-                f'<div style="font-size:11px;color:#aaa;margin-top:2px">'
-                f'{label}</div></div>'
-            )
+            def _bar(v, w=120):
+                v = v if v is not None else 0
+                c = _c(v, 95, 80)
+                return (f'<div style="background:#333;border-radius:4px;width:{w}px;height:14px;'
+                    f'display:inline-block;vertical-align:middle">'
+                    f'<div style="background:{c};width:{max(0,min(100,v))}%;height:100%;'
+                    f'border-radius:4px"></div></div>'
+                    f' <span style="font-size:12px;color:#ccc">{v:.0f}%</span>')
 
-        def _bar(val, width=120):
-            if val is None:
-                val = 0
-            c = _color(val, 95, 80)
-            w = max(0, min(100, val))
-            return (
-                f'<div style="background:#333;border-radius:4px;'
-                f'width:{width}px;height:14px;display:inline-block;'
-                f'vertical-align:middle">'
-                f'<div style="background:{c};width:{w}%;height:100%;'
-                f'border-radius:4px"></div></div>'
-                f' <span style="font-size:12px;color:#ccc">{val:.0f}%</span>'
-            )
+            def _card(label, value, color="#FFE600"):
+                return (f'<div style="background:#1A1A1A;border:1px solid #333;border-radius:8px;'
+                    f'padding:14px;text-align:center;flex:1;min-width:130px">'
+                    f'<div style="font-size:24px;font-weight:700;color:{color}">{value}</div>'
+                    f'<div style="font-size:11px;color:#888;margin-top:4px">{label}</div></div>')
 
-        # ── Dimension gauges ──
-        dim_names = [
-            "completeness", "accuracy", "consistency",
-            "timeliness", "uniqueness", "validity",
-        ]
-        avg_dims = {}
-        for dim in dim_names:
-            scores = []
-            for res in self.scan_results.values():
-                d = res.get("dimensions", {}).get(dim, {})
-                s = d.get("score") if isinstance(d, dict) else None
-                if s is not None:
-                    scores.append(s)
-            avg_dims[dim] = round(sum(scores) / len(scores), 1) if scores else 0
+            _sec = lambda t: f'<div class="section"><div class="section-title">{t}</div>'
+            _pri_c = {"CRITICAL": "#E74C3C", "HIGH": "#F39C12", "MEDIUM": "#FFE600", "LOW": "#27AE60"}
 
-        gauges_html = "".join(
-            _svg_gauge(d.title(), avg_dims[d]) for d in dim_names)
+            # ── Dimension averages ──
+            dims6 = ["completeness", "accuracy", "consistency", "timeliness", "uniqueness", "validity"]
+            avg_d = {}
+            for dm in dims6:
+                ss = [d.get("score") for r in self.scan_results.values()
+                      for d in [r.get("dimensions", {}).get(dm, {})] if isinstance(d, dict) and d.get("score") is not None]
+                avg_d[dm] = round(sum(ss) / len(ss), 1) if ss else 0
 
-        # ── Table summary cards ──
-        table_cards = ""
-        for tname, result in self.scan_results.items():
-            ts_score = result.get("overall_score", 0)
-            tc = _color(ts_score)
-            rows = result.get("row_count", "?")
-            cols = result.get("column_count", "?")
-            dims = result.get("dimensions", {})
-            dim_bars = ""
-            for d in dim_names:
-                dd = dims.get(d, {})
-                ds = dd.get("score", 0) if isinstance(dd, dict) else 0
-                dim_bars += (
-                    f'<div style="display:flex;align-items:center;'
-                    f'margin:3px 0">'
-                    f'<span style="width:100px;font-size:12px;color:#aaa">'
-                    f'{d.title()}</span>{_bar(ds)}</div>'
-                )
-            table_cards += (
-                f'<div style="background:#1A1A1A;border:1px solid #333;'
-                f'border-radius:8px;padding:16px;margin:10px 0">'
-                f'<div style="display:flex;justify-content:space-between;'
-                f'align-items:center;margin-bottom:10px">'
-                f'<span style="font-size:16px;font-weight:600;color:#fff">'
-                f'{tname}</span>'
-                f'<span style="font-size:24px;font-weight:bold;color:{tc}">'
-                f'{ts_score:.1f}</span></div>'
-                f'<div style="font-size:12px;color:#888;margin-bottom:8px">'
-                f'{rows} rows | {cols} columns</div>'
-                f'{dim_bars}</div>'
-            )
+            # ── Executive summary metrics ──
+            crit_count = sum(1 for r in self.scan_results.values()
+                             for rc in r.get("recommendations", []) if rc.get("priority") == "CRITICAL")
+            comp_score = ""
+            if compliance:
+                cs = compliance.get_compliance_summary()
+                comp_score = f"{cs.get('overall_score', 0):.0f}%"
+            inc_open = ""
+            if incidents:
+                ist = incidents.get_dashboard_stats()
+                inc_open = str(ist.get("open", 0))
+            copdq_str = ""
+            if copdq_result:
+                ac = copdq_result.get("total_annual_cost", 0)
+                copdq_str = f"${ac/1_000_000:.1f}M" if ac >= 1_000_000 else f"${ac/1_000:.0f}K" if ac >= 1_000 else f"${ac:.0f}"
 
-        # ── Top Issues ──
-        all_recs = []
-        for tname, result in self.scan_results.items():
-            for rec in result.get("recommendations", []):
-                r = dict(rec)
-                r["table"] = tname
-                all_recs.append(r)
-        all_recs.sort(key=lambda r: {
-            "CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3
-        }.get(r.get("priority", "LOW"), 4))
+            exec_cards = _card("Tables Scanned", n_tables)
+            exec_cards += _card("Total Rows", f"{total_rows:,}")
+            exec_cards += _card("Critical Issues", crit_count, "#E74C3C" if crit_count else "#27AE60")
+            if copdq_str:
+                exec_cards += _card("COPDQ Annual", copdq_str, "#E74C3C")
+            if comp_score:
+                exec_cards += _card("Compliance", comp_score)
+            if inc_open:
+                exec_cards += _card("Open Incidents", inc_open, "#F39C12" if int(inc_open) else "#27AE60")
 
-        pri_colors = {
-            "CRITICAL": "#da3633", "HIGH": "#d29922",
-            "MEDIUM": "#FFE600", "LOW": "#238636",
-        }
-        issues_html = ""
-        for rec in all_recs[:15]:
-            pri = rec.get("priority", "LOW")
-            pc = pri_colors.get(pri, "#888")
-            fix_tag = (
-                '<span style="background:#238636;color:#fff;'
-                'padding:1px 6px;border-radius:3px;font-size:10px;'
-                'margin-left:6px">AUTO-FIX</span>'
-                if rec.get("auto_fixable") else ""
-            )
-            issues_html += (
-                f'<div style="border-left:3px solid {pc};padding:8px 12px;'
-                f'margin:6px 0;background:#1A1A1A;border-radius:0 6px 6px 0">'
-                f'<span style="color:{pc};font-weight:bold;font-size:12px">'
-                f'[{pri}]</span> '
-                f'<span style="color:#ccc;font-size:12px">{rec.get("table","")}</span>'
-                f'{fix_tag}'
-                f'<div style="color:#fff;font-size:13px;margin-top:4px">'
-                f'{rec.get("finding","")}</div>'
-                f'<div style="color:#888;font-size:12px;margin-top:2px">'
-                f'{rec.get("recommendation","")}</div></div>'
-            )
+            # ── Gauges ──
+            gauges = "".join(_gauge(d.title(), avg_d[d]) for d in dims6)
 
-        # ── Column-level heatmap ──
-        heatmap_html = ""
-        for tname, result in self.scan_results.items():
-            dims = result.get("dimensions", {})
-            comp_cols = dims.get("completeness", {}).get("columns", {})
-            valid_cols = dims.get("validity", {}).get("column_rules", {})
+            # ── Table details with heatmap ──
+            table_html = ""
+            for tname, result in self.scan_results.items():
+                ts_s = result.get("overall_score", 0)
+                tc = _c(ts_s)
+                rw, cl = result.get("row_count", "?"), result.get("column_count", "?")
+                dims = result.get("dimensions", {})
+                db = ""
+                for d in dims6:
+                    dd = dims.get(d, {})
+                    ds = dd.get("score", 0) if isinstance(dd, dict) else 0
+                    db += (f'<div style="display:flex;align-items:center;margin:3px 0">'
+                        f'<span style="width:100px;font-size:12px;color:#aaa">{d.title()}</span>{_bar(ds)}</div>')
+                # Column heatmap
+                comp_cols = dims.get("completeness", {}).get("columns", {})
+                valid_cols = dims.get("validity", {}).get("column_rules", {})
+                hm = ""
+                if comp_cols:
+                    hm_rows = ""
+                    for cn, cd in list(comp_cols.items())[:30]:
+                        cs = cd.get("score", 100)
+                        cc = _c(cs, 95, 80)
+                        vd = valid_cols.get(cn, {})
+                        vs = vd.get("valid_pct", 100) if isinstance(vd, dict) else 100
+                        vc = _c(vs, 95, 80)
+                        hm_rows += (f'<tr><td style="padding:3px 8px;color:#ccc;font-size:11px;'
+                            f'border-bottom:1px solid #333">{cn}</td>'
+                            f'<td style="padding:3px 8px;text-align:center;background:{cc}22;'
+                            f'color:{cc};font-size:11px;border-bottom:1px solid #333">{cs:.0f}%</td>'
+                            f'<td style="padding:3px 8px;text-align:center;background:{vc}22;'
+                            f'color:{vc};font-size:11px;border-bottom:1px solid #333">{vs:.0f}%</td></tr>')
+                    hm = (f'<div style="margin-top:10px"><table style="width:100%;border-collapse:collapse">'
+                        f'<tr style="background:#262626"><th style="padding:4px 8px;text-align:left;'
+                        f'color:#888;font-size:10px">Column</th><th style="padding:4px 8px;text-align:center;'
+                        f'color:#888;font-size:10px">Complete</th><th style="padding:4px 8px;text-align:center;'
+                        f'color:#888;font-size:10px">Valid</th></tr>{hm_rows}</table></div>')
+                table_html += (f'<div style="background:#1A1A1A;border:1px solid #333;border-radius:8px;'
+                    f'padding:16px;margin:10px 0"><div style="display:flex;justify-content:space-between;'
+                    f'align-items:center;margin-bottom:10px"><span style="font-size:16px;font-weight:600;'
+                    f'color:#fff">{tname}</span><span style="font-size:24px;font-weight:bold;color:{tc}">'
+                    f'{ts_s:.1f}</span></div><div style="font-size:12px;color:#888;margin-bottom:8px">'
+                    f'{rw} rows | {cl} columns</div>{db}{hm}</div>')
 
-            if not comp_cols:
-                continue
+            # ── Trust scores ──
+            trust_html = ""
+            if trust_scorer:
+                try:
+                    all_ts = trust_scorer.score_all_tables(self.scan_results, catalog=catalog)
+                    for tn, td in all_ts.items():
+                        tscore = td.get("trust_score", 0)
+                        cert = td.get("recommended_certification", "?")
+                        cert_c = {"Certified": "#27AE60", "Warning": "#FFE600"}.get(cert, "#E74C3C")
+                        trust_html += (f'<div style="background:#1A1A1A;border:1px solid #333;border-radius:8px;'
+                            f'padding:12px;margin:6px 0;display:flex;justify-content:space-between;align-items:center">'
+                            f'<span style="color:#fff;font-size:14px">{tn}</span>'
+                            f'<span style="font-size:18px;font-weight:700;color:{_c(tscore)}">{tscore:.0f}</span>'
+                            f'<span style="background:{cert_c};color:#000;padding:2px 8px;border-radius:4px;'
+                            f'font-size:11px;font-weight:600">{cert}</span></div>')
+                except Exception:
+                    pass
 
-            rows_html = ""
-            for col_name, col_data in comp_cols.items():
-                comp_s = col_data.get("score", 100)
-                comp_c = _color(comp_s, 95, 80)
-                # Check validity for this column
-                v_data = valid_cols.get(col_name, {})
-                v_score = v_data.get("valid_pct", 100) if isinstance(v_data, dict) else 100
-                v_c = _color(v_score, 95, 80)
+            # ── COPDQ breakdown ──
+            copdq_html = ""
+            if copdq_result and copdq_result.get("cost_breakdown"):
+                for tn, tc in copdq_result["cost_breakdown"].items():
+                    total = tc.get("total", 0)
+                    if total <= 0:
+                        continue
+                    costs = tc.get("costs", {})
+                    bars = ""
+                    for dim_name, dim_cost in costs.items():
+                        ac = dim_cost.get("annual_cost", 0)
+                        pct = (ac / total * 100) if total else 0
+                        bars += (f'<div style="display:flex;align-items:center;margin:3px 0">'
+                            f'<span style="width:100px;font-size:11px;color:#aaa">{dim_name.title()}</span>'
+                            f'<div style="background:#333;border-radius:4px;width:200px;height:12px;margin-right:8px">'
+                            f'<div style="background:#E74C3C;width:{min(pct,100):.0f}%;height:100%;border-radius:4px"></div></div>'
+                            f'<span style="font-size:11px;color:#ccc">${ac:,.0f}</span></div>')
+                    copdq_html += (f'<div style="background:#1A1A1A;border:1px solid #333;border-radius:8px;'
+                        f'padding:12px;margin:6px 0"><div style="display:flex;justify-content:space-between;'
+                        f'margin-bottom:8px"><span style="color:#fff;font-size:14px">{tn}</span>'
+                        f'<span style="color:#E74C3C;font-weight:700">${total:,.0f}/yr</span></div>{bars}</div>')
 
-                rows_html += (
-                    f'<tr>'
-                    f'<td style="padding:4px 8px;color:#ccc;font-size:12px;'
-                    f'border-bottom:1px solid #333">{col_name}</td>'
-                    f'<td style="padding:4px 8px;text-align:center;'
-                    f'background:{comp_c}22;color:{comp_c};font-size:12px;'
-                    f'border-bottom:1px solid #333">{comp_s:.0f}%</td>'
-                    f'<td style="padding:4px 8px;text-align:center;'
-                    f'background:{v_c}22;color:{v_c};font-size:12px;'
-                    f'border-bottom:1px solid #333">{v_score:.0f}%</td>'
-                    f'</tr>'
-                )
+            # ── Compliance ──
+            comp_html = ""
+            if compliance:
+                try:
+                    cs = compliance.get_compliance_summary()
+                    for fw, fd in cs.get("by_framework", {}).items():
+                        fs = fd.get("score", 0)
+                        fc = _c(fs, 80, 60)
+                        comp_html += (f'<div style="display:flex;align-items:center;margin:6px 0">'
+                            f'<span style="width:100px;font-size:12px;color:#aaa">{fw}</span>'
+                            f'{_bar(fs, 200)}'
+                            f'<span style="font-size:11px;color:#888;margin-left:8px">'
+                            f'{fd.get("compliant",0)} pass / {fd.get("non_compliant",0)} fail</span></div>')
+                    gaps = cs.get("critical_gaps", [])
+                    for g in gaps[:5]:
+                        comp_html += (f'<div style="border-left:3px solid #E74C3C;padding:4px 10px;margin:4px 0;'
+                            f'background:#1A1A1A;font-size:12px;color:#ccc">[{g.get("severity","HIGH")}] '
+                            f'{g.get("framework","")}/{g.get("requirement_id","")}: '
+                            f'{g.get("title","")} ({g.get("score",0):.0f}%)</div>')
+                except Exception:
+                    pass
 
-            heatmap_html += (
-                f'<div style="margin:12px 0">'
-                f'<div style="font-size:14px;color:#FFE600;margin-bottom:6px;'
-                f'font-weight:600">{tname}</div>'
-                f'<table style="width:100%;border-collapse:collapse">'
-                f'<tr style="background:#262626">'
-                f'<th style="padding:6px 8px;text-align:left;color:#888;'
-                f'font-size:11px;font-weight:600">Column</th>'
-                f'<th style="padding:6px 8px;text-align:center;color:#888;'
-                f'font-size:11px;font-weight:600">Completeness</th>'
-                f'<th style="padding:6px 8px;text-align:center;color:#888;'
-                f'font-size:11px;font-weight:600">Validity</th>'
-                f'</tr>{rows_html}</table></div>'
-            )
+            # ── Business Rules ──
+            rules_html = ""
+            if rules_engine:
+                try:
+                    for tn, rr in getattr(rules_engine, "evaluation_results", {}).items():
+                        pr = rr.get("overall_pass_rate", 0)
+                        failed = [r for r in rr.get("rule_results", []) if not r.get("passed")]
+                        rules_html += (f'<div style="background:#1A1A1A;border:1px solid #333;border-radius:8px;'
+                            f'padding:12px;margin:6px 0"><span style="color:#fff;font-size:14px">{tn}</span>'
+                            f' <span style="color:{_c(pr, 90, 70)};font-weight:600">{pr:.0f}% pass</span>')
+                        for fr in failed[:5]:
+                            sev = fr.get("severity", "MEDIUM")
+                            rules_html += (f'<div style="font-size:11px;color:#ccc;margin:3px 0 3px 12px">'
+                                f'<span style="color:{_pri_c.get(sev,"#888")}">[{sev}]</span> '
+                                f'{fr.get("rule_name","")}: {fr.get("message","")}</div>')
+                        rules_html += '</div>'
+                except Exception:
+                    pass
 
-        # ── Cross-table analysis ──
-        cross_html = ""
-        cross = getattr(self, "_last_cross_results", None)
-        if cross:
-            rels = cross.get("detected_relationships", [])
-            orphans = cross.get("orphan_fks", [])
-            naming = cross.get("naming_consistency", 0)
+            # ── Trending sparklines ──
+            trend_html = ""
+            if history:
+                try:
+                    for tn in list(self.scan_results.keys())[:5]:
+                        ht = history.get_trend(tn)
+                        entries = ht.get("entries", [])[-12:]
+                        if len(entries) < 2:
+                            continue
+                        max_s = max(e.get("overall_score", 100) for e in entries) or 100
+                        bars = ""
+                        for e in entries:
+                            s = e.get("overall_score", 0)
+                            h = max(2, int(s / max_s * 40))
+                            bars += (f'<div style="width:8px;height:{h}px;background:{_c(s)};'
+                                f'border-radius:2px;margin:0 1px;display:inline-block;vertical-align:bottom"></div>')
+                        trend_html += (f'<div style="background:#1A1A1A;border:1px solid #333;border-radius:8px;'
+                            f'padding:10px;margin:4px 0;display:flex;align-items:end;gap:12px">'
+                            f'<span style="color:#fff;font-size:13px;min-width:150px">{tn}</span>'
+                            f'<div style="display:flex;align-items:end">{bars}</div></div>')
+                except Exception:
+                    pass
 
-            if rels:
-                cross_html += (
-                    '<div style="font-size:14px;color:#FFE600;'
-                    'margin:12px 0 6px;font-weight:600">'
-                    'Detected Relationships</div>')
-                for rel in rels:
-                    cross_html += (
-                        f'<div style="color:#ccc;font-size:12px;'
-                        f'padding:3px 0">'
-                        f'{rel["from_table"]}.{rel["from_col"]} '
-                        f'&harr; {rel["to_table"]}.{rel["to_col"]} '
-                        f'({rel["confidence"]}% confidence)</div>'
-                    )
+            # ── Stewardship ──
+            stew_html = ""
+            if stewardship:
+                try:
+                    sd = stewardship.get_dashboard_stats()
+                    stew_html = (f'<div style="display:flex;gap:16px;flex-wrap:wrap">'
+                        f'{_card("Open Issues", sd.get("total_open", 0), "#F39C12")}'
+                        f'{_card("SLA Breaches", sd.get("sla_breaches", 0), "#E74C3C")}'
+                        f'{_card("Unassigned", sd.get("unassigned", 0), "#FFE600")}'
+                        f'{_card("Resolved", sd.get("total_resolved", 0), "#27AE60")}</div>')
+                except Exception:
+                    pass
 
-            if orphans:
-                cross_html += (
-                    '<div style="font-size:14px;color:#da3633;'
-                    'margin:12px 0 6px;font-weight:600">'
-                    'Orphan Foreign Keys</div>')
-                for o in orphans:
-                    cross_html += (
-                        f'<div style="color:#ccc;font-size:12px;'
-                        f'padding:3px 0">{o}</div>')
+            # ── Incidents ──
+            inc_html = ""
+            if incidents:
+                try:
+                    ist = incidents.get_dashboard_stats()
+                    mttr = ist.get("mttr")
+                    mttr_s = f"{mttr:.1f}h" if mttr else "N/A"
+                    inc_html = (f'<div style="display:flex;gap:16px;flex-wrap:wrap">'
+                        f'{_card("Open", ist.get("open", 0), "#F39C12")}'
+                        f'{_card("Resolved", ist.get("resolved", 0), "#27AE60")}'
+                        f'{_card("MTTR", mttr_s, "#FFE600")}'
+                        f'{_card("Postmortem Pending", ist.get("postmortems_pending", 0), "#E74C3C")}</div>')
+                except Exception:
+                    pass
 
-            cross_html += (
-                f'<div style="color:#888;font-size:12px;margin-top:8px">'
-                f'Naming Consistency: {naming}%</div>')
+            # ── Top recommendations ──
+            all_recs = []
+            for tname, result in self.scan_results.items():
+                for rec in result.get("recommendations", []):
+                    r = dict(rec); r["table"] = tname; all_recs.append(r)
+            all_recs.sort(key=lambda x: {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}.get(x.get("priority", "LOW"), 4))
+            recs_html = ""
+            for rec in all_recs[:20]:
+                pri = rec.get("priority", "LOW")
+                pc = _pri_c.get(pri, "#888")
+                fix = (' <span style="background:#27AE60;color:#fff;padding:1px 6px;border-radius:3px;'
+                    'font-size:10px">AUTO-FIX</span>' if rec.get("auto_fixable") else "")
+                recs_html += (f'<div style="border-left:3px solid {pc};padding:6px 12px;margin:4px 0;'
+                    f'background:#1A1A1A;border-radius:0 6px 6px 0">'
+                    f'<span style="color:{pc};font-weight:bold;font-size:11px">[{pri}]</span> '
+                    f'<span style="color:#ccc;font-size:11px">{rec.get("table","")}</span>{fix}'
+                    f'<div style="color:#fff;font-size:12px;margin-top:2px">{rec.get("finding","")}</div>'
+                    f'<div style="color:#888;font-size:11px">{rec.get("recommendation","")}</div></div>')
 
-        # ── Assemble full HTML ──
-        oc = _color(overall)
-        html = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Data Quality Scorecard</title>
+            # ── Cross-table ──
+            cross_html = ""
+            cross = getattr(self, "_last_cross_results", None)
+            if cross:
+                for rel in cross.get("detected_relationships", [])[:10]:
+                    cross_html += (f'<div style="color:#ccc;font-size:12px;padding:2px 0">'
+                        f'{rel["from_table"]}.{rel["from_col"]} &harr; '
+                        f'{rel["to_table"]}.{rel["to_col"]} ({rel["confidence"]}%)</div>')
+                for o in cross.get("orphan_fks", [])[:5]:
+                    cross_html += f'<div style="color:#E74C3C;font-size:12px;padding:2px 0">Orphan FK: {o}</div>'
+
+            # ── Build optional sections ──
+            def _opt(title, content):
+                return f'{_sec(title)}{content}</div>' if content else ""
+
+            opt_sections = ""
+            opt_sections += _opt("Trust Scores", trust_html)
+            opt_sections += _opt("Cost of Poor Data Quality", copdq_html)
+            opt_sections += _opt("Regulatory Compliance", comp_html)
+            opt_sections += _opt("Business Rules", rules_html)
+            opt_sections += _opt("Score Trending", trend_html)
+            opt_sections += _opt("Stewardship", stew_html)
+            opt_sections += _opt("Incidents", inc_html)
+            opt_sections += _opt("Cross-Table Analysis", cross_html)
+
+            oc = _c(overall)
+            html = f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Enterprise Data Quality Report</title>
 <style>
 *{{margin:0;padding:0;box-sizing:border-box}}
-body{{background:#0D0D0D;color:#fff;font-family:Inter,system-ui,-apple-system,sans-serif;
-padding:24px;line-height:1.5}}
+body{{background:#0D0D0D;color:#fff;font-family:Inter,system-ui,-apple-system,sans-serif;padding:24px;line-height:1.5}}
 .container{{max-width:1100px;margin:0 auto}}
 .header{{text-align:center;padding:30px 0;border-bottom:2px solid #FFE600}}
 .header h1{{font-size:22px;color:#FFE600;font-weight:700;letter-spacing:0.5px}}
-.header .ts{{font-size:12px;color:#666;margin-top:4px}}
+.badge{{background:#E74C3C;color:#fff;font-size:10px;padding:2px 8px;border-radius:3px;margin-left:8px;vertical-align:middle}}
 .big-score{{font-size:72px;font-weight:800;margin:16px 0 4px}}
 .section{{margin:28px 0}}
-.section-title{{font-size:16px;font-weight:700;color:#FFE600;
-border-left:3px solid #FFE600;padding-left:10px;margin-bottom:14px}}
+.section-title{{font-size:16px;font-weight:700;color:#FFE600;border-left:3px solid #FFE600;padding-left:10px;margin-bottom:14px}}
 .gauges{{display:flex;justify-content:center;flex-wrap:wrap;gap:12px}}
-.footer{{text-align:center;color:#555;font-size:11px;margin-top:40px;
-padding-top:16px;border-top:1px solid #333}}
-</style>
-</head>
-<body>
-<div class="container">
+.exec-cards{{display:flex;gap:12px;flex-wrap:wrap;margin-top:14px}}
+.footer{{text-align:center;color:#555;font-size:11px;margin-top:40px;padding-top:16px;border-top:1px solid #333}}
+@media print{{body{{background:#fff;color:#000}} .section-title{{color:#333;border-color:#333}} .footer{{color:#999}}}}
+</style></head><body><div class="container">
 <div class="header">
-<h1>Data Quality Scorecard -- DAMA-DMBOK Assessment</h1>
-<div class="ts">{ts}</div>
+<h1>Enterprise Data Quality Report<span class="badge">CONFIDENTIAL</span></h1>
+<div style="font-size:12px;color:#666;margin-top:4px">{ts}</div>
 <div class="big-score" style="color:{oc}">{overall:.1f}</div>
 <div style="color:#888;font-size:13px">Overall Quality Score / 100</div>
 </div>
-
-<div class="section">
-<div class="section-title">DAMA Dimension Scores</div>
-<div class="gauges">{gauges_html}</div>
-</div>
-
-<div class="section">
-<div class="section-title">Table Summary</div>
-{table_cards}
-</div>
-
-<div class="section">
-<div class="section-title">Top Issues</div>
-{issues_html if issues_html else '<div style="color:#888">No significant issues detected.</div>'}
-</div>
-
-<div class="section">
-<div class="section-title">Column-Level Heatmap</div>
-{heatmap_html if heatmap_html else '<div style="color:#888">No column-level data available.</div>'}
-</div>
-
-{"<div class='section'><div class='section-title'>Cross-Table Analysis</div>" + cross_html + "</div>" if cross_html else ""}
-
-<div class="footer">
-Generated by Dr. Data -- DAMA-DMBOK Data Quality Assessment Engine
-</div>
-</div>
-</body>
-</html>"""
-        return html
+{_sec("Executive Summary")}<div class="exec-cards">{exec_cards}</div></div>
+{_sec("DAMA Dimension Scores")}<div class="gauges">{gauges}</div></div>
+{_sec("Table Details & Column Heatmap")}{table_html}</div>
+{opt_sections}
+{_sec("Top Recommendations")}{recs_html if recs_html else '<div style="color:#888">No issues detected.</div>'}</div>
+<div class="footer">Generated by Dr. Data -- Enterprise Data Quality Assessment Engine | {ts} | CONFIDENTIAL</div>
+</div></body></html>"""
+            return html
+        except Exception as e:
+            print(f"[DQ_ENGINE] generate_html_scorecard failed: {e}")
+            return ""
 
     # ------------------------------------------------------------------ #
     #  Monte Carlo-Style Observability                                     #

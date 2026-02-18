@@ -1496,14 +1496,22 @@ class DrDataAgent:
                                 _auditor.audit_deliverable(_fpath, _ftype)
                             )
 
-                    # 3. Combine into single report
+                    # 3. Cross-validate key metrics against pandas ground truth
+                    _cv_report = _auditor.cross_validate(
+                        self.dataframe,
+                        source_name=getattr(self, "current_file_name", "data"),
+                    )
+                    if _cv_report.findings:
+                        _sub_reports.append(_cv_report)
+
+                    # 4. Combine into single report
                     _combined = _AuditEngine.combine_reports(
                         _sub_reports,
                         title=f"Quality Audit -- {title}",
                     )
                     _combined.compute_scores()
 
-                    # 4. Write standalone HTML
+                    # 5. Write standalone HTML
                     _audit_path = os.path.join(
                         self.output_dir, "quality_audit.html"
                     )

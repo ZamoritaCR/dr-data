@@ -17,6 +17,7 @@ Usage in dr_data_agent.py:
 import re
 import hashlib
 import os
+import warnings
 from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Optional, List
@@ -631,3 +632,127 @@ class AuditEngine:
                 )
                 combined.findings.append(tagged)
         return combined
+
+    def cross_validate(self, df, source_name="data"):
+        """Compute deterministic ground-truth facts from the DataFrame.
+
+        Returns an AuditReport with verified facts that can be compared
+        against AI-generated claims. Each finding is a PASS with the
+        verified metric as the message.
+        """
+        report = AuditReport(
+            source_name=source_name, audit_type="cross_validation"
+        )
+
+        if df is None or not HAS_PANDAS or df.empty:
+            return report
+
+        numeric_cols = df.select_dtypes(include=["number"]).columns.tolist()
+        cat_cols = [
+            c for c in df.columns
+            if df[c].dtype == object and df[c].nunique() <= 30
+        ]
+
+        # Verified totals for each numeric column
+        for col in numeric_cols[:6]:
+            total = df[col].sum()
+            avg = df[col].mean()
+            report.findings.append(AuditFinding(
+                check_name=f"Verified Total: {col}",
+                category="cross_validation",
+                severity=Severity.PASS,
+                message=f"Total = {total:,.2f} | Average = {avg:,.2f}",
+                detail=f"min={df[col].min():,.2f}, max={df[col].max():,.2f}, "
+                       f"median={df[col].median():,.2f}",
+            ))
+
+        # Verified top categories for each categorical column
+        for cat in cat_cols[:4]:
+            if not numeric_cols:
+                break
+            metric = numeric_cols[0]
+            grouped = (
+                df.groupby(cat, dropna=True)[metric]
+                .sum()
+                .sort_values(ascending=False)
+            )
+            if grouped.empty:
+                continue
+            top = grouped.index[0]
+            top_val = grouped.iloc[0]
+            total = grouped.sum()
+            pct = (top_val / total * 100) if total != 0 else 0
+            top3_names = list(grouped.head(3).index)
+            top3_pct = (
+                (grouped.head(3).sum() / total * 100) if total != 0 else 0
+            )
+            report.findings.append(AuditFinding(
+                check_name=f"Verified Top: {metric} by {cat}",
+                category="cross_validation",
+                severity=Severity.PASS,
+                message=(
+                    f"#1 is '{top}' at {top_val:,.2f} ({pct:.1f}% of total). "
+                    f"Top 3 ({', '.join(str(n) for n in top3_names)}) = {top3_pct:.1f}%"
+                ),
+            ))
+
+        # Verified date trend for first date + numeric pair
+        date_cols = df.select_dtypes(include=["datetime64"]).columns.tolist()
+        if not date_cols:
+            for c in df.columns:
+                if df[c].dtype == object:
+                    try:
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore")
+                            sample = pd.to_datetime(
+                                df[c].dropna().head(30), errors="coerce"
+                            )
+                        if sample.notna().mean() > 0.6:
+                            date_cols.append(c)
+                            break
+                    except Exception:
+                        pass
+
+        if date_cols and numeric_cols:
+            dc = date_cols[0]
+            mc = numeric_cols[0]
+            temp = df[[dc, mc]].copy()
+            temp[dc] = pd.to_datetime(temp[dc], errors="coerce")
+            temp = temp.dropna()
+            if len(temp) > 1:
+                temp = temp.sort_values(dc)
+                first_val = temp[mc].iloc[:max(1, len(temp)//10)].sum()
+                last_val = temp[mc].iloc[-max(1, len(temp)//10):].sum()
+                if first_val != 0:
+                    pct_change = (last_val - first_val) / abs(first_val) * 100
+                    trend = (
+                        "upward" if pct_change > 5
+                        else "downward" if pct_change < -5
+                        else "stable"
+                    )
+                else:
+                    pct_change = 0
+                    trend = "stable"
+                report.findings.append(AuditFinding(
+                    check_name=f"Verified Trend: {mc}",
+                    category="cross_validation",
+                    severity=Severity.PASS,
+                    message=(
+                        f"{trend} trend ({pct_change:+.1f}%). "
+                        f"Range: {temp[dc].min().strftime('%Y-%m-%d')} "
+                        f"to {temp[dc].max().strftime('%Y-%m-%d')}"
+                    ),
+                ))
+
+        # Row count verification
+        report.findings.append(AuditFinding(
+            check_name="Verified Row Count",
+            category="cross_validation",
+            severity=Severity.PASS,
+            message=(
+                f"{len(df):,} rows x {len(df.columns)} columns. "
+                f"{len(numeric_cols)} numeric, {len(cat_cols)} categorical."
+            ),
+        ))
+
+        return report

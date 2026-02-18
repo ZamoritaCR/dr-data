@@ -293,6 +293,9 @@ class DrDataAgent:
         self.snowflake_tables = {}
         self.snowflake_config = None
 
+        # Data quality scan results (set via set_dq_results)
+        self.dq_scan_results = None
+
         # Trace logger for audit trail
         self.trace = TraceLogger()
 
@@ -1769,13 +1772,51 @@ class DrDataAgent:
                 "scores": scores,
             }
 
+    def set_dq_results(self, scan_results):
+        """Accept DQ scan results so they flow into conversational context."""
+        self.dq_scan_results = scan_results
+
+    def _build_dq_context(self):
+        """Build a context snippet summarising DQ scan results."""
+        if not self.dq_scan_results:
+            return ""
+        parts = ["[SYSTEM: DATA QUALITY SCAN RESULTS (DAMA-DMBOK)]"]
+        for tname, result in self.dq_scan_results.items():
+            score = result.get("overall_score", 0)
+            dims = result.get("dimensions", {})
+            recs = result.get("recommendations", [])
+            critical = len(
+                [r for r in recs if r.get("priority") == "CRITICAL"])
+            high = len(
+                [r for r in recs if r.get("priority") == "HIGH"])
+            parts.append(f"Table: {tname} -- Overall: {score:.1f}/100")
+            for dim_name, dim_data in dims.items():
+                if isinstance(dim_data, dict):
+                    ds = dim_data.get("score")
+                    if ds is not None:
+                        parts.append(f"  {dim_name}: {ds:.1f}%")
+            if critical > 0 or high > 0:
+                parts.append(
+                    f"  Issues: {critical} critical, {high} high priority")
+        parts.append(
+            "Use your DAMA-DMBOK expertise to discuss these results "
+            "when the user asks about data quality.")
+        parts.append("[END DQ CONTEXT]")
+        return "\n".join(parts)
+
     def _build_context_message(self, user_message):
         """Inject context about loaded data so Claude never asks for file paths."""
         # Prefer AgentSessionBridge for multi-file sessions
         if self.session_bridge:
             context = self.session_bridge.get_context()
+            dq_ctx = self._build_dq_context()
             if context:
-                return context + "\n\n" + user_message
+                ctx = context
+                if dq_ctx:
+                    ctx = ctx + "\n\n" + dq_ctx
+                return ctx + "\n\n" + user_message
+            if dq_ctx:
+                return dq_ctx + "\n\n" + user_message
             return user_message
 
         # Fallback: single-file context injection
@@ -1843,6 +1884,11 @@ class DrDataAgent:
                 )
         except Exception:
             pass
+
+        # Inject DQ scan results if available
+        dq_ctx = self._build_dq_context()
+        if dq_ctx:
+            context_parts.append(dq_ctx)
 
         if context_parts:
             return "\n".join(context_parts) + "\n\n" + user_message

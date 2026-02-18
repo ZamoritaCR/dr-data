@@ -1535,6 +1535,12 @@ with tab2:
                               f"assessed",
                         state="complete",
                     )
+
+                    # Bridge: pass DQ results into Dr. Data agent context
+                    if "agent" in st.session_state and st.session_state.agent:
+                        st.session_state.agent.set_dq_results(
+                            _dq.scan_results)
+
                 st.rerun()
 
         # ── Display results ──
@@ -1806,3 +1812,19 @@ with tab2:
                         "Switch to the Dr. Data Agent tab. "
                         "Dr. Data now has your DQ scan results in context."
                     )
+
+            # ── HTML Scorecard Report ──
+            st.markdown("---")
+            if st.button(
+                "Generate DQ Scorecard Report",
+                key="dq_export_html",
+            ):
+                _html = _dq.generate_html_scorecard()
+                if _html:
+                    st.download_button(
+                        "Download HTML Scorecard", _html,
+                        "dq_scorecard.html", "text/html",
+                        key="dq_dl_html",
+                    )
+                    import streamlit.components.v1 as _components
+                    _components.html(_html, height=800, scrolling=True)

@@ -106,6 +106,7 @@ class DataQualityEngine:
                 results[name] = self.scan_table(df, name)
 
             cross = self._cross_table_analysis(tables_dict)
+            self._last_cross_results = cross
             scores = [
                 r["overall_score"]
                 for r in results.values()
@@ -784,3 +785,299 @@ class DataQualityEngine:
             print(f"[DQ ENGINE] Cross-table analysis failed: {e}")
             return {"orphan_fks": [], "naming_consistency": 0,
                     "detected_relationships": [], "schema_health_score": 0}
+
+    # ------------------------------------------------------------------ #
+    #  HTML Scorecard Export                                               #
+    # ------------------------------------------------------------------ #
+
+    def generate_html_scorecard(self):
+        """Generate a self-contained HTML scorecard report. WU dark theme."""
+        if not self.scan_results:
+            return ""
+
+        from datetime import datetime as _dt
+        ts = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
+        sc = self.generate_scorecard_data()
+        overall = sc.get("overall_score", 0)
+
+        def _color(val, green=90, yellow=70):
+            if val >= green:
+                return "#238636"
+            if val >= yellow:
+                return "#FFE600"
+            return "#da3633"
+
+        def _svg_gauge(label, score, size=90):
+            if score is None:
+                score = 0
+            r = 36
+            circ = 2 * 3.14159 * r
+            fill = circ * score / 100
+            c = _color(score, 95, 80)
+            return (
+                f'<div style="text-align:center;margin:8px">'
+                f'<svg width="{size}" height="{size}" viewBox="0 0 {size} {size}">'
+                f'<circle cx="{size//2}" cy="{size//2}" r="{r}" '
+                f'fill="none" stroke="#333" stroke-width="7"/>'
+                f'<circle cx="{size//2}" cy="{size//2}" r="{r}" '
+                f'fill="none" stroke="{c}" stroke-width="7" '
+                f'stroke-dasharray="{fill:.1f} {circ:.1f}" '
+                f'stroke-linecap="round" '
+                f'transform="rotate(-90 {size//2} {size//2})"/>'
+                f'<text x="{size//2}" y="{size//2+2}" text-anchor="middle" '
+                f'font-size="16" font-weight="bold" fill="{c}" '
+                f'font-family="Inter,system-ui,sans-serif">'
+                f'{score:.0f}</text>'
+                f'</svg>'
+                f'<div style="font-size:11px;color:#aaa;margin-top:2px">'
+                f'{label}</div></div>'
+            )
+
+        def _bar(val, width=120):
+            if val is None:
+                val = 0
+            c = _color(val, 95, 80)
+            w = max(0, min(100, val))
+            return (
+                f'<div style="background:#333;border-radius:4px;'
+                f'width:{width}px;height:14px;display:inline-block;'
+                f'vertical-align:middle">'
+                f'<div style="background:{c};width:{w}%;height:100%;'
+                f'border-radius:4px"></div></div>'
+                f' <span style="font-size:12px;color:#ccc">{val:.0f}%</span>'
+            )
+
+        # ── Dimension gauges ──
+        dim_names = [
+            "completeness", "accuracy", "consistency",
+            "timeliness", "uniqueness", "validity",
+        ]
+        avg_dims = {}
+        for dim in dim_names:
+            scores = []
+            for res in self.scan_results.values():
+                d = res.get("dimensions", {}).get(dim, {})
+                s = d.get("score") if isinstance(d, dict) else None
+                if s is not None:
+                    scores.append(s)
+            avg_dims[dim] = round(sum(scores) / len(scores), 1) if scores else 0
+
+        gauges_html = "".join(
+            _svg_gauge(d.title(), avg_dims[d]) for d in dim_names)
+
+        # ── Table summary cards ──
+        table_cards = ""
+        for tname, result in self.scan_results.items():
+            ts_score = result.get("overall_score", 0)
+            tc = _color(ts_score)
+            rows = result.get("row_count", "?")
+            cols = result.get("column_count", "?")
+            dims = result.get("dimensions", {})
+            dim_bars = ""
+            for d in dim_names:
+                dd = dims.get(d, {})
+                ds = dd.get("score", 0) if isinstance(dd, dict) else 0
+                dim_bars += (
+                    f'<div style="display:flex;align-items:center;'
+                    f'margin:3px 0">'
+                    f'<span style="width:100px;font-size:12px;color:#aaa">'
+                    f'{d.title()}</span>{_bar(ds)}</div>'
+                )
+            table_cards += (
+                f'<div style="background:#1A1A1A;border:1px solid #333;'
+                f'border-radius:8px;padding:16px;margin:10px 0">'
+                f'<div style="display:flex;justify-content:space-between;'
+                f'align-items:center;margin-bottom:10px">'
+                f'<span style="font-size:16px;font-weight:600;color:#fff">'
+                f'{tname}</span>'
+                f'<span style="font-size:24px;font-weight:bold;color:{tc}">'
+                f'{ts_score:.1f}</span></div>'
+                f'<div style="font-size:12px;color:#888;margin-bottom:8px">'
+                f'{rows} rows | {cols} columns</div>'
+                f'{dim_bars}</div>'
+            )
+
+        # ── Top Issues ──
+        all_recs = []
+        for tname, result in self.scan_results.items():
+            for rec in result.get("recommendations", []):
+                r = dict(rec)
+                r["table"] = tname
+                all_recs.append(r)
+        all_recs.sort(key=lambda r: {
+            "CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3
+        }.get(r.get("priority", "LOW"), 4))
+
+        pri_colors = {
+            "CRITICAL": "#da3633", "HIGH": "#d29922",
+            "MEDIUM": "#FFE600", "LOW": "#238636",
+        }
+        issues_html = ""
+        for rec in all_recs[:15]:
+            pri = rec.get("priority", "LOW")
+            pc = pri_colors.get(pri, "#888")
+            fix_tag = (
+                '<span style="background:#238636;color:#fff;'
+                'padding:1px 6px;border-radius:3px;font-size:10px;'
+                'margin-left:6px">AUTO-FIX</span>'
+                if rec.get("auto_fixable") else ""
+            )
+            issues_html += (
+                f'<div style="border-left:3px solid {pc};padding:8px 12px;'
+                f'margin:6px 0;background:#1A1A1A;border-radius:0 6px 6px 0">'
+                f'<span style="color:{pc};font-weight:bold;font-size:12px">'
+                f'[{pri}]</span> '
+                f'<span style="color:#ccc;font-size:12px">{rec.get("table","")}</span>'
+                f'{fix_tag}'
+                f'<div style="color:#fff;font-size:13px;margin-top:4px">'
+                f'{rec.get("finding","")}</div>'
+                f'<div style="color:#888;font-size:12px;margin-top:2px">'
+                f'{rec.get("recommendation","")}</div></div>'
+            )
+
+        # ── Column-level heatmap ──
+        heatmap_html = ""
+        for tname, result in self.scan_results.items():
+            dims = result.get("dimensions", {})
+            comp_cols = dims.get("completeness", {}).get("columns", {})
+            valid_cols = dims.get("validity", {}).get("column_rules", {})
+
+            if not comp_cols:
+                continue
+
+            rows_html = ""
+            for col_name, col_data in comp_cols.items():
+                comp_s = col_data.get("score", 100)
+                comp_c = _color(comp_s, 95, 80)
+                # Check validity for this column
+                v_data = valid_cols.get(col_name, {})
+                v_score = v_data.get("valid_pct", 100) if isinstance(v_data, dict) else 100
+                v_c = _color(v_score, 95, 80)
+
+                rows_html += (
+                    f'<tr>'
+                    f'<td style="padding:4px 8px;color:#ccc;font-size:12px;'
+                    f'border-bottom:1px solid #333">{col_name}</td>'
+                    f'<td style="padding:4px 8px;text-align:center;'
+                    f'background:{comp_c}22;color:{comp_c};font-size:12px;'
+                    f'border-bottom:1px solid #333">{comp_s:.0f}%</td>'
+                    f'<td style="padding:4px 8px;text-align:center;'
+                    f'background:{v_c}22;color:{v_c};font-size:12px;'
+                    f'border-bottom:1px solid #333">{v_score:.0f}%</td>'
+                    f'</tr>'
+                )
+
+            heatmap_html += (
+                f'<div style="margin:12px 0">'
+                f'<div style="font-size:14px;color:#FFE600;margin-bottom:6px;'
+                f'font-weight:600">{tname}</div>'
+                f'<table style="width:100%;border-collapse:collapse">'
+                f'<tr style="background:#262626">'
+                f'<th style="padding:6px 8px;text-align:left;color:#888;'
+                f'font-size:11px;font-weight:600">Column</th>'
+                f'<th style="padding:6px 8px;text-align:center;color:#888;'
+                f'font-size:11px;font-weight:600">Completeness</th>'
+                f'<th style="padding:6px 8px;text-align:center;color:#888;'
+                f'font-size:11px;font-weight:600">Validity</th>'
+                f'</tr>{rows_html}</table></div>'
+            )
+
+        # ── Cross-table analysis ──
+        cross_html = ""
+        cross = getattr(self, "_last_cross_results", None)
+        if cross:
+            rels = cross.get("detected_relationships", [])
+            orphans = cross.get("orphan_fks", [])
+            naming = cross.get("naming_consistency", 0)
+
+            if rels:
+                cross_html += (
+                    '<div style="font-size:14px;color:#FFE600;'
+                    'margin:12px 0 6px;font-weight:600">'
+                    'Detected Relationships</div>')
+                for rel in rels:
+                    cross_html += (
+                        f'<div style="color:#ccc;font-size:12px;'
+                        f'padding:3px 0">'
+                        f'{rel["from_table"]}.{rel["from_col"]} '
+                        f'&harr; {rel["to_table"]}.{rel["to_col"]} '
+                        f'({rel["confidence"]}% confidence)</div>'
+                    )
+
+            if orphans:
+                cross_html += (
+                    '<div style="font-size:14px;color:#da3633;'
+                    'margin:12px 0 6px;font-weight:600">'
+                    'Orphan Foreign Keys</div>')
+                for o in orphans:
+                    cross_html += (
+                        f'<div style="color:#ccc;font-size:12px;'
+                        f'padding:3px 0">{o}</div>')
+
+            cross_html += (
+                f'<div style="color:#888;font-size:12px;margin-top:8px">'
+                f'Naming Consistency: {naming}%</div>')
+
+        # ── Assemble full HTML ──
+        oc = _color(overall)
+        html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Data Quality Scorecard</title>
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{background:#0D0D0D;color:#fff;font-family:Inter,system-ui,-apple-system,sans-serif;
+padding:24px;line-height:1.5}}
+.container{{max-width:1100px;margin:0 auto}}
+.header{{text-align:center;padding:30px 0;border-bottom:2px solid #FFE600}}
+.header h1{{font-size:22px;color:#FFE600;font-weight:700;letter-spacing:0.5px}}
+.header .ts{{font-size:12px;color:#666;margin-top:4px}}
+.big-score{{font-size:72px;font-weight:800;margin:16px 0 4px}}
+.section{{margin:28px 0}}
+.section-title{{font-size:16px;font-weight:700;color:#FFE600;
+border-left:3px solid #FFE600;padding-left:10px;margin-bottom:14px}}
+.gauges{{display:flex;justify-content:center;flex-wrap:wrap;gap:12px}}
+.footer{{text-align:center;color:#555;font-size:11px;margin-top:40px;
+padding-top:16px;border-top:1px solid #333}}
+</style>
+</head>
+<body>
+<div class="container">
+<div class="header">
+<h1>Data Quality Scorecard -- DAMA-DMBOK Assessment</h1>
+<div class="ts">{ts}</div>
+<div class="big-score" style="color:{oc}">{overall:.1f}</div>
+<div style="color:#888;font-size:13px">Overall Quality Score / 100</div>
+</div>
+
+<div class="section">
+<div class="section-title">DAMA Dimension Scores</div>
+<div class="gauges">{gauges_html}</div>
+</div>
+
+<div class="section">
+<div class="section-title">Table Summary</div>
+{table_cards}
+</div>
+
+<div class="section">
+<div class="section-title">Top Issues</div>
+{issues_html if issues_html else '<div style="color:#888">No significant issues detected.</div>'}
+</div>
+
+<div class="section">
+<div class="section-title">Column-Level Heatmap</div>
+{heatmap_html if heatmap_html else '<div style="color:#888">No column-level data available.</div>'}
+</div>
+
+{"<div class='section'><div class='section-title'>Cross-Table Analysis</div>" + cross_html + "</div>" if cross_html else ""}
+
+<div class="footer">
+Generated by Dr. Data -- DAMA-DMBOK Data Quality Assessment Engine
+</div>
+</div>
+</body>
+</html>"""
+        return html

@@ -1008,13 +1008,6 @@ with chat_col:
         for msg in st.session_state.messages:
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
-                # Re-render download buttons for assistant messages that had them
-                if msg["role"] == "assistant" and msg.get("downloads"):
-                    _render_downloads(
-                        msg["downloads"],
-                        key_prefix="hist",
-                        ts=msg.get("timestamp", 0),
-                    )
 
     # === HANDLE AUTO-ANALYSIS ON FILE UPLOAD ===
     if st.session_state.file_just_uploaded:
@@ -1135,7 +1128,6 @@ with chat_col:
                     # ====== EXPORT PATH -- status widget + blocking respond() ======
                     status = st.status("Dr. Data is working...", expanded=True)
                     response_container = st.empty()
-                    download_container = st.container()
 
                     status.write("Received your request.")
 
@@ -1167,37 +1159,18 @@ with chat_col:
                             engine = response.get("engine", "claude")
 
                             if downloads:
-                                status.write(f"Generated {len(downloads)} file(s).")
                                 status.update(label="Done", state="complete", expanded=False)
-
+                                # Brief chat message -- downloads go to workspace
+                                file_names = [dl.get("filename", dl.get("name", "file")) for dl in downloads]
+                                workspace_note = (
+                                    f"Built {len(downloads)} deliverable(s): "
+                                    f"{', '.join(file_names)}. "
+                                    f"Check the workspace for downloads."
+                                )
                                 if content:
-                                    response_container.markdown(content)
-
-                                with download_container:
-                                    for idx, dl in enumerate(downloads):
-                                        file_path = dl.get("path", "")
-                                        file_name = dl.get("filename", dl.get("name", f"file_{idx}"))
-                                        if file_path and os.path.exists(str(file_path)):
-                                            with open(file_path, "rb") as f:
-                                                file_bytes = f.read()
-                                            mime_map = {
-                                                ".html": "text/html",
-                                                ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                                                ".pdf": "application/pdf",
-                                                ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                                ".zip": "application/zip",
-                                                ".csv": "text/csv",
-                                            }
-                                            ext = os.path.splitext(file_name)[1].lower()
-                                            st.download_button(
-                                                label=f"Download {file_name}",
-                                                data=file_bytes,
-                                                file_name=file_name,
-                                                mime=mime_map.get(ext, "application/octet-stream"),
-                                                key=f"dl_{file_name}_{int(time.time() * 1000)}_{idx}",
-                                            )
-                                        else:
-                                            st.warning(f"File not found: {file_path}")
+                                    response_container.markdown(content + "\n\n" + workspace_note)
+                                else:
+                                    response_container.markdown(workspace_note)
                             else:
                                 status.update(label="Done", state="complete", expanded=False)
                                 if content:
@@ -1327,27 +1300,13 @@ with chat_col:
                                 "description": "Generated file",
                             })
                     if chat_downloads:
-                        for idx, dl in enumerate(chat_downloads):
-                            fpath = dl["path"]
-                            fname = dl["filename"]
-                            with open(fpath, "rb") as f:
-                                file_bytes = f.read()
-                            mime_map = {
-                                ".html": "text/html",
-                                ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                                ".pdf": "application/pdf",
-                                ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                ".zip": "application/zip",
-                                ".csv": "text/csv",
-                            }
-                            ext = os.path.splitext(fname)[1].lower()
-                            st.download_button(
-                                label=f"Download {fname}",
-                                data=file_bytes,
-                                file_name=fname,
-                                mime=mime_map.get(ext, "application/octet-stream"),
-                                key=f"dl_{fname}_{int(time.time() * 1000)}_{idx}",
-                            )
+                        # Notify in chat -- downloads go to workspace
+                        file_names = [dl["filename"] for dl in chat_downloads]
+                        st.markdown(
+                            f"Built {len(chat_downloads)} deliverable(s): "
+                            f"{', '.join(file_names)}. "
+                            f"Check the workspace for downloads."
+                        )
 
                     # Save chat response to history
                     st.session_state.messages.append({

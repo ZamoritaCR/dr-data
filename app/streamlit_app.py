@@ -2380,8 +2380,19 @@ with tab2:
                 _mermaid = _lin.generate_mermaid_diagram()
                 if _mermaid:
                     st.markdown("##### Lineage Graph")
-                    st.markdown(
-                        f"```mermaid\n{_mermaid}\n```")
+                    _mermaid_html = (
+                        '<html><head>'
+                        '<script src="https://cdn.jsdelivr.net/npm/'
+                        'mermaid@10/dist/mermaid.min.js"></script>'
+                        '<script>mermaid.initialize({startOnLoad:true,'
+                        "theme:'default'});</script>"
+                        '</head><body style="background:transparent;'
+                        'margin:0;overflow:auto;">'
+                        f'<div class="mermaid">\n{_mermaid}\n</div>'
+                        '</body></html>'
+                    )
+                    components.html(
+                        _mermaid_html, height=500, scrolling=True)
 
                 # Impact analysis
                 st.markdown("##### Impact Analysis")

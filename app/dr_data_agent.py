@@ -1265,6 +1265,7 @@ class DrDataAgent:
                         _progress(f"  Power BI failed: {pbi_result['error'][:80]}")
                     else:
                         zip_path = pbi_result.get("file_path")
+                        pbi_build_context = pbi_result.get("build_context", {})
                         if zip_path and os.path.exists(zip_path):
                             fname = os.path.basename(zip_path)
                             downloads.append({
@@ -1278,7 +1279,8 @@ class DrDataAgent:
                             })
                             self.trace.log_deliverable(
                                 "Power BI Project", zip_path,
-                                {"title": title, "type": "pbip"},
+                                {"title": title, "type": "pbip",
+                                 "build_context": pbi_build_context},
                             )
                         _progress("  Power BI project complete.")
                 except Exception as e:
@@ -1324,16 +1326,119 @@ class DrDataAgent:
                         "\nInteresting things in the data: "
                         + "; ".join(insights[:3])
                     )
+
+            # Enhanced followup: include PBI build context when available
+            pbi_bc = locals().get("pbi_build_context", {})
+            if pbi_bc:
+                # Build the detailed context for LLM narration
+                page_detail = ", ".join(
+                    f"{n} ({c} visuals)"
+                    for n, c in zip(
+                        pbi_bc.get("page_names", []),
+                        pbi_bc.get("visuals_per_page", []),
+                    )
+                )
+                measures_created = pbi_bc.get("measures_created", [])
+                measures_skipped = pbi_bc.get("measures_skipped", [])
+                fields_fixed = pbi_bc.get("fields_fixed", 0)
+                fields_removed = pbi_bc.get("fields_removed", 0)
+
+                pbi_detail = (
+                    f"\n\nPOWER BI BUILD DETAILS:\n"
+                    f"- Data file: {pbi_bc.get('data_file', '?')}, "
+                    f"{pbi_bc.get('row_count', 0):,} rows x "
+                    f"{pbi_bc.get('col_count', 0)} columns "
+                    f"({pbi_bc.get('numeric_count', 0)} numeric, "
+                    f"{pbi_bc.get('categorical_count', 0)} categorical)\n"
+                    f"- Table name in model: {pbi_bc.get('table_name', '?')}\n"
+                    f"- Pages: {page_detail}\n"
+                    f"- DAX measures created: "
+                    f"{', '.join(measures_created) if measures_created else 'none'}\n"
+                )
+                if measures_skipped:
+                    pbi_detail += (
+                        f"- DAX measures SKIPPED (bad column refs): "
+                        f"{', '.join(measures_skipped)}\n"
+                    )
+                if fields_fixed:
+                    pbi_detail += (
+                        f"- Visual fields auto-fixed (name mismatch): "
+                        f"{fields_fixed}\n"
+                    )
+                if fields_removed:
+                    pbi_detail += (
+                        f"- Visual fields REMOVED (no match in data): "
+                        f"{fields_removed}\n"
+                    )
+
+                # Tableau migration details
+                if pbi_bc.get("tableau_file"):
+                    pbi_detail += (
+                        f"\nTABLEAU TRANSLATION:\n"
+                        f"- Source: {pbi_bc['tableau_file']}\n"
+                        f"- Worksheets found: "
+                        f"{', '.join(pbi_bc.get('tableau_worksheets', []))}\n"
+                        f"- Calc fields found: "
+                        f"{len(pbi_bc.get('tableau_calcs_found', []))}\n"
+                        f"- Converted to DAX: "
+                        f"{', '.join(pbi_bc.get('tableau_calcs_converted', [])) or 'none'}\n"
+                        f"- Could not convert: "
+                        f"{', '.join(pbi_bc.get('tableau_calcs_failed', [])) or 'none'}\n"
+                    )
+
+                if pbi_bc.get("relationships"):
+                    pbi_detail += (
+                        f"- Relationships: "
+                        f"{', '.join(pbi_bc['relationships'])}\n"
+                    )
+
+                pbi_detail += (
+                    "\nWrite a 3-4 sentence summary telling the user what "
+                    "was built, what to check, and what might need manual "
+                    "adjustment. Be specific about any fields removed or "
+                    "measures skipped. If a Tableau workbook was provided, "
+                    "mention how closely the translation matched."
+                )
+            else:
+                pbi_detail = ""
+
             followup_context = (
                 f"I just built the following deliverables for the user:\n"
                 + "\n".join(detail_lines)
                 + f"\nThe dataset has {row_count:,} rows and "
                 f"{col_count} columns.{data_hint}"
+                + pbi_detail
             )
+
+            # Generate LLM content summary if PBI build context available
+            content = ""
+            if pbi_bc and self.client:
+                try:
+                    _progress("Generating build summary...")
+                    summary_resp = self.client.messages.create(
+                        model=self.MODEL,
+                        max_tokens=500,
+                        temperature=0.3,
+                        system=DR_DATA_SYSTEM_PROMPT,
+                        messages=[{"role": "user", "content": followup_context}],
+                        timeout=30.0,
+                    )
+                    for block in summary_resp.content:
+                        if hasattr(block, "text"):
+                            content = block.text
+                            break
+                    self.trace.log_llm_call(
+                        "claude", self.MODEL,
+                        "PBI build summary narration",
+                        content[:200],
+                    )
+                except Exception:
+                    pass
 
             return {
                 "type": "export",
                 "acknowledgment": acknowledgment,
+                "content": content,
                 "downloads": downloads,
                 "errors": errors,
                 "progress_steps": progress_steps,
@@ -1824,12 +1929,16 @@ class DrDataAgent:
             if self.tableau_spec and self.tableau_spec.get("relationships"):
                 relationships.extend(self.tableau_spec["relationships"])
 
-            result_path = generator.generate(
+            gen_result = generator.generate(
                 config, pbi_profile, dashboard_spec,
                 data_file_path=self.data_file_path,
                 sheet_name=self.sheet_name,
                 relationships=relationships or None,
             )
+            # generator.generate() returns a dict with path + audit info
+            result_path = gen_result["path"]
+            field_audit = gen_result.get("field_audit", {})
+            valid_measures = gen_result.get("valid_measures", [])
 
             # Step 5: Bundle data file + ZIP for download
             self._report_progress(
@@ -1852,17 +1961,88 @@ class DrDataAgent:
 
             self._report_progress("Power BI project ready for download")
 
-            # Include clear instructions in the result
-            safe_name = generator._safe_name(
-                dashboard_spec.get("dashboard_title", "Dashboard")
+            # -- Collect detailed build context for summary --
+            data_file_name = (os.path.basename(self.data_file_path)
+                              if self.data_file_path else "unknown")
+            row_count = len(self.dataframe) if self.dataframe is not None else 0
+            col_count = (len(self.dataframe.columns)
+                         if self.dataframe is not None else 0)
+
+            # Page and visual details
+            page_names = [p.get("title", p.get("name", f"Page {i+1}"))
+                          for i, p in enumerate(dashboard_spec.get("pages", []))]
+            visuals_per_page = [len(p.get("visuals", []))
+                                for p in dashboard_spec.get("pages", [])]
+
+            # Measures: all requested vs validated
+            all_measures = [m.get("name", "?")
+                            for m in dashboard_spec.get("measures", [])]
+            skipped_measures = [m for m in all_measures
+                                if m not in valid_measures]
+
+            # Column breakdown
+            numeric_count = sum(
+                1 for c in pbi_profile.get("columns", [])
+                if c.get("semantic_type") == "measure"
             )
+            categorical_count = col_count - numeric_count
+
+            # Tableau info (if migration)
+            tableau_file_name = ""
+            tableau_worksheets = []
+            tableau_calcs_found = []
+            tableau_calcs_converted = []
+            tableau_calcs_failed = []
+            if self.tableau_spec:
+                tableau_file_name = self.tableau_spec.get(
+                    "file_name", "Tableau workbook"
+                )
+                tableau_worksheets = [
+                    w.get("name", "?")
+                    for w in self.tableau_spec.get("worksheets", [])
+                ]
+                for cf in self.tableau_spec.get("calculated_fields", []):
+                    cf_name = cf.get("name", "?")
+                    tableau_calcs_found.append(cf_name)
+                    if cf_name in valid_measures:
+                        tableau_calcs_converted.append(cf_name)
+                    else:
+                        tableau_calcs_failed.append(cf_name)
+
+            build_context = {
+                "data_file": data_file_name,
+                "row_count": row_count,
+                "col_count": col_count,
+                "numeric_count": numeric_count,
+                "categorical_count": categorical_count,
+                "table_name": table_name,
+                "page_names": page_names,
+                "visuals_per_page": visuals_per_page,
+                "measures_created": list(valid_measures),
+                "measures_skipped": skipped_measures,
+                "fields_valid": field_audit.get("valid", 0),
+                "fields_fixed": field_audit.get("fixed", 0),
+                "fields_removed": field_audit.get("removed", 0),
+                "relationships": [str(r) for r in (relationships or [])],
+                "m_expression_source": data_file_name,
+                "tableau_file": tableau_file_name,
+                "tableau_worksheets": tableau_worksheets,
+                "tableau_calcs_found": tableau_calcs_found,
+                "tableau_calcs_converted": tableau_calcs_converted,
+                "tableau_calcs_failed": tableau_calcs_failed,
+            }
+
+            # Log the full build context to trace logger
+            self.trace.log("powerbi_build_summary", build_context)
+
             return json.dumps({
                 "status": "success",
                 "file_path": zip_path,
                 "project_name": project_name,
                 "pages": page_count,
                 "visuals": visual_count,
-                "measures": len(dashboard_spec.get("measures", [])),
+                "measures": len(valid_measures),
+                "build_context": build_context,
                 "instructions": (
                     f"Extract the ZIP to a folder, then double-click "
                     f"Open_Dashboard.bat -- it will set up the data "

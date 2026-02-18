@@ -886,73 +886,66 @@ with chat_col:
                 st.markdown(prompt)
 
             with st.chat_message("assistant"):
-                response = None
 
-                # Check if agent will route to export
-                msg_lower = prompt.lower()
-                is_export_request = any(kw in msg_lower for kw in [
+                # Create a status container that updates in REAL TIME
+                status = st.status("Dr. Data is working...", expanded=True)
+                response_container = st.empty()
+                download_container = st.container()
+
+                # Show initial acknowledgment
+                status.write("Received your request.")
+
+                msg_lower = prompt.lower() if isinstance(prompt, str) else ""
+                is_export = any(kw in msg_lower for kw in [
                     "power bi", "powerbi", "pbi", "dashboard", "html",
-                    "interactive", "powerpoint", "pptx", "slides",
-                    "pdf", "report", "word", "docx",
+                    "powerpoint", "pptx", "slides", "pdf", "word", "docx",
                 ])
 
-                if is_export_request:
-                    # ============================================
-                    # EXPORT FLOW -- show every step like Claude CLI
-                    # ============================================
-                    progress_placeholder = st.empty()
-                    status_messages = []
-
-                    def update_status(msg):
-                        status_messages.append(msg)
-                        progress_placeholder.markdown(
-                            "\n\n".join([
-                                f"**{m}**" if i == len(status_messages) - 1
-                                else f'<span style="color:#808080">{m}</span>'
-                                for i, m in enumerate(status_messages)
-                            ]),
-                            unsafe_allow_html=True,
-                        )
-
-                    update_status("Received your request. Let me get to work.")
-
-                    # Detect what's needed
+                if is_export:
                     if any(kw in msg_lower for kw in ["power bi", "powerbi", "pbi"]):
-                        update_status("Setting up Power BI project generation...")
-                    if any(kw in msg_lower for kw in ["dashboard", "html", "interactive"]):
-                        update_status("Preparing interactive dashboard builder...")
+                        status.write("Preparing Power BI generation pipeline...")
+                        status.write("Step 1: Profiling your data...")
+                    if any(kw in msg_lower for kw in ["dashboard", "html"]):
+                        status.write("Preparing interactive dashboard builder...")
                     if any(kw in msg_lower for kw in ["powerpoint", "pptx", "slides"]):
-                        update_status("Preparing PowerPoint generator...")
+                        status.write("Preparing PowerPoint generator...")
+                else:
+                    status.write("Analyzing your question...")
 
-                    time.sleep(0.3)
+                # Call the agent -- SINGLE call for all flows
+                response = None
+                try:
+                    response = agent.respond(
+                        prompt,
+                        st.session_state.messages,
+                        st.session_state.uploaded_files,
+                    )
 
-                    update_status("Analyzing your data profile...")
+                    if is_export:
+                        status.write("Building your deliverables...")
 
-                    # Call the agent
-                    try:
-                        response = agent.respond(
-                            prompt,
-                            st.session_state.messages,
-                            st.session_state.uploaded_files,
-                        )
+                    # Handle response
+                    if response is None:
+                        status.update(label="Something went wrong", state="error", expanded=False)
+                        response_container.warning("Dr. Data hit a snag. Try again.")
 
-                        if response and isinstance(response, dict):
-                            downloads = response.get("downloads", []) or []
-                            content = response.get("content", "")
+                    elif isinstance(response, dict):
+                        content = response.get("content", "")
+                        downloads = response.get("downloads", []) or []
+                        engine = response.get("engine", "claude")
 
-                            if downloads:
-                                update_status(f"Generation complete. {len(downloads)} file(s) ready.")
-                                progress_placeholder.empty()
+                        if downloads:
+                            status.write(f"Generated {len(downloads)} file(s).")
+                            status.update(label="Done", state="complete", expanded=False)
 
-                                if content:
-                                    st.markdown(content)
+                            if content:
+                                response_container.markdown(content)
 
-                                st.markdown("---")
-                                st.markdown("**Your files:**")
+                            with download_container:
                                 for idx, dl in enumerate(downloads):
                                     file_path = dl.get("path", "")
                                     file_name = dl.get("filename", dl.get("name", f"file_{idx}"))
-                                    if file_path and os.path.exists(file_path):
+                                    if file_path and os.path.exists(str(file_path)):
                                         with open(file_path, "rb") as f:
                                             file_bytes = f.read()
                                         mime_map = {
@@ -969,62 +962,39 @@ with chat_col:
                                             data=file_bytes,
                                             file_name=file_name,
                                             mime=mime_map.get(ext, "application/octet-stream"),
-                                            key=f"dl_{file_name}_{int(now)}_{idx}",
+                                            key=f"dl_{file_name}_{int(time.time() * 1000)}_{idx}",
                                         )
                                     else:
                                         st.warning(f"File not found: {file_path}")
-                            else:
-                                progress_placeholder.empty()
-                                st.markdown(
-                                    content if content
-                                    else "Generation complete but no files were produced. Check the terminal for errors."
-                                )
-                        elif response and isinstance(response, str):
-                            progress_placeholder.empty()
-                            st.markdown(response)
                         else:
-                            progress_placeholder.empty()
-                            st.warning("Dr. Data hit a snag. Try your request again.")
-
-                    except Exception as e:
-                        progress_placeholder.empty()
-                        st.error(f"Error: {str(e)[:200]}. Check terminal for details.")
-
-                else:
-                    # ============================================
-                    # NORMAL CHAT FLOW -- spinner then response
-                    # ============================================
-                    with st.spinner(""):
-                        try:
-                            response = agent.respond(
-                                prompt,
-                                st.session_state.messages,
-                                st.session_state.uploaded_files,
-                            )
-
-                            if response and isinstance(response, dict):
-                                content = response.get("content", "")
-                                if content:
-                                    st.markdown(content)
-                                downloads = response.get("downloads", []) or []
-                                if downloads:
-                                    for idx, dl in enumerate(downloads):
-                                        file_path = dl.get("path", "")
-                                        file_name = dl.get("filename", dl.get("name", f"file_{idx}"))
-                                        if file_path and os.path.exists(file_path):
-                                            with open(file_path, "rb") as f:
-                                                st.download_button(
-                                                    label=f"Download {file_name}",
-                                                    data=f.read(),
-                                                    file_name=file_name,
-                                                    key=f"dl_{file_name}_{int(now)}_{idx}",
-                                                )
-                            elif response and isinstance(response, str):
-                                st.markdown(response)
+                            status.update(label="Done", state="complete", expanded=False)
+                            if content:
+                                response_container.markdown(content)
                             else:
-                                st.warning("Dr. Data is thinking. Try again.")
-                        except Exception as e:
-                            st.error(f"Error: {str(e)[:200]}")
+                                response_container.warning("No output generated. Check terminal for errors.")
+
+                        # Engine tag
+                        engine_colors = {"claude": "#B39DDB", "openai": "#81C784", "gemini": "#FFB74D"}
+                        st.markdown(
+                            f'<div style="text-align:right;font-size:10px;'
+                            f'color:{engine_colors.get(engine, "#808080")};'
+                            f'opacity:0.5;">{engine.title()}</div>',
+                            unsafe_allow_html=True,
+                        )
+
+                    elif isinstance(response, str) and response.strip():
+                        status.update(label="Done", state="complete", expanded=False)
+                        response_container.markdown(response)
+
+                    else:
+                        status.update(label="No response", state="error", expanded=False)
+                        response_container.warning("Dr. Data returned empty. Try rephrasing.")
+
+                except Exception as e:
+                    import traceback
+                    traceback.print_exc()
+                    status.update(label="Error", state="error", expanded=False)
+                    response_container.error(f"Error: {str(e)[:300]}")
 
                 # SAVE TO HISTORY -- always
                 if response:

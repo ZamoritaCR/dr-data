@@ -188,10 +188,15 @@ class PBIPGenerator:
         # 6. Pages and visuals (using validated measure names + profile columns)
         rl = config.get("report_layout", {})
         raw_sections = rl.get("sections", [])
-        page_ids = self._write_pages(
+        page_ids, field_audit = self._write_pages(
             pages_dir, raw_sections, table_name, valid_measure_names,
             col_types, profile_col_names,
         )
+
+        # Visual field audit summary
+        print(f"[VISUAL AUDIT] {field_audit['valid']} valid fields, "
+              f"{field_audit['fixed']} auto-fixed, "
+              f"{field_audit['removed']} removed")
 
         # 7. pages.json
         self._write_pages_json(pages_dir, page_ids)
@@ -216,7 +221,14 @@ class PBIPGenerator:
         print(f"[OK] PBIP project generated: {project_dir}")
         print(f"     {total} files created")
 
-        return str(project_dir)
+        return {
+            "path": str(project_dir),
+            "field_audit": field_audit,
+            "table_names": list(table_names),
+            "valid_measures": list(valid_measure_names),
+            "page_count": len(page_ids),
+            "file_count": total,
+        }
 
     # ------------------------------------------------------------------ #
     #  {name}.pbip                                                        #
@@ -341,8 +353,13 @@ class PBIPGenerator:
 
     def _write_pages(self, pages_dir, raw_sections, table_name, measure_names,
                      col_types=None, profile_col_names=None):
-        """Write page.json and visual.json files. Returns list of page IDs."""
+        """Write page.json and visual.json files.
+
+        Returns (page_ids, audit_totals) where audit_totals is
+        {"valid": int, "fixed": int, "removed": int}.
+        """
         page_ids = []
+        audit_totals = {"valid": 0, "fixed": 0, "removed": 0}
 
         for idx, raw in enumerate(raw_sections):
             page_id = uuid.uuid4().hex[:20]
@@ -367,16 +384,19 @@ class PBIPGenerator:
                 viz_id = uuid.uuid4().hex[:20]
                 viz_dir = visuals_root / viz_id
                 viz_dir.mkdir(parents=True, exist_ok=True)
-                self._write_visual_json(
+                fix_stats = self._write_visual_json(
                     viz_dir, vc, vidx, viz_id,
                     table_name, measure_names, col_types,
                     profile_col_names,
                 )
+                if fix_stats:
+                    for k in audit_totals:
+                        audit_totals[k] += fix_stats.get(k, 0)
                 vc_count += 1
 
             print(f"    [+] page '{display_name}': {vc_count} visuals")
 
-        return page_ids
+        return page_ids, audit_totals
 
     def _write_visual_json(self, viz_dir, vc, vidx, viz_id, table_name,
                            measure_names, col_types=None,
@@ -425,7 +445,13 @@ class PBIPGenerator:
                 }]
             }
 
+        # Validate & fix all field references against real column names
+        valid_cols = list(profile_col_names | measure_names) if profile_col_names else []
+        doc, fix_stats = self._fix_field_references(doc, valid_cols, table_name)
+
         self._write_json(viz_dir / "visual.json", doc)
+
+        return fix_stats
 
     # ------------------------------------------------------------------ #
     #  Visual query state                                                  #
@@ -538,6 +564,149 @@ class PBIPGenerator:
             "queryRef": f"{table_name}.{field_name}",
             "nativeQueryRef": field_name,
         }
+
+    # ------------------------------------------------------------------ #
+    #  Field reference validation & auto-fix                               #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _fuzzy_match_column(name, valid_columns):
+        """Find the best matching column name from valid_columns.
+
+        Tries:
+          1. Case-insensitive exact match
+          2. Stripped/collapsed whitespace match
+          3. Best substring / edit-distance heuristic
+        Returns the matched column name or None.
+        """
+        if not name or not valid_columns:
+            return None
+
+        name_lower = name.lower().strip()
+
+        # 1. Case-insensitive exact match
+        for vc in valid_columns:
+            if vc.lower().strip() == name_lower:
+                return vc
+
+        # 2. Whitespace-collapsed match  (e.g. "DishCategory" vs "Dish Category")
+        def collapse(s):
+            return "".join(s.lower().split())
+
+        name_collapsed = collapse(name)
+        for vc in valid_columns:
+            if collapse(vc) == name_collapsed:
+                return vc
+
+        # 3. Underscore/space normalised  (e.g. "dish_name" vs "Dish Name")
+        def normalise(s):
+            return s.lower().replace("_", "").replace("-", "").replace(" ", "")
+
+        name_norm = normalise(name)
+        for vc in valid_columns:
+            if normalise(vc) == name_norm:
+                return vc
+
+        return None
+
+    def _fix_field_references(self, visual_config, valid_columns, table_name):
+        """Recursively walk a visual config and fix/remove broken field refs.
+
+        Returns (fixed_config, stats) where stats is a dict with counts:
+          valid, fixed, removed
+        """
+        stats = {"valid": 0, "fixed": 0, "removed": 0}
+        valid_set = set(valid_columns)
+
+        def _fix_property(node, parent_list=None, parent_idx=None):
+            """Fix a Property value inside a Column/Measure/Aggregation node."""
+            if isinstance(node, dict):
+                # Fix Entity (table name) references
+                if "Entity" in node:
+                    old_entity = node["Entity"]
+                    if old_entity != table_name:
+                        print(f"    [FIELD FIX] Entity '{old_entity}' -> '{table_name}'")
+                        node["Entity"] = table_name
+
+                # Fix Property (column/field name) references
+                if "Property" in node:
+                    prop = node["Property"]
+                    if prop in valid_set:
+                        stats["valid"] += 1
+                    else:
+                        match = self._fuzzy_match_column(prop, valid_columns)
+                        if match:
+                            print(f"    [FIELD FIX] {prop} -> {match}")
+                            node["Property"] = match
+                            stats["fixed"] += 1
+                        else:
+                            print(f"    [FIELD REMOVED] {prop} - no match in data")
+                            stats["removed"] += 1
+                            # Signal removal to parent
+                            return False
+
+                for v in node.values():
+                    result = _fix_property(v, None, None)
+                    if result is False:
+                        return False
+
+            elif isinstance(node, list):
+                to_remove = []
+                for i, item in enumerate(node):
+                    result = _fix_property(item, node, i)
+                    if result is False:
+                        to_remove.append(i)
+                for i in reversed(to_remove):
+                    node.pop(i)
+
+            return True
+
+        # Walk the queryState projections
+        query_state = (visual_config.get("visual", {})
+                       .get("query", {})
+                       .get("queryState", {}))
+        roles_to_remove = []
+        for role_name, role_data in query_state.items():
+            projections = role_data.get("projections", [])
+            to_remove = []
+            for idx, proj in enumerate(projections):
+                field = proj.get("field", {})
+                result = _fix_property(field)
+                if result is False:
+                    to_remove.append(idx)
+                else:
+                    # Also fix queryRef and nativeQueryRef to match
+                    self._sync_query_refs(proj, table_name)
+            for i in reversed(to_remove):
+                projections.pop(i)
+            if not projections:
+                roles_to_remove.append(role_name)
+        for role_name in roles_to_remove:
+            del query_state[role_name]
+
+        return visual_config, stats
+
+    @staticmethod
+    def _sync_query_refs(projection, table_name):
+        """Re-derive queryRef and nativeQueryRef from the field structure."""
+        field = projection.get("field", {})
+
+        if "Measure" in field:
+            prop = field["Measure"].get("Property", "")
+            projection["queryRef"] = f"{table_name}.{prop}"
+            projection["nativeQueryRef"] = prop
+
+        elif "Aggregation" in field:
+            expr = field["Aggregation"].get("Expression", {})
+            col = expr.get("Column", expr.get("column", {}))
+            prop = col.get("Property", "")
+            projection["queryRef"] = f"Sum({table_name}.{prop})"
+            projection["nativeQueryRef"] = f"Sum of {prop}"
+
+        elif "Column" in field:
+            prop = field["Column"].get("Property", "")
+            projection["queryRef"] = f"{table_name}.{prop}"
+            projection["nativeQueryRef"] = prop
 
     # ------------------------------------------------------------------ #
     #  Theme file                                                          #
@@ -1154,9 +1323,11 @@ if __name__ == "__main__":
     print("=" * 60)
 
     gen = PBIPGenerator(str(project_root / "output"))
-    out = gen.generate(config, data_profile, dashboard_spec, data_file)
+    result = gen.generate(config, data_profile, dashboard_spec, data_file)
+    out = result["path"] if isinstance(result, dict) else result
 
     safe = gen._safe_name(dashboard_spec.get("dashboard_title", "Dashboard"))
+    print(f"\nField audit: {result.get('field_audit', {})}")
     print(f"\nFile tree:")
     for suffix in [".pbip"]:
         p = Path(out) / f"{safe}{suffix}"

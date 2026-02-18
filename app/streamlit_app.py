@@ -1126,6 +1126,13 @@ with chat_col:
 
                 if is_export:
                     # ====== EXPORT PATH -- clean, no spinner ======
+                    ws = st.session_state.workspace_content
+                    ws["phase"] = "building"
+                    ws["progress_messages"].append(
+                        f"Building: {prompt[:80]}..."
+                        if len(prompt) > 80 else f"Building: {prompt}"
+                    )
+
                     response = None
                     try:
                         response = agent.respond(
@@ -1135,6 +1142,7 @@ with chat_col:
                         )
 
                         if response is None:
+                            ws["progress_messages"].append("Build failed")
                             st.markdown("Something went wrong. Try again.")
 
                         elif isinstance(response, dict):
@@ -1167,6 +1175,7 @@ with chat_col:
                     except Exception as e:
                         import traceback
                         traceback.print_exc()
+                        ws["progress_messages"].append("Build error")
                         st.markdown(f"Hit a snag: {str(e)[:200]}")
 
                     # Save export response to history

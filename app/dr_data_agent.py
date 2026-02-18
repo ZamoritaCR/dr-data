@@ -276,6 +276,9 @@ class DrDataAgent:
         self.session = None
         self.session_bridge = None
 
+        # Snowflake data
+        self.snowflake_tables = {}
+
         # Trace logger for audit trail
         self.trace = TraceLogger()
 
@@ -1543,6 +1546,20 @@ class DrDataAgent:
         if self.tableau_spec:
             context_parts.append(
                 "[SYSTEM: Tableau/Alteryx file has been parsed. Structure available.]"
+            )
+
+        if self.snowflake_tables:
+            sf_detail = ", ".join(
+                f"{t} ({len(df)} rows x {len(df.columns)} cols)"
+                for t, df in self.snowflake_tables.items()
+            )
+            context_parts.append(
+                f"[SYSTEM: Data loaded from Snowflake warehouse. "
+                f"Tables: {sf_detail}. This is live enterprise data "
+                f"from SNOWFLAKE_SAMPLE_DATA.TPCH_SF1 schema -- "
+                f"contains customer, order, lineitem, supplier, part, "
+                f"nation, and region tables for a simulated business "
+                f"dataset. Proceed with analysis.]"
             )
 
         if context_parts:

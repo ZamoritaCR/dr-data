@@ -1453,12 +1453,13 @@ with tab2:
             "MySQL, SQL Server, SQLite"
         )
     else:
-        dq_subtab1, dq_subtab2, dq_subtab3, dq_subtab4, dq_subtab5, dq_subtab6 = st.tabs([
+        dq_subtab1, dq_subtab2, dq_subtab3, dq_subtab4, dq_subtab5, dq_subtab6, dq_subtab7 = st.tabs([
             "Quality Scanner",
             "Data Catalog",
             "Business Rules",
             "Trending",
             "Stewardship",
+            "Compliance",
             "Observability",
         ])
 
@@ -2880,9 +2881,194 @@ with tab2:
                     )
 
         # ============================================================
-        # SUBTAB 6: Data Observability (Monte Carlo Style)
+        # SUBTAB 6: Regulatory Compliance Mapping
         # ============================================================
         with dq_subtab6:
+            from core.compliance_map import ComplianceMapper
+            if "compliance" not in st.session_state:
+                st.session_state.compliance = ComplianceMapper()
+
+            _comp = st.session_state.compliance
+
+            st.markdown("#### Regulatory Compliance Mapping")
+
+            # Framework overview
+            _comp_fws = _comp.data.get("frameworks", {})
+            if _comp_fws:
+                _fw_cols = st.columns(min(len(_comp_fws), 6))
+                for _fi, (_fn, _fd) in enumerate(_comp_fws.items()):
+                    with _fw_cols[_fi % len(_fw_cols)]:
+                        _rc = len(_fd.get("requirements", {}))
+                        st.metric(_fn, f"{_rc} reqs")
+
+            # Auto-map
+            if _dq_tables:
+                if st.button(
+                    "Auto-Map Columns to Regulations",
+                    type="primary", key="comp_automap",
+                ):
+                    _comp_total = 0
+                    for _ctn, _cdf in _dq_tables.items():
+                        _cm = _comp.auto_map_columns(_cdf, _ctn)
+                        _comp_total += len(_cm) if _cm else 0
+                    st.success(
+                        f"Mapped {_comp_total} column-to-regulation "
+                        f"links")
+                    st.rerun()
+
+            # Assess compliance
+            if _dq.scan_results and _dq_tables:
+                if st.button("Assess Compliance", key="comp_assess"):
+                    with st.status(
+                        "Assessing regulatory compliance...",
+                        expanded=True,
+                    ) as _cs:
+                        for _ctn in _dq.scan_results:
+                            _cs.write(f"Assessing {_ctn}...")
+                            _crr = (
+                                st.session_state.rules_engine
+                                .evaluation_results.get(_ctn)
+                                if "rules_engine" in st.session_state
+                                else None
+                            )
+                            _comp.assess_compliance(
+                                _ctn, _dq.scan_results[_ctn], _crr)
+                        _cs.update(
+                            label="Compliance assessment complete",
+                            state="complete",
+                        )
+                    st.rerun()
+
+            # Results
+            _comp_scores = _comp.data.get("compliance_scores", {})
+            if _comp_scores:
+                _csummary = _comp.get_compliance_summary()
+
+                _cs1, _cs2, _cs3 = st.columns(3)
+                _cs1.metric(
+                    "Overall Compliance",
+                    f"{_csummary.get('overall_score', 0):.1f}%",
+                )
+                _cs2.metric(
+                    "Tables Assessed",
+                    _csummary.get("tables_assessed", 0),
+                )
+                _cs3.metric(
+                    "Critical Gaps",
+                    len(_csummary.get("critical_gaps", [])),
+                )
+
+                # By framework
+                st.markdown("##### Compliance by Framework")
+                _by_fw = _csummary.get("by_framework", {})
+                if _by_fw:
+                    _fw_rows = [
+                        {
+                            "Framework": _fwn,
+                            "Score": f"{_fwi.get('score', 0):.1f}%",
+                            "Compliant": _fwi.get("compliant", 0),
+                            "Non-Compliant": _fwi.get(
+                                "non_compliant", 0),
+                        }
+                        for _fwn, _fwi in _by_fw.items()
+                    ]
+                    st.dataframe(
+                        pd.DataFrame(_fw_rows),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+                # Critical gaps
+                _gaps = _csummary.get("critical_gaps", [])
+                if _gaps:
+                    st.markdown("##### Critical Compliance Gaps")
+                    for _g in _gaps[:10]:
+                        st.warning(
+                            f"**{_g.get('framework', '')} - "
+                            f"{_g.get('requirement_id', '')}**: "
+                            f"{_g.get('title', '')} "
+                            f"(Score: {_g.get('score', 0):.1f}%)")
+
+                # Per-table details
+                for _ctn, _ctcomp in _comp_scores.items():
+                    with st.expander(
+                        f"{_ctn}: "
+                        f"{_ctcomp.get('overall_compliance_score', 0):.1f}"
+                        f"% compliant"
+                    ):
+                        for _cfn, _cfd in _ctcomp.get(
+                            "frameworks", {}
+                        ).items():
+                            st.write(
+                                f"**{_cfn}**: "
+                                f"{_cfd.get('overall_score', 0):.1f}% "
+                                f"({_cfd.get('compliant_count', 0)} "
+                                f"compliant / "
+                                f"{_cfd.get('non_compliant_count', 0)} "
+                                f"non-compliant)")
+                            for _rid, _rd in _cfd.get(
+                                "requirements", {}
+                            ).items():
+                                if not _rd.get("compliant", True):
+                                    st.caption(
+                                        f"  {_rid}: "
+                                        f"{_rd.get('title', '')} - "
+                                        f"{_rd.get('score', 0):.1f}%")
+            else:
+                st.info(
+                    "Run a DQ scan, then click Assess Compliance "
+                    "to evaluate regulatory requirements.")
+
+            # Regulatory requirement browser
+            st.markdown("---")
+            st.markdown("##### Regulatory Requirements Browser")
+            _sel_fw = st.selectbox(
+                "Framework", list(_comp_fws.keys()),
+                key="comp_fw_select",
+            )
+            if _sel_fw:
+                _reqs = _comp.get_requirements_by_framework(_sel_fw)
+                if _reqs:
+                    _sev_ic = {
+                        "CRITICAL": "[CRIT]", "HIGH": "[HIGH]",
+                        "MEDIUM": "[MED]", "LOW": "[LOW]",
+                    }
+                    for _rid, _rdata in _reqs.items():
+                        _rsev = _rdata.get("severity", "MEDIUM")
+                        with st.expander(
+                            f"{_sev_ic.get(_rsev, '')} {_rid}: "
+                            f"{_rdata.get('title', '')}"
+                        ):
+                            st.write(
+                                f"**Description:** "
+                                f"{_rdata.get('description', '')}")
+                            st.write(
+                                f"**Data Elements:** "
+                                f"{', '.join(_rdata.get('data_elements', []))}")
+                            st.write(
+                                f"**DQ Dimensions:** "
+                                f"{', '.join(_rdata.get('dq_dimensions', []))}")
+                            st.write(f"**Severity:** {_rsev}")
+
+            # Export
+            st.markdown("---")
+            if st.button(
+                "Export Compliance Report (Markdown)",
+                key="comp_export",
+            ):
+                _comp_md = _comp.export_compliance_report(
+                    fmt="markdown")
+                if _comp_md:
+                    st.download_button(
+                        "Download", _comp_md,
+                        "compliance_report.md", "text/markdown",
+                        key="comp_dl",
+                    )
+
+        # ============================================================
+        # SUBTAB 7: Data Observability (Monte Carlo Style)
+        # ============================================================
+        with dq_subtab7:
             st.markdown("#### Data Observability (Monte Carlo Style)")
 
             if not _dq.scan_results:

@@ -44,6 +44,8 @@ from core.pdf_report import PDFReportBuilder
 from core.export_engine import ExportEngine
 from core.interactive_dashboard import InteractiveDashboard
 from core.trace_logger import TraceLogger
+from core.deliverable_registry import save_deliverable as _save_deliverable
+from core.deliverable_registry import search as _search_deliverables
 
 # ------------------------------------------------------------------ #
 #  Tool Definitions for Claude                                         #
@@ -1184,6 +1186,29 @@ class DrDataAgent:
               f"shape: {self.dataframe.shape if self.dataframe is not None else 'None'}")
         print(f'[ROUTE] Message: {user_message[:50]}... -> {"export" if is_export else "chat"}')
 
+        # --- Check deliverable registry for similar past work ---
+        _past_work_context = ""
+        try:
+            _similar = _search_deliverables(user_message)
+            if _similar:
+                _past_lines = []
+                for _item in _similar[:3]:
+                    _past_lines.append(
+                        f"- {_item['type'].upper()}: {_item['name']} "
+                        f"from {_item['source_file']} "
+                        f"({_item['created_at'][:10]}). "
+                        f"{_item['description']}"
+                    )
+                _past_work_context = (
+                    "I have built similar deliverables before:\n"
+                    + "\n".join(_past_lines)
+                    + "\nIf any of these are relevant, suggest reusing "
+                    "or building on them. Let the user decide. "
+                    "Do not auto-reuse without asking."
+                )
+        except Exception:
+            pass
+
         if is_export:
             # Guard: need data first
             if self.dataframe is None:
@@ -1418,6 +1443,34 @@ class DrDataAgent:
                     errors.append(f"Power BI Project: {e}")
                     _progress(f"  Power BI failed: {str(e)[:80]}")
 
+            # -- Save each deliverable to the persistent registry --
+            _src_file = getattr(self, "current_file_name", "") or ""
+            _cols_used = (
+                self.dataframe.columns.tolist()
+                if self.dataframe is not None else []
+            )
+            _type_map = {
+                "Interactive Dashboard": "dashboard",
+                "PowerPoint Presentation": "pptx",
+                "PDF Report": "pdf",
+                "Word Document": "docx",
+                "Power BI Project": "powerbi",
+            }
+            for _dl in downloads:
+                try:
+                    _save_deliverable({
+                        "type": _type_map.get(_dl["name"], "other"),
+                        "name": title,
+                        "source_file": _src_file,
+                        "columns_used": _cols_used,
+                        "row_count": row_count,
+                        "file_path": _dl.get("path", ""),
+                        "description": _dl.get("description", ""),
+                        "insights_found": "",
+                    })
+                except Exception:
+                    pass
+
             # -- Generate trace log and add to downloads --
             if downloads:
                 _progress("Generating trace log...")
@@ -1538,6 +1591,8 @@ class DrDataAgent:
                 f"{col_count} columns.{data_hint}"
                 + pbi_detail
             )
+            if _past_work_context:
+                followup_context += f"\n\n{_past_work_context}"
 
             # Generate LLM content summary if PBI build context available
             content = ""
@@ -1687,6 +1742,27 @@ class DrDataAgent:
                 f"nation, and region tables for a simulated business "
                 f"dataset. Proceed with analysis.]"
             )
+
+        # Inject past deliverable awareness
+        try:
+            _similar = _search_deliverables(user_message)
+            if _similar:
+                _lines = []
+                for _item in _similar[:3]:
+                    _lines.append(
+                        f"- {_item['type'].upper()}: {_item['name']} "
+                        f"from {_item['source_file']} "
+                        f"({_item['created_at'][:10]}). "
+                        f"{_item['description']}"
+                    )
+                context_parts.append(
+                    "[SYSTEM: Past deliverables that may be relevant:\n"
+                    + "\n".join(_lines)
+                    + "\nMention these naturally if the user's request "
+                    "relates to past work. Do not force it.]"
+                )
+        except Exception:
+            pass
 
         if context_parts:
             return "\n".join(context_parts) + "\n\n" + user_message

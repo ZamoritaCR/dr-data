@@ -33,6 +33,7 @@ from app.dr_data_agent import DrDataAgent
 from app.file_handler import ingest_file, ALL_SUPPORTED
 from core.multi_file_handler import MultiFileSession
 from core.audit_engine import AuditEngine
+from core.deliverable_registry import get_recent as _get_recent_deliverables
 
 
 def _safe_html(html_str, fallback_text=""):
@@ -821,7 +822,66 @@ with workspace_col:
                     st.rerun()
                 st.caption(desc)
 
-    else:
+    # === RECENT WORK (always visible if history exists) ===
+    _recent = _get_recent_deliverables(6)
+    if _recent:
+        st.markdown("---")
+        _safe_html(
+            '<div style="font-size:15px;font-weight:600;color:#FFFFFF;'
+            'margin-bottom:12px;">Recent Work</div>',
+            "**Recent Work**"
+        )
+        _type_icons = {
+            "dashboard": "&#9783;",
+            "powerbi": "&#9638;",
+            "pptx": "&#9776;",
+            "pdf": "&#9776;",
+            "docx": "&#9776;",
+            "other": "&#9679;",
+        }
+        _vis_count = min(len(_recent), 6)
+        _rw_cols = st.columns(min(_vis_count, 3))
+        for _ri, _rec in enumerate(_recent[:6]):
+            if _ri < 6:
+                with _rw_cols[_ri % 3]:
+                    _icon = _type_icons.get(_rec.get("type", ""), "&#9679;")
+                    _rdate = _rec.get("created_at", "")[:10]
+                    _safe_html(
+                        f'<div style="background:#1A1A1A;border:1px solid #333;'
+                        f'border-radius:8px;padding:12px;margin-bottom:8px;">'
+                        f'<div style="color:#FFE600;font-size:18px;">{_icon}</div>'
+                        f'<div style="color:#FFF;font-size:13px;font-weight:600;'
+                        f'margin:4px 0 2px 0;">{html_module.escape(_rec.get("name", "Untitled"))}</div>'
+                        f'<div style="color:#808080;font-size:11px;">'
+                        f'{html_module.escape(_rec.get("type", "").upper())} | '
+                        f'{html_module.escape(_rec.get("source_file", "")[:30])} | '
+                        f'{_rdate}</div>'
+                        f'<div style="color:#666;font-size:11px;margin-top:4px;">'
+                        f'{html_module.escape(_rec.get("description", "")[:80])}</div>'
+                        f'</div>',
+                        f'{_rec.get("name", "")} - {_rec.get("type", "")}'
+                    )
+                    _rpath = _rec.get("file_path", "")
+                    if _rpath and os.path.exists(_rpath):
+                        with open(_rpath, "rb") as _rf:
+                            st.download_button(
+                                label="Download",
+                                data=_rf.read(),
+                                file_name=os.path.basename(_rpath),
+                                key=f"rw_dl_{_rec.get('id', _ri)}",
+                                use_container_width=True,
+                            )
+
+        if len(_recent) > 6:
+            with st.expander("Show all"):
+                for _rec in _recent[6:]:
+                    st.markdown(
+                        f"**{_rec.get('name', '')}** -- "
+                        f"{_rec.get('type', '').upper()} | "
+                        f"{_rec.get('created_at', '')[:10]}"
+                    )
+
+    if ws["phase"] != "waiting" or ws.get("data_preview") is not None:
         # === KPI CARDS ===
         if ws["kpis"]:
             kpi_cols = st.columns(len(ws["kpis"]))

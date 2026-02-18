@@ -25,6 +25,7 @@ patch*.py
 
 # Debug dumps
 debug_*.json
+deliverable_history.json
 
 # IDE
 .vscode/

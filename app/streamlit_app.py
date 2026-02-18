@@ -419,7 +419,9 @@ if "workspace_content" not in st.session_state:
         "audit_releasable": None,  # NEW: release gate
     }
 
-if "agent" not in st.session_state:
+if ("agent" not in st.session_state
+        or (st.session_state.agent is not None
+            and not hasattr(st.session_state.agent, "chat_stream"))):
     try:
         st.session_state.agent = DrDataAgent()
     except Exception as e:
@@ -1217,7 +1219,19 @@ with chat_col:
 
                     # Build context and stream response word-by-word
                     enriched = agent._build_context_message(prompt)
-                    full_text = st.write_stream(agent.chat_stream(enriched))
+                    try:
+                        full_text = st.write_stream(agent.chat_stream(enriched))
+                    except AttributeError:
+                        # Fallback: blocking call if streaming unavailable
+                        response = agent.respond(
+                            prompt, st.session_state.messages,
+                            st.session_state.uploaded_files,
+                        )
+                        full_text = (
+                            response.get("content", "")
+                            if isinstance(response, dict) else str(response or "")
+                        )
+                        st.markdown(full_text)
 
                     # Check for any files generated during tool calls
                     chat_downloads = []

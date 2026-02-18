@@ -252,23 +252,25 @@ class HTMLDashboardBuilder:
 <title>{title}</title>
 <script src="https://cdn.plot.ly/plotly-2.35.0.min.js"></script>
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 :root {{
-  --bg:#0d1117;--surface:#161b22;--elevated:#1c2128;--border:#30363d;
-  --text:#e6edf3;--text2:#8b949e;--muted:#6e7681;
-  --blue:#1f6feb;--green:#238636;--amber:#d29922;--red:#da3633;--purple:#a371f7;
+  --bg:#0D0D0D;--surface:#1A1A1A;--elevated:#262626;--border:#333333;
+  --text:#FFFFFF;--text2:#B0B0B0;--muted:#808080;
+  --accent:#FFE600;--accent2:#FFDE00;--green:#238636;--amber:#d29922;--red:#da3633;--purple:#a371f7;
 }}
 *{{margin:0;padding:0;box-sizing:border-box;}}
-body{{background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-size:14px;}}
-.hdr{{background:linear-gradient(135deg,#0d1117,#161b22,#1a1f35);border-bottom:1px solid var(--border);padding:24px 32px;position:relative;}}
-.hdr::before{{content:"";position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--blue),var(--green),var(--blue));}}
-.hdr h1{{font-size:22px;font-weight:600;letter-spacing:-0.5px;}}
+body{{background:var(--bg);color:var(--text);font-family:'Inter',system-ui,-apple-system,sans-serif;font-size:14px;}}
+.hdr{{background:linear-gradient(135deg,#0D0D0D,#1A1A1A);border-bottom:1px solid var(--border);padding:20px 32px;position:relative;display:flex;align-items:center;justify-content:space-between;}}
+.hdr::before{{content:"";position:absolute;top:0;left:0;right:0;height:3px;background:var(--accent);}}
+.hdr h1{{font-size:20px;font-weight:600;letter-spacing:-0.3px;}}
 .hdr .meta{{display:flex;gap:20px;margin-top:6px;font-size:12px;color:var(--text2);flex-wrap:wrap;}}
+.hdr .wu-badge{{background:var(--accent);color:#000;font-weight:900;font-size:11px;padding:5px 12px;border-radius:3px;letter-spacing:1px;white-space:nowrap;}}
 .wrap{{max-width:1440px;margin:0 auto;padding:20px 32px;}}
 
 /* KPIs */
 .kpi-row{{display:flex;gap:14px;margin-bottom:20px;flex-wrap:wrap;}}
 .kpi{{flex:1;min-width:160px;background:linear-gradient(135deg,var(--surface),var(--elevated));border:1px solid var(--border);border-radius:10px;padding:18px 22px;text-align:center;transition:border-color .2s;}}
-.kpi:hover{{border-color:var(--blue);}}
+.kpi:hover{{border-color:var(--accent);}}
 .kpi .v{{font-size:26px;font-weight:700;line-height:1.2;}}
 .kpi .l{{font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:.8px;margin-top:4px;}}
 .kpi .s{{font-size:11px;color:var(--muted);margin-top:2px;}}
@@ -283,32 +285,35 @@ body{{background:var(--bg);color:var(--text);font-family:system-ui,-apple-system
 .fgrp select{{background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 28px 7px 10px;font-size:13px;min-width:140px;appearance:none;cursor:pointer;
 background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238b949e' d='M2 4l4 4 4-4'/%3E%3C/svg%3E");
 background-repeat:no-repeat;background-position:right 8px center;}}
-.fgrp select:hover{{border-color:var(--blue);}}
+.fgrp select:hover{{border-color:var(--accent);}}
 .fgrp .reset{{background:var(--elevated);color:var(--text2);border:1px solid var(--border);border-radius:6px;padding:7px 14px;font-size:12px;cursor:pointer;}}
 .fgrp .reset:hover{{border-color:var(--red);color:var(--red);}}
 
 /* Charts */
 .cgrid{{display:flex;flex-wrap:wrap;gap:16px;}}
 .cbox{{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px;min-height:340px;transition:border-color .2s;}}
-.cbox:hover{{border-color:var(--blue);}}
+.cbox:hover{{border-color:var(--accent);}}
 
 .footer{{border-top:1px solid var(--border);padding:16px 32px;text-align:center;font-size:11px;color:var(--muted);margin-top:32px;}}
-.filtered-badge{{display:inline-block;background:var(--blue);color:#fff;font-size:10px;padding:2px 8px;border-radius:10px;margin-left:8px;}}
+.filtered-badge{{display:inline-block;background:var(--accent);color:#000;font-size:10px;font-weight:600;padding:2px 8px;border-radius:10px;margin-left:8px;}}
 
 @media(max-width:900px){{.cgrid>div{{width:100%!important;}}.kpi-row{{flex-direction:column;}}.wrap{{padding:12px;}}}}
-@media print{{body{{background:#fff;color:#1a1a1a;}}.hdr{{background:#fff;border-bottom:2px solid #333;}}.hdr::before{{display:none;}}.hdr h1{{color:#1a1a1a;}}.kpi,.cbox{{background:#fff;border-color:#ddd;}}.kpi .v{{color:#1a1a1a;}}.stats{{background:#f5f5f5;}}}}
+@media print{{body{{background:#fff;color:#1a1a1a;}}.hdr{{background:#fff;border-bottom:3px solid #FFE600;}}.hdr::before{{background:#FFE600;}}.hdr h1{{color:#1a1a1a;}}.hdr .wu-badge{{background:#FFE600;-webkit-print-color-adjust:exact;print-color-adjust:exact;}}.kpi,.cbox{{background:#fff;border-color:#ddd;}}.kpi .v{{color:#1a1a1a;}}.stats{{background:#f5f5f5;}}footer{{color:#666;}}}}
 </style>
 </head>
 <body>
 
 <div class="hdr">
-  <h1>{title}<span id="filterBadge"></span></h1>
-  <div class="meta">
-    <span>{subtitle}</span>
-    <span id="rowCount">{row_count:,} records</span>
-    <span>{col_count} fields</span>
-    <span>Built {timestamp}</span>
+  <div>
+    <h1>{title}<span id="filterBadge"></span></h1>
+    <div class="meta">
+      <span>{subtitle}</span>
+      <span id="rowCount">{row_count:,} records</span>
+      <span>{col_count} fields</span>
+      <span>Built {timestamp}</span>
+    </div>
   </div>
+  <span class="wu-badge">WESTERN UNION</span>
 </div>
 
 <div class="wrap">
@@ -318,7 +323,7 @@ background-repeat:no-repeat;background-position:right 8px center;}}
   <div class="cgrid" id="chartGrid"></div>
 </div>
 
-<div class="footer">Built by Dr. Data -- Dashboard Intelligence Platform</div>
+<div class="footer">Built by Dr. Data -- Western Union Analytics</div>
 
 <script>
 // ============================================================
@@ -329,17 +334,17 @@ var CHARTS = {charts_json};
 var FILTERS = {filters_json};
 var KPIS = {kpis_json};
 var TOTAL_ROWS = {row_count};
-var COLORS = ['#1f6feb','#238636','#d29922','#da3633','#a371f7','#3fb950','#79c0ff','#ffa657','#56d4dd','#f778ba','#c4a5ff','#90e59a'];
+var COLORS = ['#FFE600','#FFDE00','#E6CF00','#D4A017','#F5C842','#FFB800','#C9A200','#FFF176','#FFD54F','#E0B400','#B8960F','#FFC107'];
 var PC = {{responsive:true, displayModeBar:false}};
 var BL = {{
-  paper_bgcolor:'#161b22', plot_bgcolor:'#161b22',
-  font:{{color:'#e6edf3',family:'system-ui,sans-serif',size:12}},
+  paper_bgcolor:'#1A1A1A', plot_bgcolor:'#1A1A1A',
+  font:{{color:'#FFFFFF',family:'Inter,system-ui,sans-serif',size:12}},
   margin:{{l:50,r:20,t:40,b:40}},
-  xaxis:{{gridcolor:'#30363d',linecolor:'#30363d',zerolinecolor:'#30363d'}},
-  yaxis:{{gridcolor:'#30363d',linecolor:'#30363d',zerolinecolor:'#30363d'}},
+  xaxis:{{gridcolor:'#333333',linecolor:'#333333',zerolinecolor:'#333333'}},
+  yaxis:{{gridcolor:'#333333',linecolor:'#333333',zerolinecolor:'#333333'}},
   colorway:COLORS,
-  legend:{{font:{{color:'#8b949e',size:11}},bgcolor:'transparent'}},
-  hoverlabel:{{bgcolor:'#1c2128',font:{{color:'#e6edf3',size:12}},bordercolor:'#30363d'}}
+  legend:{{font:{{color:'#B0B0B0',size:11}},bgcolor:'transparent'}},
+  hoverlabel:{{bgcolor:'#262626',font:{{color:'#FFFFFF',size:12}},bordercolor:'#333333'}}
 }};
 function ML(o){{ var b=JSON.parse(JSON.stringify(BL)); for(var k in o) b[k]=o[k]; return b; }}
 
@@ -407,7 +412,7 @@ function formatNum(v) {{
 
 function renderKPIs(data) {{
   var html = '';
-  var kColors = ['#1f6feb','#238636','#d29922','#a371f7'];
+  var kColors = ['#FFE600','#FFDE00','#F5C842','#FFB800'];
   KPIS.forEach(function(kpi, i) {{
     var vals = data.map(function(r){{ return parseFloat(r[kpi.column]); }}).filter(function(v){{ return !isNaN(v); }});
     if (vals.length === 0) return;
@@ -519,14 +524,14 @@ function renderCharts(data) {{
     if (type === 'line' || type === 'area') {{
       var ta = timeAggregate(data, xCol, yCol, agg);
       var fill = type === 'area' ? 'tozeroy' : 'none';
-      var fillColor = type === 'area' ? 'rgba(35,134,54,0.12)' : 'rgba(31,111,235,0.08)';
-      var lineColor = type === 'area' ? '#238636' : '#1f6feb';
+      var fillColor = type === 'area' ? 'rgba(255,230,0,0.10)' : 'rgba(255,230,0,0.06)';
+      var lineColor = type === 'area' ? '#FFDE00' : '#FFE600';
       Plotly.newPlot(divId, [{{
         x:ta.x, y:ta.y, type:'scatter', mode:'lines+markers',
         line:{{color:lineColor, width:2.5, shape:'spline'}},
         marker:{{size:4, color:lineColor}},
         fill: type === 'line' ? 'tozeroy' : fill,
-        fillcolor: type === 'line' ? 'rgba(31,111,235,0.08)' : fillColor,
+        fillcolor: type === 'line' ? 'rgba(255,230,0,0.06)' : fillColor,
         hovertemplate:'%{{x}}<br>%{{y:,.0f}}<extra></extra>'
       }}], ML({{title:{{text:title,font:{{size:14}}}}}}), PC);
 
@@ -535,7 +540,7 @@ function renderCharts(data) {{
       Plotly.newPlot(divId, [{{
         x:ag.map(function(r){{return r.x;}}),
         y:ag.map(function(r){{return r.y;}}),
-        type:'bar', marker:{{color:'#1f6feb'}},
+        type:'bar', marker:{{color:'#FFE600'}},
         hovertemplate:'%{{x}}<br>%{{y:,.0f}}<extra></extra>'
       }}], ML({{title:{{text:title,font:{{size:14}}}}}}), PC);
 
@@ -545,7 +550,7 @@ function renderCharts(data) {{
       Plotly.newPlot(divId, [{{
         y:ag.map(function(r){{return r.x;}}),
         x:ag.map(function(r){{return r.y;}}),
-        type:'bar', orientation:'h', marker:{{color:'#238636'}},
+        type:'bar', orientation:'h', marker:{{color:'#FFDE00'}},
         hovertemplate:'%{{y}}: %{{x:,.0f}}<extra></extra>'
       }}], ML({{title:{{text:title,font:{{size:14}}}},yaxis:{{automargin:true}}}}), PC);
 
@@ -556,8 +561,8 @@ function renderCharts(data) {{
         values:ag.map(function(r){{return r.y;}}),
         type:'pie', hole:0.5,
         textinfo:'percent+label',
-        textfont:{{color:'#e6edf3',size:11}},
-        marker:{{colors:COLORS, line:{{color:'#0d1117',width:2}}}},
+        textfont:{{color:'#FFFFFF',size:11}},
+        marker:{{colors:COLORS, line:{{color:'#0D0D0D',width:2}}}},
         hovertemplate:'%{{label}}<br>%{{value:,.0f}} (%{{percent}})<extra></extra>'
       }}], ML({{title:{{text:title,font:{{size:14}}}},showlegend:true}}), PC);
 
@@ -569,7 +574,7 @@ function renderCharts(data) {{
         x:pts.map(function(r){{return r.x;}}),
         y:pts.map(function(r){{return r.y;}}),
         type:'scatter', mode:'markers',
-        marker:{{color:'#a371f7',size:5,opacity:0.6}},
+        marker:{{color:'#FFE600',size:5,opacity:0.6}},
         hovertemplate:xCol+': %{{x:,.1f}}<br>'+yCol+': %{{y:,.1f}}<extra></extra>'
       }}], ML({{
         title:{{text:title,font:{{size:14}}}},

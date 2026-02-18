@@ -38,6 +38,7 @@ from core.dq_engine import DataQualityEngine
 from core.data_catalog import DataCatalog
 from core.rules_engine import BusinessRulesEngine
 from core.dq_history import DQHistory
+from core.trust_scoring import TrustScorer
 
 
 def _safe_html(html_str, fallback_text=""):
@@ -1814,6 +1815,119 @@ with tab2:
                 else:
                     st.info(
                         "Run a scan to see recommendations.")
+
+                # ── Trust Scores & Certification ──
+                st.markdown("---")
+                st.markdown("#### Trust Scores & Certification")
+
+                if "trust_scorer" not in st.session_state:
+                    st.session_state.trust_scorer = TrustScorer()
+
+                _scorer = st.session_state.trust_scorer
+
+                if _dq.scan_results:
+                    _t_catalog = st.session_state.get(
+                        "data_catalog", None)
+                    _t_rules = st.session_state.get(
+                        "rules_engine", None)
+                    _t_hist = st.session_state.get(
+                        "dq_history", None)
+
+                    _trust_scores = {}
+                    for _tsn, _tsr in _dq.scan_results.items():
+                        _t_cat = (
+                            _t_catalog.get_table_catalog(_tsn)
+                            if _t_catalog else None
+                        )
+                        _t_rr = (
+                            _t_rules.evaluation_results.get(_tsn)
+                            if _t_rules else None
+                        )
+                        _t_hd = (
+                            _t_hist.get_scan_frequency(_tsn)
+                            if _t_hist else None
+                        )
+                        _trust_scores[_tsn] = (
+                            _scorer.calculate_trust_score(
+                                _tsn, dq_result=_tsr,
+                                catalog_entry=_t_cat,
+                                rule_results=_t_rr,
+                                history_data=_t_hd,
+                            )
+                        )
+
+                    _t_summary = _scorer.generate_trust_summary(
+                        _trust_scores)
+
+                    ts1, ts2, ts3, ts4, ts5 = st.columns(5)
+                    ts1.metric(
+                        "Avg Trust Score",
+                        f"{_t_summary.get('avg_trust_score', 0):.1f}",
+                    )
+                    ts2.metric(
+                        "Certified",
+                        _t_summary.get("certified", 0),
+                    )
+                    ts3.metric(
+                        "Warning",
+                        _t_summary.get("warning", 0),
+                    )
+                    ts4.metric(
+                        "Quarantined",
+                        _t_summary.get("quarantined", 0),
+                    )
+                    ts5.metric(
+                        "Tables Scored",
+                        _t_summary.get("total_tables", 0),
+                    )
+
+                    _cert_icons = {
+                        "Certified": "[OK]",
+                        "Warning": "[!!]",
+                        "Quarantined": "[XX]",
+                    }
+                    for _tsn, _tres in _trust_scores.items():
+                        _tscore = _tres["trust_score"]
+                        _tcert = _tres["recommended_certification"]
+                        _ticon = _cert_icons.get(_tcert, "[--]")
+
+                        with st.expander(
+                            f"{_ticon} {_tsn}: Trust Score "
+                            f"{_tscore:.1f}/100 ({_tcert})"
+                        ):
+                            _factors = _tres.get("factors", {})
+                            _frows = []
+                            for _fn, _fd in _factors.items():
+                                _frows.append({
+                                    "Factor": _fn.replace(
+                                        "_", " ").title(),
+                                    "Score": f"{_fd['score']:.1f}",
+                                    "Weight": _fd["weight"],
+                                    "Description": _fd["description"],
+                                })
+                            st.dataframe(
+                                pd.DataFrame(_frows),
+                                use_container_width=True,
+                                hide_index=True,
+                            )
+
+                            # Apply certification
+                            if _t_catalog:
+                                if st.button(
+                                    f"Apply {_tcert} certification "
+                                    f"to catalog",
+                                    key=f"trust_apply_{_tsn}",
+                                ):
+                                    _t_catalog.set_certification(
+                                        _tsn, _tcert,
+                                        certified_by="Trust Scorer",
+                                        notes=(
+                                            f"Auto-certified with "
+                                            f"trust score {_tscore:.1f}"
+                                        ),
+                                    )
+                                    st.success(
+                                        f"{_tsn} marked as {_tcert}")
 
                 # ── Export ──
                 st.markdown("---")

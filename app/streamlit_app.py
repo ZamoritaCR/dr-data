@@ -400,40 +400,21 @@ st.markdown("""
         border-radius: 8px;
     }
 
-    /* === CAPABILITY CARDS GRID === */
-    .cap-grid {
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: 16px;
-        padding: 24px 0;
-    }
-    .cap-card {
-        background: linear-gradient(135deg, #1A1A1A 0%, #262626 100%);
-        border: 1px solid #333333;
-        border-radius: 12px;
-        padding: 24px 20px;
-        text-align: center;
-        transition: border-color 0.2s;
-    }
-    .cap-card:hover {
-        border-color: #FFDE00;
-    }
-    .cap-icon {
-        font-size: 32px;
-        margin-bottom: 12px;
-        display: block;
-        color: #FFDE00 !important;
-    }
-    .cap-title {
-        font-size: 14px;
-        font-weight: 600;
+    /* === CAPABILITY CARD BUTTONS === */
+    button[kind="secondary"][data-testid="stBaseButton-secondary"] {
+        background: linear-gradient(135deg, #1A1A1A 0%, #262626 100%) !important;
+        border: 1px solid #333333 !important;
+        border-radius: 12px !important;
+        padding: 20px 16px !important;
         color: #FFFFFF !important;
-        margin-bottom: 6px;
+        font-weight: 600 !important;
+        font-size: 14px !important;
+        min-height: 60px !important;
+        transition: border-color 0.2s !important;
     }
-    .cap-desc {
-        font-size: 12px;
-        color: #808080 !important;
-        line-height: 1.5;
+    button[kind="secondary"][data-testid="stBaseButton-secondary"]:hover {
+        border-color: #FFE600 !important;
+        color: #FFE600 !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -798,48 +779,47 @@ with workspace_col:
     ws = st.session_state.workspace_content
 
     if ws["phase"] == "waiting" and ws.get("data_preview") is None:
-        # Empty state -- capability showcase
+        # Empty state -- clickable capability cards
         _safe_html(
             '<div style="text-align:center;padding:32px 0 8px 0;">'
             '<div style="font-size:18px;font-weight:600;color:#FFFFFF;margin-bottom:4px;">'
             'The Art of the Possible</div>'
             '<div style="font-size:13px;color:#808080;margin-bottom:24px;">'
-            'Upload data in the sidebar to get started</div>'
-            '</div>'
-            '<div class="cap-grid">'
-            '  <div class="cap-card">'
-            '    <span class="cap-icon">&#9783;</span>'
-            '    <div class="cap-title">Interactive Dashboard</div>'
-            '    <div class="cap-desc">Full HTML dashboard with charts, KPIs, and filters -- ready to share</div>'
-            '  </div>'
-            '  <div class="cap-card">'
-            '    <span class="cap-icon">&#9638;</span>'
-            '    <div class="cap-title">Power BI Project</div>'
-            '    <div class="cap-desc">PBIP project with semantic model, DAX measures, and themed visuals</div>'
-            '  </div>'
-            '  <div class="cap-card">'
-            '    <span class="cap-icon">&#9776;</span>'
-            '    <div class="cap-title">Reports &amp; Exports</div>'
-            '    <div class="cap-desc">PDF, PowerPoint, Word, and Excel -- formatted for any audience</div>'
-            '  </div>'
-            '  <div class="cap-card">'
-            '    <span class="cap-icon">&#8644;</span>'
-            '    <div class="cap-title">Tableau Migration</div>'
-            '    <div class="cap-desc">Convert .twb/.twbx workbooks into Power BI with field mapping</div>'
-            '  </div>'
-            '  <div class="cap-card">'
-            '    <span class="cap-icon">&#9735;</span>'
-            '    <div class="cap-title">Live Data</div>'
-            '    <div class="cap-desc">Connect to Snowflake, query tables, and build from live warehouse data</div>'
-            '  </div>'
-            '  <div class="cap-card">'
-            '    <span class="cap-icon">&#9745;</span>'
-            '    <div class="cap-title">Data Audit</div>'
-            '    <div class="cap-desc">Automated quality checks, completeness scores, and release gates</div>'
-            '  </div>'
+            'Upload data in the sidebar, or click a card to get started</div>'
             '</div>',
-            "Welcome to Dr. Data. Upload data in the sidebar to get started."
+            "The Art of the Possible -- Upload data or click a card to get started."
         )
+
+        _capabilities = [
+            ("Interactive Dashboard", "dashboard",
+             "HTML dashboard with charts, KPIs, and filters"),
+            ("Power BI Project", "powerbi",
+             "PBIP with semantic model, DAX measures, themed visuals"),
+            ("Reports & Exports", "reports",
+             "PDF, PowerPoint, Word, Excel -- any audience"),
+            ("Tableau Migration", "tableau",
+             "Convert .twb/.twbx workbooks into Power BI"),
+            ("Live Data", "data_connection",
+             "Connect to Snowflake and build from warehouse data"),
+            ("Data Audit", "audit",
+             "Quality checks, completeness scores, release gates"),
+        ]
+
+        _row1 = st.columns(3)
+        for i, (title, key, desc) in enumerate(_capabilities[:3]):
+            with _row1[i]:
+                if st.button(title, key=f"cap_{key}", use_container_width=True):
+                    st.session_state.user_interest = key
+                    st.rerun()
+                st.caption(desc)
+
+        _row2 = st.columns(3)
+        for i, (title, key, desc) in enumerate(_capabilities[3:]):
+            with _row2[i]:
+                if st.button(title, key=f"cap_{key}", use_container_width=True):
+                    st.session_state.user_interest = key
+                    st.rerun()
+                st.caption(desc)
 
     else:
         # === KPI CARDS ===
@@ -1051,6 +1031,52 @@ with chat_col:
         })
 
         st.rerun()
+
+    # === HANDLE CAPABILITY CARD CLICKS ===
+    if st.session_state.get("user_interest"):
+        _interest = st.session_state.pop("user_interest")
+        _agent = st.session_state.agent
+        if _agent:
+            # Build context based on whether data is loaded
+            if _agent.dataframe is not None:
+                _fname = getattr(_agent, "current_file_name", "their data")
+                _rows = len(_agent.dataframe)
+                _cols = len(_agent.dataframe.columns)
+                _context = (
+                    f"The user just clicked on the {_interest} capability card. "
+                    f"They have {_fname} loaded with {_rows} rows and {_cols} columns. "
+                    f"Respond naturally -- suggest what you would build and why, "
+                    f"based on what you see in their data. If it makes sense, "
+                    f"just start building it."
+                )
+            else:
+                _context = (
+                    f"The user just clicked on the {_interest} capability card. "
+                    f"They have no data loaded yet. Guide them naturally."
+                )
+
+            with chat_container:
+                with st.chat_message("assistant"):
+                    try:
+                        _enriched = _agent._build_context_message(_context)
+                        _full = st.write_stream(_agent.chat_stream(_enriched))
+                    except (AttributeError, Exception):
+                        _resp = _agent.respond(
+                            _context,
+                            st.session_state.messages,
+                            st.session_state.uploaded_files,
+                        )
+                        _full = (
+                            _resp.get("content", "")
+                            if isinstance(_resp, dict) else str(_resp or "")
+                        )
+                        st.markdown(_full)
+
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": _full or "",
+                        "timestamp": time.time(),
+                    })
 
     # === CHAT INPUT (always active, never disabled) ===
     if prompt := st.chat_input("Ask Dr. Data anything -- I am here to help!", key="chat_input"):

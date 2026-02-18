@@ -58,7 +58,7 @@ st.set_page_config(
 
 DR_DATA_AVATAR = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="36" height="36"><defs><linearGradient id="abg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#1a1a1a"/><stop offset="100%" style="stop-color:#2d2d2d"/></linearGradient><linearGradient id="agl" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#3a3a3a"/><stop offset="100%" style="stop-color:#2d2d2d"/></linearGradient></defs><circle cx="24" cy="24" r="23" fill="url(#abg)" stroke="#4a4a4a" stroke-width="1"/><rect x="10" y="9" width="28" height="24" rx="8" fill="url(#agl)" stroke="#FFDE00" stroke-width="1"/><rect x="13" y="15" width="22" height="8" rx="4" fill="#1a1a1a" stroke="#FFDE00" stroke-width="0.8"/><circle cx="19" cy="19" r="2" fill="#FFDE00"/><circle cx="29" cy="19" r="2" fill="#FFDE00"/><path d="M 18 28 Q 24 33 30 28" fill="none" stroke="#FFDE00" stroke-width="1.5" stroke-linecap="round"/><line x1="24" y1="9" x2="24" y2="4" stroke="#4a4a4a" stroke-width="1.5"/><circle cx="24" cy="3" r="2" fill="#FFE600"/><rect x="12" y="38" width="24" height="6" rx="2" fill="#1a1a1a" stroke="#4a4a4a" stroke-width="0.5"/><text x="24" y="43" text-anchor="middle" fill="#FFDE00" font-family="monospace" font-size="4" font-weight="bold">DR.DATA</text></svg>'
 
-WU_LOGO = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 40" width="120" height="24"><rect width="200" height="40" rx="4" fill="#FFDE00"/><text x="12" y="28" font-family="Arial,Helvetica,sans-serif" font-size="20" font-weight="900" fill="#1a1a1a" letter-spacing="1">WESTERN UNION</text></svg>'
+WU_LOGO = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 40" width="156" height="24"><rect width="260" height="40" rx="4" fill="#FFE600"/><text x="14" y="28" font-family="Arial,Helvetica,sans-serif" font-size="20" font-weight="900" fill="#000000" letter-spacing="1">WESTERN UNION</text></svg>'
 
 
 # === CUSTOM CSS -- THE ENTIRE LOOK (Western Union) ===
@@ -77,7 +77,7 @@ st.markdown("""
         background-color: #0D0D0D;
         font-family: 'Inter', sans-serif !important;
     }
-    html, body, [class*="st-"] {
+    html, body, p, span, div, h1, h2, h3, h4, h5, h6, li, td, th, label, input, textarea, button {
         font-family: 'Inter', sans-serif !important;
     }
 

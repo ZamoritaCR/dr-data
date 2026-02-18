@@ -573,6 +573,151 @@ with st.sidebar:
                         key=f"sb_dl_{idx}_{dl['filename']}",
                     )
 
+    # ---- Snowflake Connection Panel ----
+    st.markdown("---")
+    st.markdown("**Snowflake Connection**")
+
+    if "snowflake" not in st.session_state:
+        st.session_state.snowflake = None
+    if "sf_tables" not in st.session_state:
+        st.session_state.sf_tables = []
+
+    if st.session_state.snowflake is None:
+        if st.button("Connect to Snowflake", key="sf_connect"):
+            with st.status("Connecting...", expanded=True) as sf_status:
+                from core.snowflake_connector import SnowflakeConnector
+                sf = SnowflakeConnector()
+                sf_status.write("Reaching Snowflake...")
+                if sf.connect():
+                    st.session_state.snowflake = sf
+                    sf_status.write("Connected. Loading tables...")
+                    try:
+                        tables = sf.get_sample_data_tables()
+                        st.session_state.sf_tables = (
+                            tables if tables else sf.list_tables()
+                        )
+                        sf_status.update(
+                            label="Connected", state="complete"
+                        )
+                    except Exception:
+                        st.session_state.sf_tables = sf.list_tables()
+                        sf_status.update(
+                            label="Connected", state="complete"
+                        )
+                    st.rerun()
+                else:
+                    sf_status.update(
+                        label="Connection failed - check .env credentials",
+                        state="error",
+                    )
+    else:
+        st.success("Snowflake connected")
+
+        # Table selector
+        tables = st.session_state.sf_tables
+        if tables:
+            if isinstance(tables, dict):
+                table_list = list(tables.keys())
+            elif isinstance(tables, list):
+                table_list = tables
+            else:
+                table_list = []
+
+            selected_tables = st.multiselect(
+                "Select tables to load",
+                table_list,
+                key="sf_table_select",
+            )
+
+            row_limit = st.slider(
+                "Row limit per table",
+                1000, 100000, 50000, step=5000,
+                key="sf_row_limit",
+            )
+
+            if st.button("Load selected tables", key="sf_load"):
+                with st.status(
+                    "Loading tables...", expanded=True
+                ) as load_status:
+                    sf = st.session_state.snowflake
+                    loaded_count = 0
+                    for tbl_name in selected_tables:
+                        try:
+                            load_status.write(f"Loading {tbl_name}...")
+                            df = sf.table_to_df(tbl_name, limit=row_limit)
+                            if df is not None and len(df) > 0:
+                                load_status.write(
+                                    f"{tbl_name}: {len(df)} rows x "
+                                    f"{len(df.columns)} columns"
+                                )
+                                # Add to multi-file session
+                                ms = st.session_state.multi_session
+                                if ms:
+                                    ms.add_dataframe(tbl_name, df)
+
+                                # Set on agent
+                                agent = st.session_state.get("agent")
+                                if agent:
+                                    if loaded_count == 0:
+                                        agent.dataframe = df
+                                        agent.current_file_name = tbl_name
+                                    if not hasattr(agent, "snowflake_tables"):
+                                        agent.snowflake_tables = {}
+                                    agent.snowflake_tables[tbl_name] = df
+                                loaded_count += 1
+                        except Exception as e:
+                            load_status.write(
+                                f"Error loading {tbl_name}: "
+                                f"{str(e)[:100]}"
+                            )
+
+                    if loaded_count > 0:
+                        # Auto-detect relationships for TPCH tables
+                        ms = st.session_state.multi_session
+                        if ms and len(ms.data_files) >= 2:
+                            try:
+                                unified_df, rels, log = ms.auto_unify()
+                                if rels:
+                                    ws = st.session_state.workspace_content
+                                    ws["relationships"] = rels
+                                    ws["join_log"] = log
+                            except Exception:
+                                pass
+
+                        load_status.update(
+                            label=f"Loaded {loaded_count} table(s)",
+                            state="complete",
+                        )
+                        st.rerun()
+                    else:
+                        load_status.update(
+                            label="No tables loaded", state="error"
+                        )
+
+        # Custom SQL
+        with st.expander("Custom SQL Query"):
+            sql = st.text_area("Enter SQL:", height=80, key="sf_sql")
+            if st.button("Run Query", key="sf_run_sql"):
+                if sql.strip():
+                    with st.spinner("Running..."):
+                        try:
+                            df = st.session_state.snowflake.query_to_df(sql)
+                            if df is not None:
+                                st.success(f"{len(df)} rows returned")
+                                agent = st.session_state.get("agent")
+                                if agent:
+                                    agent.dataframe = df
+                                    agent.current_file_name = "SQL Query Result"
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f"SQL error: {str(e)[:200]}")
+
+        if st.button("Disconnect", key="sf_disconnect"):
+            st.session_state.snowflake.disconnect()
+            st.session_state.snowflake = None
+            st.session_state.sf_tables = []
+            st.rerun()
+
     st.markdown("---")
     col_reset, col_new = st.columns(2)
     with col_reset:

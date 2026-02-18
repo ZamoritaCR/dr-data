@@ -457,14 +457,14 @@ with st.sidebar:
     if ws["deliverables"]:
         st.markdown("---")
         st.markdown("**Downloads**")
-        for dl in ws["deliverables"]:
+        for idx, dl in enumerate(ws["deliverables"]):
             if os.path.exists(dl["path"]):
                 with open(dl["path"], "rb") as f:
                     st.download_button(
                         label=dl["name"],
                         data=f.read(),
                         file_name=dl["filename"],
-                        key=f"sb_dl_{dl['filename']}",
+                        key=f"sb_dl_{idx}_{dl['filename']}",
                     )
 
     st.markdown("---")
@@ -563,7 +563,7 @@ with workspace_col:
                     "Review the audit findings above before distributing deliverables."
                 )
 
-            for dl in ws["deliverables"]:
+            for idx, dl in enumerate(ws["deliverables"]):
                 dl_col1, dl_col2 = st.columns([3, 1])
                 with dl_col1:
                     _safe_html(f'<div class="dl-card"><div class="dl-name">{html_module.escape(dl["name"])}</div><div class="dl-desc">{html_module.escape(dl.get("description", ""))}</div></div>', f'{dl["name"]}: {dl.get("description", "")}')
@@ -584,7 +584,7 @@ with workspace_col:
                                 label=label,
                                 data=f.read(),
                                 file_name=dl["filename"],
-                                key=f"ws_dl_{dl['filename']}",
+                                key=f"ws_dl_{idx}_{dl['filename']}",
                             )
 
 

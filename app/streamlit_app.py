@@ -1009,7 +1009,7 @@ with chat_col:
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
 
-    # === HANDLE AUTO-ANALYSIS ON FILE UPLOAD ===
+    # === HANDLE FILE UPLOAD -- instant acknowledgment, no blocking LLM call ===
     if st.session_state.file_just_uploaded:
         file_info = st.session_state.file_just_uploaded
         st.session_state.file_just_uploaded = None
@@ -1018,70 +1018,37 @@ with chat_col:
         name_str = ", ".join(names)
 
         ws = st.session_state.workspace_content
-        ws["phase"] = "analyzing"
+        ws["phase"] = "analyzed"
         ws["progress_messages"].append(f"Loaded {name_str}")
-        ws["progress_messages"].append("Running deep analysis...")
 
-        if st.session_state.agent:
-            try:
-                response = st.session_state.agent.analyze_uploaded_file()
-                if not response or not str(response).strip():
-                    response = (
-                        f"I have loaded your files: {name_str}. "
-                        f"The data looks great and is ready to go! "
-                        f"What would you like me to build?"
-                    )
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": response,
-                    "timestamp": time.time(),
-                })
-                ws["phase"] = "analyzed"
-                ws["progress_messages"].append(
-                    "Analysis complete -- audit passed"
-                    if ws.get("audit_releasable")
-                    else "Analysis complete -- review audit findings"
-                )
+        # Build a quick summary from data already profiled in sidebar
+        preview_note = ""
+        if ws.get("data_preview") is not None:
+            df = ws["data_preview"]
+            cols = ", ".join(df.columns[:6].tolist())
+            more = "..." if len(df.columns) > 6 else ""
+            preview_note = (
+                f" I can see {len(df):,} rows and "
+                f"{len(df.columns)} columns: {cols}{more}."
+            )
 
-                agent = st.session_state.agent
-                if agent.dataframe is not None and ws.get("data_preview") is None:
-                    ws["data_preview"] = agent.dataframe
+        audit_note = ""
+        if ws.get("audit_releasable") is True:
+            audit_note = " Data quality audit passed."
+            ws["progress_messages"].append("Audit passed")
+        elif ws.get("audit_releasable") is False:
+            audit_note = " Data quality audit flagged some issues -- check the workspace."
+            ws["progress_messages"].append("Audit flagged issues")
 
-            except Exception:
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": (
-                        f"I have loaded your files: {name_str}. "
-                        f"The data looks great and is ready to go! "
-                        f"What would you like me to build? I can create "
-                        f"dashboards, reports, presentations -- whatever "
-                        f"helps you most. The Art of the Possible starts here!"
-                    ),
-                    "timestamp": time.time(),
-                })
-        else:
-            preview_note = ""
-            if ws.get("data_preview") is not None:
-                df = ws["data_preview"]
-                preview_note = (
-                    f" I can see {len(df):,} rows and {len(df.columns)} columns: "
-                    f"{', '.join(df.columns[:6].tolist())}"
-                    f"{'...' if len(df.columns) > 6 else ''}."
-                )
-
-            st.session_state.messages.append({
-                "role": "assistant",
-                "content": (
-                    f"I have loaded {name_str}.{preview_note} "
-                    f"There is a lot we can do with this! I can build "
-                    f"interactive HTML dashboards, PDF reports, Power BI "
-                    f"projects, PowerPoint presentations, or a full "
-                    f"documentation package. Tell me who your audience "
-                    f"is and what story you want to tell -- I will take "
-                    f"it from there!"
-                ),
-                "timestamp": time.time(),
-            })
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": (
+                f"Loaded {name_str}.{preview_note}{audit_note} "
+                f"What would you like me to build? I can create dashboards, "
+                f"Power BI projects, reports, presentations -- whatever you need."
+            ),
+            "timestamp": time.time(),
+        })
 
         st.rerun()
 

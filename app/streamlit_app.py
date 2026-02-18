@@ -3471,3 +3471,56 @@ with tab2:
                     st.success(
                         f"Baseline stored for "
                         f"{len(_dq.scan_results)} table(s)")
+
+            st.markdown("---")
+            st.markdown("#### Pipeline Integration API")
+
+            from core.dq_api import DQAPIGateway
+
+            st.markdown("Use the DQ API Gateway to integrate quality checks into your data pipelines.")
+
+            with st.expander("API Reference"):
+                _api_gw = DQAPIGateway()
+                _api_spec = _api_gw.get_api_spec()
+                st.json(_api_spec)
+
+            with st.expander("Example: Quality Gate in Airflow"):
+                st.code('''from core.dq_api import DQAPIGateway
+from core.dq_engine import DataQualityEngine
+import pandas as pd
+
+# Initialize
+dq = DataQualityEngine()
+api = DQAPIGateway(dq_engine=dq)
+
+# Load your data
+df = pd.read_csv('transactions.csv')
+
+# Quality gate - pipeline continues only if data passes
+result = api.quality_gate(df, 'transactions', min_score=85, fail_on_critical=True)
+
+if not result['passed']:
+    raise Exception(f'Quality gate failed: {result["reason"]}')
+
+print(f'Quality gate passed: {result["score"]}/100')
+''', language="python")
+
+            with st.expander("Example: Batch Scan in dbt"):
+                st.code('''from core.dq_api import DQAPIGateway
+from core.dq_engine import DataQualityEngine
+
+api = DQAPIGateway(dq_engine=DataQualityEngine())
+
+# Scan all tables from your dbt run
+tables = {
+    'orders': orders_df,
+    'customers': customers_df,
+    'products': products_df,
+}
+
+result = api.batch_scan(tables, quality_gate_score=90)
+
+if not result['all_passed']:
+    failed = [t for t, d in result['tables'].items() if not d['passed_gate']]
+    raise Exception(f'Quality gates failed for: {failed}')
+''', language="python")

@@ -295,6 +295,11 @@ class DrDataAgent:
 
         # Data quality scan results (set via set_dq_results)
         self.dq_scan_results = None
+        self.trust_scores = None
+        self.copdq_result = None
+        self.compliance_summary = None
+        self.stewardship_stats = None
+        self.incident_stats = None
 
         # Trace logger for audit trail
         self.trace = TraceLogger()
@@ -1776,32 +1781,76 @@ class DrDataAgent:
         """Accept DQ scan results so they flow into conversational context."""
         self.dq_scan_results = scan_results
 
+    def set_trust_scores(self, trust_scores):
+        self.trust_scores = trust_scores
+
+    def set_copdq_result(self, copdq_result):
+        self.copdq_result = copdq_result
+
+    def set_compliance_summary(self, compliance_summary):
+        self.compliance_summary = compliance_summary
+
+    def set_stewardship_stats(self, stewardship_stats):
+        self.stewardship_stats = stewardship_stats
+
+    def set_incident_stats(self, incident_stats):
+        self.incident_stats = incident_stats
+
     def _build_dq_context(self):
-        """Build a context snippet summarising DQ scan results."""
+        """Build a context snippet summarising all DQ module results."""
         if not self.dq_scan_results:
             return ""
-        parts = ["[SYSTEM: DATA QUALITY SCAN RESULTS (DAMA-DMBOK)]"]
+        parts = ["\n\nDATA QUALITY CONTEXT:"]
         for tname, result in self.dq_scan_results.items():
             score = result.get("overall_score", 0)
+            parts.append(f"Table {tname}: DQ Score {score:.1f}/100")
             dims = result.get("dimensions", {})
-            recs = result.get("recommendations", [])
-            critical = len(
-                [r for r in recs if r.get("priority") == "CRITICAL"])
-            high = len(
-                [r for r in recs if r.get("priority") == "HIGH"])
-            parts.append(f"Table: {tname} -- Overall: {score:.1f}/100")
             for dim_name, dim_data in dims.items():
-                if isinstance(dim_data, dict):
-                    ds = dim_data.get("score")
-                    if ds is not None:
-                        parts.append(f"  {dim_name}: {ds:.1f}%")
-            if critical > 0 or high > 0:
+                if isinstance(dim_data, dict) and dim_data.get("score") is not None:
+                    parts.append(f"  {dim_name}: {dim_data['score']:.1f}%")
+            recs = result.get("recommendations", [])
+            critical = [r for r in recs if r.get("priority") == "CRITICAL"]
+            if critical:
+                parts.append(f"  CRITICAL ISSUES: {len(critical)}")
+                for c in critical[:3]:
+                    parts.append(f"    - {c.get('finding', '')[:80]}")
+
+        if self.trust_scores:
+            parts.append("\nTRUST SCORES:")
+            for tname, tscore in self.trust_scores.items():
                 parts.append(
-                    f"  Issues: {critical} critical, {high} high priority")
+                    f"  {tname}: {tscore.get('trust_score', 0):.1f}/100 "
+                    f"({tscore.get('recommended_certification', 'Uncertified')})")
+
+        if self.copdq_result:
+            parts.append(
+                f"\nCOST OF POOR DATA QUALITY: "
+                f"${self.copdq_result.get('total_annual_cost', 0):,.0f}/year")
+
+        if self.compliance_summary:
+            parts.append(
+                f"\nCOMPLIANCE: Overall "
+                f"{self.compliance_summary.get('overall_score', 0):.1f}%")
+            gaps = self.compliance_summary.get("critical_gaps", [])
+            if gaps:
+                parts.append(f"  Critical gaps: {len(gaps)}")
+
+        if self.stewardship_stats:
+            parts.append(
+                f"\nOPEN DQ ISSUES: "
+                f"{self.stewardship_stats.get('total_open', 0)}")
+            parts.append(
+                f"SLA BREACHES: "
+                f"{self.stewardship_stats.get('sla_breaches', 0)}")
+
+        if self.incident_stats:
+            parts.append(
+                f"\nOPEN INCIDENTS: "
+                f"{self.incident_stats.get('open', 0)}")
+
         parts.append(
-            "Use your DAMA-DMBOK expertise to discuss these results "
-            "when the user asks about data quality.")
-        parts.append("[END DQ CONTEXT]")
+            "\nYou are a DAMA-DMBOK expert. Use this context to "
+            "answer DQ questions with authority.")
         return "\n".join(parts)
 
     def _build_context_message(self, user_message):

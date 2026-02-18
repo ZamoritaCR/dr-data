@@ -1563,6 +1563,13 @@ with tab2:
                                 _dq_status.write(
                                     f"Cross-table error: {str(_e)[:200]}")
 
+                        # Auto-create stewardship issues for critical findings
+                        if "stewardship" in st.session_state:
+                            for _swtn in _dq_to_scan:
+                                if _swtn in _dq.scan_results:
+                                    st.session_state.stewardship.create_issues_from_dq_scan(
+                                        _dq.scan_results[_swtn], _swtn)
+
                         _dq_status.update(
                             label=f"Scan complete: {len(_dq_to_scan)} table(s) "
                                   f"assessed",
@@ -1864,6 +1871,10 @@ with tab2:
                     _t_summary = _scorer.generate_trust_summary(
                         _trust_scores)
 
+                    # Bridge trust scores to agent
+                    if "agent" in st.session_state and st.session_state.agent and hasattr(st.session_state.agent, "set_trust_scores"):
+                        st.session_state.agent.set_trust_scores(_trust_scores)
+
                     ts1, ts2, ts3, ts4, ts5 = st.columns(5)
                     ts1.metric(
                         "Avg Trust Score",
@@ -1993,6 +2004,9 @@ with tab2:
                         _copdq_result = _copdq.calculate_copdq(
                             _dq.scan_results, cost_params=_custom_params)
                         st.session_state.copdq_result = _copdq_result
+                        # Bridge COPDQ to agent
+                        if "agent" in st.session_state and st.session_state.agent and hasattr(st.session_state.agent, "set_copdq_result"):
+                            st.session_state.agent.set_copdq_result(_copdq_result)
 
                     if (
                         "copdq_result" in st.session_state
@@ -2690,6 +2704,9 @@ with tab2:
                         st.info(
                             "No new issues to create (all CRITICAL/HIGH "
                             "issues already tracked)")
+                    # Bridge stewardship stats to agent
+                    if "agent" in st.session_state and st.session_state.agent and hasattr(st.session_state.agent, "set_stewardship_stats"):
+                        st.session_state.agent.set_stewardship_stats(_sw.get_dashboard_stats())
                     st.rerun()
 
             st.markdown("---")
@@ -3022,6 +3039,9 @@ with tab2:
                             label="Compliance assessment complete",
                             state="complete",
                         )
+                    # Bridge compliance summary to agent
+                    if "agent" in st.session_state and st.session_state.agent and hasattr(st.session_state.agent, "set_compliance_summary"):
+                        st.session_state.agent.set_compliance_summary(_comp.get_compliance_summary())
                     st.rerun()
 
             # Results
@@ -3237,6 +3257,9 @@ with tab2:
                         f"from observability checks")
                 else:
                     st.info("No anomalies detected")
+                # Bridge incident stats to agent
+                if "agent" in st.session_state and st.session_state.agent and hasattr(st.session_state.agent, "set_incident_stats"):
+                    st.session_state.agent.set_incident_stats(_inc.get_dashboard_stats())
                 st.rerun()
 
             # -- Incident list --

@@ -1428,12 +1428,13 @@ with tab2:
             for _tn, _td in _dq_agent.snowflake_tables.items():
                 _dq_tables[_tn] = _td
 
-    # Also check multi-file session
+    # Also check multi-file session (data_files is a list of dicts)
     if "multi_session" in st.session_state:
         _ms = st.session_state.multi_session
-        for _fn, _fi in getattr(_ms, "data_files", {}).items():
-            if _fn not in _dq_tables and "dataframe" in _fi:
-                _dq_tables[_fn] = _fi["dataframe"]
+        for _fi in getattr(_ms, "data_files", []):
+            _fn = _fi.get("filename", "")
+            if _fn and _fn not in _dq_tables and "df" in _fi:
+                _dq_tables[_fn] = _fi["df"]
 
     if not _dq_tables:
         st.markdown("#### No Data Sources Connected")

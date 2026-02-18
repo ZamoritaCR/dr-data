@@ -17,12 +17,16 @@ from datetime import datetime
 import anthropic
 import pandas as pd
 import numpy as np
-from scipy import stats as scipy_stats
-from sklearn.cluster import KMeans
-from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import LinearRegression, LogisticRegression
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import r2_score, accuracy_score, silhouette_score
+try:
+    from scipy import stats as scipy_stats
+    from sklearn.cluster import KMeans
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.linear_model import LinearRegression, LogisticRegression
+    from sklearn.model_selection import train_test_split
+    from sklearn.metrics import r2_score, accuracy_score, silhouette_score
+    _HAS_SCIPY = True
+except ImportError:
+    _HAS_SCIPY = False
 
 try:
     from openai import OpenAI as _OpenAIClient

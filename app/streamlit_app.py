@@ -415,16 +415,17 @@ st.markdown("""
         font-size: 32px;
         margin-bottom: 12px;
         display: block;
+        color: #FFDE00 !important;
     }
     .cap-title {
         font-size: 14px;
         font-weight: 600;
-        color: #FFFFFF;
+        color: #FFFFFF !important;
         margin-bottom: 6px;
     }
     .cap-desc {
         font-size: 12px;
-        color: #808080;
+        color: #808080 !important;
         line-height: 1.5;
     }
 </style>

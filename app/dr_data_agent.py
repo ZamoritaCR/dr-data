@@ -46,6 +46,7 @@ from core.interactive_dashboard import InteractiveDashboard
 from core.trace_logger import TraceLogger
 from core.deliverable_registry import save_deliverable as _save_deliverable
 from core.deliverable_registry import search as _search_deliverables
+from core.audit_engine import AuditEngine as _AuditEngine
 
 # ------------------------------------------------------------------ #
 #  Tool Definitions for Claude                                         #
@@ -1468,6 +1469,65 @@ class DrDataAgent:
                         "description": _dl.get("description", ""),
                         "insights_found": "",
                     })
+                except Exception:
+                    pass
+
+            # -- Generate QA audit report and add to downloads --
+            if downloads and self.dataframe is not None:
+                _progress("Running quality audit...")
+                try:
+                    _auditor = _AuditEngine()
+                    _sub_reports = []
+
+                    # 1. Audit the source data
+                    _data_report = _auditor.audit_dataframe(
+                        self.dataframe,
+                        source_name=getattr(self, "current_file_name", "data"),
+                    )
+                    _sub_reports.append(_data_report)
+
+                    # 2. Audit each generated deliverable file
+                    for _dl in downloads:
+                        _fpath = _dl.get("path", "")
+                        if _fpath and os.path.exists(_fpath):
+                            _ext = os.path.splitext(_fpath)[1].lower()
+                            _ftype = "html" if _ext == ".html" else "binary"
+                            _sub_reports.append(
+                                _auditor.audit_deliverable(_fpath, _ftype)
+                            )
+
+                    # 3. Combine into single report
+                    _combined = _AuditEngine.combine_reports(
+                        _sub_reports,
+                        title=f"Quality Audit -- {title}",
+                    )
+                    _combined.compute_scores()
+
+                    # 4. Write standalone HTML
+                    _audit_path = os.path.join(
+                        self.output_dir, "quality_audit.html"
+                    )
+                    with open(_audit_path, "w", encoding="utf-8") as _af:
+                        _af.write(_combined.to_standalone_html(
+                            title=f"Quality Audit -- {title}"
+                        ))
+
+                    downloads.append({
+                        "name": "Quality Audit Report",
+                        "filename": "quality_audit.html",
+                        "path": _audit_path,
+                        "description": (
+                            f"Score {_combined.overall_score}/100 -- "
+                            f"{_combined.passed} passed, "
+                            f"{_combined.warnings} warnings, "
+                            f"{_combined.critical + _combined.blockers} critical. "
+                            f"{_combined.release_decision}"
+                        ),
+                    })
+                    _progress(
+                        f"  Quality score: {_combined.overall_score}/100 "
+                        f"({_combined.release_decision})"
+                    )
                 except Exception:
                     pass
 

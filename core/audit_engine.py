@@ -141,45 +141,45 @@ class AuditReport:
             badge_text = "REVIEW REQUIRED"
 
         html = f"""
-        <div style="background:#161b22;border:1px solid #30363d;border-radius:10px;padding:20px;margin:12px 0;font-family:-apple-system,sans-serif;color:#e6edf3;">
+        <div style="background:#1A1A1A;border:1px solid #333333;border-radius:10px;padding:20px;margin:12px 0;font-family:'Inter',-apple-system,sans-serif;color:#FFFFFF;">
           <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
             <div>
-              <h3 style="color:#e6edf3;margin:0 0 4px 0;font-size:14px;font-weight:600;">Data Quality Audit</h3>
-              <div style="color:#8b949e;font-size:11px;">ID: {self.audit_id} | {self.timestamp} | {self.source_name}</div>
+              <h3 style="color:#FFFFFF;margin:0 0 4px 0;font-size:14px;font-weight:600;">Data Quality Audit</h3>
+              <div style="color:#B0B0B0;font-size:11px;">ID: {self.audit_id} | {self.timestamp} | {self.source_name}</div>
             </div>
             <span style="background:{badge_bg};color:{badge_color};padding:4px 10px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid {badge_border};">{badge_text}</span>
           </div>
 
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:10px;margin:12px 0;">
-            <div style="background:#1c2128;border:1px solid #30363d;border-radius:8px;padding:12px;text-align:center;">
+            <div style="background:#262626;border:1px solid #333333;border-radius:8px;padding:12px;text-align:center;">
               <div style="font-size:24px;font-weight:700;color:{score_color};">{self.overall_score}</div>
-              <div style="font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Score</div>
+              <div style="font-size:10px;color:#B0B0B0;text-transform:uppercase;letter-spacing:0.5px;">Score</div>
             </div>
-            <div style="background:#1c2128;border:1px solid #30363d;border-radius:8px;padding:12px;text-align:center;">
+            <div style="background:#262626;border:1px solid #333333;border-radius:8px;padding:12px;text-align:center;">
               <div style="font-size:24px;font-weight:700;color:#238636;">{self.passed}</div>
-              <div style="font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Passed</div>
+              <div style="font-size:10px;color:#B0B0B0;text-transform:uppercase;letter-spacing:0.5px;">Passed</div>
             </div>
-            <div style="background:#1c2128;border:1px solid #30363d;border-radius:8px;padding:12px;text-align:center;">
+            <div style="background:#262626;border:1px solid #333333;border-radius:8px;padding:12px;text-align:center;">
               <div style="font-size:24px;font-weight:700;color:#d29922;">{self.warnings}</div>
-              <div style="font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Warnings</div>
+              <div style="font-size:10px;color:#B0B0B0;text-transform:uppercase;letter-spacing:0.5px;">Warnings</div>
             </div>
-            <div style="background:#1c2128;border:1px solid #30363d;border-radius:8px;padding:12px;text-align:center;">
+            <div style="background:#262626;border:1px solid #333333;border-radius:8px;padding:12px;text-align:center;">
               <div style="font-size:24px;font-weight:700;color:#da3633;">{self.critical + self.blockers}</div>
-              <div style="font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;">Critical</div>
+              <div style="font-size:10px;color:#B0B0B0;text-transform:uppercase;letter-spacing:0.5px;">Critical</div>
             </div>
           </div>
 
-          <div style="background:#1c2128;border-left:3px solid {score_color};padding:10px 14px;border-radius:0 6px 6px 0;margin:12px 0;font-size:12px;color:#e6edf3;">
+          <div style="background:#262626;border-left:3px solid {score_color};padding:10px 14px;border-radius:0 6px 6px 0;margin:12px 0;font-size:12px;color:#FFFFFF;">
             <strong style="color:{score_color};">Decision:</strong> {self.release_decision}
           </div>
 
           <table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:12px;">
             <thead>
-              <tr style="border-bottom:2px solid #30363d;">
-                <th style="text-align:left;padding:6px 10px;color:#8b949e;font-size:10px;text-transform:uppercase;">Status</th>
-                <th style="text-align:left;padding:6px 10px;color:#8b949e;font-size:10px;text-transform:uppercase;">Check</th>
-                <th style="text-align:left;padding:6px 10px;color:#8b949e;font-size:10px;text-transform:uppercase;">Finding</th>
-                {"<th style='text-align:left;padding:6px 10px;color:#8b949e;font-size:10px;text-transform:uppercase;'>Detail</th>" if audience == "analyst" else ""}
+              <tr style="border-bottom:2px solid #333333;">
+                <th style="text-align:left;padding:6px 10px;color:#B0B0B0;font-size:10px;text-transform:uppercase;">Status</th>
+                <th style="text-align:left;padding:6px 10px;color:#B0B0B0;font-size:10px;text-transform:uppercase;">Check</th>
+                <th style="text-align:left;padding:6px 10px;color:#B0B0B0;font-size:10px;text-transform:uppercase;">Finding</th>
+                {"<th style='text-align:left;padding:6px 10px;color:#B0B0B0;font-size:10px;text-transform:uppercase;'>Detail</th>" if audience == "analyst" else ""}
               </tr>
             </thead>
             <tbody>
@@ -187,7 +187,7 @@ class AuditReport:
 
         severity_styles = {
             Severity.PASS:     ("rgba(35,134,54,0.15)", "#238636", "PASS"),
-            Severity.INFO:     ("rgba(31,111,235,0.15)", "#1f6feb", "INFO"),
+            Severity.INFO:     ("rgba(255,230,0,0.15)", "#FFE600", "INFO"),
             Severity.WARNING:  ("rgba(210,153,34,0.15)", "#d29922", "WARN"),
             Severity.CRITICAL: ("rgba(218,54,51,0.15)", "#da3633", "CRIT"),
             Severity.BLOCKER:  ("rgba(218,54,51,0.25)", "#da3633", "BLOCK"),
@@ -198,21 +198,21 @@ class AuditReport:
         )
 
         for f in sorted_findings:
-            bg, color, label = severity_styles.get(f.severity, ("transparent", "#8b949e", "???"))
+            bg, color, label = severity_styles.get(f.severity, ("transparent", "#B0B0B0", "???"))
             html += f"""
-              <tr style="border-bottom:1px solid #21262d;">
+              <tr style="border-bottom:1px solid #333333;">
                 <td style="padding:6px 10px;"><span style="background:{bg};color:{color};padding:2px 6px;border-radius:3px;font-size:10px;font-weight:600;">{label}</span></td>
-                <td style="padding:6px 10px;color:#e6edf3;">{f.check_name}</td>
-                <td style="padding:6px 10px;color:#8b949e;">{f.message}</td>
-                {"<td style='padding:6px 10px;color:#6e7681;font-size:11px;'>" + (f.detail or "--") + "</td>" if audience == "analyst" else ""}
+                <td style="padding:6px 10px;color:#FFFFFF;">{f.check_name}</td>
+                <td style="padding:6px 10px;color:#B0B0B0;">{f.message}</td>
+                {"<td style='padding:6px 10px;color:#808080;font-size:11px;'>" + (f.detail or "--") + "</td>" if audience == "analyst" else ""}
               </tr>
             """
             if f.severity in (Severity.WARNING, Severity.CRITICAL, Severity.BLOCKER) and f.recommendation:
                 colspan = 4 if audience == "analyst" else 3
                 html += f"""
-              <tr style="border-bottom:1px solid #21262d;">
+              <tr style="border-bottom:1px solid #333333;">
                 <td></td>
-                <td colspan="{colspan - 1}" style="padding:2px 10px 6px 10px;color:#1f6feb;font-size:11px;">Action: {f.recommendation}</td>
+                <td colspan="{colspan - 1}" style="padding:2px 10px 6px 10px;color:#FFE600;font-size:11px;">Action: {f.recommendation}</td>
               </tr>
                 """
 
@@ -233,6 +233,39 @@ class AuditReport:
             f"{self.critical + self.blockers} issue(s) require resolution. "
             f"{self.release_decision}"
         )
+
+    def to_standalone_html(self, title="Data Quality Audit Report"):
+        """Render a full standalone HTML page with WU branding."""
+        body = self.to_html(audience="analyst")
+        return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{title}</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+body{{background:#0D0D0D;color:#FFFFFF;font-family:'Inter',system-ui,sans-serif;margin:0;padding:0;}}
+.hdr{{background:linear-gradient(135deg,#0D0D0D,#1A1A1A);border-bottom:1px solid #333;padding:20px 32px;position:relative;display:flex;align-items:center;justify-content:space-between;}}
+.hdr::before{{content:"";position:absolute;top:0;left:0;right:0;height:3px;background:#FFE600;}}
+.hdr h1{{font-size:20px;font-weight:600;margin:0;}}
+.hdr .wu-badge{{background:#FFE600;color:#000;font-weight:900;font-size:11px;padding:5px 12px;border-radius:3px;letter-spacing:1px;}}
+.wrap{{max-width:900px;margin:0 auto;padding:24px 32px;}}
+.footer{{border-top:1px solid #333;padding:16px 32px;text-align:center;font-size:11px;color:#808080;margin-top:32px;}}
+@media print{{body{{background:#fff;color:#1a1a1a;}}.hdr{{background:#fff;border-bottom:3px solid #FFE600;}}.hdr h1{{color:#1a1a1a;}}}}
+</style>
+</head>
+<body>
+<div class="hdr">
+  <h1>{title}</h1>
+  <span class="wu-badge">WESTERN UNION</span>
+</div>
+<div class="wrap">
+{body}
+</div>
+<div class="footer">Built by Dr. Data -- Western Union Analytics</div>
+</body>
+</html>"""
 
 
 class AuditEngine:
@@ -579,3 +612,22 @@ class AuditEngine:
             ))
 
         return report
+
+    @staticmethod
+    def combine_reports(reports, title="Combined Quality Audit"):
+        """Merge multiple AuditReports into one combined report."""
+        combined = AuditReport(source_name=title, audit_type="combined")
+        for r in reports:
+            for f in r.findings:
+                # Prefix check_name with source for clarity
+                tagged = AuditFinding(
+                    check_name=f"[{r.source_name}] {f.check_name}",
+                    category=f.category,
+                    severity=f.severity,
+                    message=f.message,
+                    detail=f.detail,
+                    recommendation=f.recommendation,
+                    affected_items=f.affected_items,
+                )
+                combined.findings.append(tagged)
+        return combined

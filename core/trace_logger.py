@@ -62,6 +62,44 @@ class TraceLogger:
     def reset(self):
         self.entries = []
 
+    def get_engine_summary(self):
+        """Return a list of dicts describing what each AI engine did.
+
+        Each dict: {"engine", "model", "calls", "tasks"}
+        """
+        llm_calls = self._by_action("llm_call")
+        engines = {}
+        for e in llm_calls:
+            d = e["details"]
+            key = d.get("engine", "unknown")
+            if key not in engines:
+                engines[key] = {
+                    "engine": key,
+                    "model": d.get("model", ""),
+                    "calls": 0,
+                    "tasks": [],
+                }
+            engines[key]["calls"] += 1
+            prompt = d.get("prompt_summary", "")
+            resp = d.get("response_summary", "")
+            # Classify the task from prompt/response content
+            task_desc = prompt[:120] if prompt else resp[:120]
+            engines[key]["tasks"].append(task_desc)
+
+        # Also check for deliverable builds that imply engine work
+        delivs = self._by_action("deliverable")
+        pbi_summary = self._by_action("powerbi_build_summary")
+
+        result = []
+        # Order: Claude first, then OpenAI, then Gemini, then others
+        for name in ["claude", "openai", "gemini"]:
+            if name in engines:
+                result.append(engines.pop(name))
+        for name in sorted(engines.keys()):
+            result.append(engines[name])
+
+        return result
+
     # ------------------------------------------------------------------
     # Document generation
     # ------------------------------------------------------------------

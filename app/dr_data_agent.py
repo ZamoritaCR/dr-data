@@ -1511,13 +1511,15 @@ class DrDataAgent:
                     )
                     _combined.compute_scores()
 
-                    # 5. Write standalone HTML
+                    # 5. Write standalone HTML with engine activity
                     _audit_path = os.path.join(
                         self.output_dir, "quality_audit.html"
                     )
+                    _engine_summary = self.trace.get_engine_summary()
                     with open(_audit_path, "w", encoding="utf-8") as _af:
                         _af.write(_combined.to_standalone_html(
-                            title=f"Quality Audit -- {title}"
+                            title=f"Quality Audit -- {title}",
+                            engine_summary=_engine_summary,
                         ))
 
                     downloads.append({

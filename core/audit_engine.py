@@ -235,9 +235,78 @@ class AuditReport:
             f"{self.release_decision}"
         )
 
-    def to_standalone_html(self, title="Data Quality Audit Report"):
-        """Render a full standalone HTML page with WU branding."""
+    def to_standalone_html(self, title="Data Quality Audit Report",
+                           engine_summary=None):
+        """Render a full standalone HTML page with WU branding.
+
+        Args:
+            title: page title
+            engine_summary: optional list of dicts from TraceLogger.get_engine_summary()
+        """
         body = self.to_html(audience="analyst")
+
+        # Build engine activity section if data provided
+        engine_html = ""
+        if engine_summary:
+            engine_names = {
+                "claude": ("Claude (Sonnet)", "Chat personality, dashboard design, insight narration"),
+                "openai": ("OpenAI (GPT-4)", "Structured JSON generation, Power BI layout config"),
+                "gemini": ("Gemini (Pro)", "Large-context data analysis, vision, verification"),
+            }
+            cards = ""
+            for eng in engine_summary:
+                key = eng["engine"]
+                display_name, role = engine_names.get(
+                    key, (key.title(), "General processing")
+                )
+                model = eng.get("model", "")
+                calls = eng.get("calls", 0)
+                tasks = eng.get("tasks", [])
+                # Deduplicate + summarize tasks
+                unique_tasks = []
+                seen = set()
+                for t in tasks:
+                    short = t[:80].strip()
+                    if short and short not in seen:
+                        seen.add(short)
+                        unique_tasks.append(short)
+
+                task_html = ""
+                for t in unique_tasks[:5]:
+                    t_esc = t.replace("&", "&amp;").replace("<", "&lt;")
+                    task_html += (
+                        f'<div style="font-size:11px;color:#B0B0B0;'
+                        f'padding:2px 0;border-bottom:1px solid #333;">'
+                        f'{t_esc}</div>'
+                    )
+                if len(unique_tasks) > 5:
+                    task_html += (
+                        f'<div style="font-size:11px;color:#808080;'
+                        f'padding:2px 0;">...and {len(unique_tasks)-5} more</div>'
+                    )
+
+                cards += f"""
+                <div style="background:#262626;border:1px solid #333;border-radius:8px;padding:16px;flex:1;min-width:220px;">
+                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+                    <span style="background:#FFE600;color:#000;font-weight:700;font-size:10px;padding:3px 8px;border-radius:3px;">{display_name}</span>
+                    <span style="font-size:10px;color:#808080;">{model}</span>
+                  </div>
+                  <div style="font-size:24px;font-weight:700;color:#FFE600;">{calls}</div>
+                  <div style="font-size:10px;color:#B0B0B0;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">API calls</div>
+                  <div style="font-size:11px;color:#FFFFFF;margin-bottom:6px;">{role}</div>
+                  {task_html}
+                </div>
+                """
+
+            engine_html = f"""
+            <div style="background:#1A1A1A;border:1px solid #333;border-radius:10px;padding:20px;margin:12px 0;">
+              <h3 style="color:#FFFFFF;margin:0 0 12px 0;font-size:14px;font-weight:600;">AI Engine Activity</h3>
+              <div style="display:flex;gap:12px;flex-wrap:wrap;">
+                {cards}
+              </div>
+            </div>
+            """
+
         return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -262,6 +331,7 @@ body{{background:#0D0D0D;color:#FFFFFF;font-family:'Inter',system-ui,sans-serif;
   <span class="wu-badge">WESTERN UNION</span>
 </div>
 <div class="wrap">
+{engine_html}
 {body}
 </div>
 <div class="footer">Built by Dr. Data -- Western Union Analytics</div>

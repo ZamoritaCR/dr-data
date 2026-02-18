@@ -1453,13 +1453,14 @@ with tab2:
             "MySQL, SQL Server, SQLite"
         )
     else:
-        dq_subtab1, dq_subtab2, dq_subtab3, dq_subtab4, dq_subtab5, dq_subtab6, dq_subtab7 = st.tabs([
+        dq_subtab1, dq_subtab2, dq_subtab3, dq_subtab4, dq_subtab5, dq_subtab6, dq_subtab7, dq_subtab8 = st.tabs([
             "Quality Scanner",
             "Data Catalog",
             "Business Rules",
             "Trending",
             "Stewardship",
             "Compliance",
+            "Incidents",
             "Observability",
         ])
 
@@ -3141,9 +3142,245 @@ with tab2:
                     )
 
         # ============================================================
-        # SUBTAB 7: Data Observability (Monte Carlo Style)
+        # SUBTAB 7: Incident Management
         # ============================================================
         with dq_subtab7:
+            from core.incidents import IncidentManager
+            if "incidents" not in st.session_state:
+                st.session_state.incidents = IncidentManager()
+            _inc = st.session_state.incidents
+            _inc_stats = _inc.get_dashboard_stats()
+
+            st.markdown("#### Incident Management")
+
+            _in1, _in2, _in3, _in4, _in5 = st.columns(5)
+            _in1.metric("Open", _inc_stats.get("open", 0))
+            _in2.metric("Resolved", _inc_stats.get("resolved", 0))
+            _in3.metric("Closed", _inc_stats.get("closed", 0))
+            _mttr = _inc_stats.get("mttr")
+            _in4.metric("MTTR", f"{_mttr:.1f}h" if _mttr else "N/A")
+            _in5.metric("PM Pending", _inc_stats.get("postmortems_pending", 0))
+
+            # -- Create incident manually --
+            with st.expander("Create New Incident"):
+                _inc_title = st.text_input("Title", key="inc_title")
+                _inc_desc = st.text_area(
+                    "Description", key="inc_desc", height=80)
+                _ic1, _ic2, _ic3 = st.columns(3)
+                with _ic1:
+                    _inc_sev = st.selectbox(
+                        "Severity",
+                        ["CRITICAL", "HIGH", "MEDIUM", "LOW"],
+                        index=1, key="inc_sev")
+                with _ic2:
+                    _inc_cat = st.selectbox(
+                        "Category",
+                        ["Data Quality", "Schema", "Volume",
+                         "Timeliness", "Compliance", "Security",
+                         "Other"], key="inc_cat")
+                with _ic3:
+                    _inc_tbl = st.text_input(
+                        "Affected Table", key="inc_table")
+                if st.button(
+                    "Create Incident", key="inc_create"
+                ) and _inc_title:
+                    _new_iid = _inc.create_incident(
+                        _inc_title, _inc_desc, _inc_sev,
+                        _inc_cat, table_name=_inc_tbl or None)
+                    st.success(f"Created: {_new_iid}")
+                    st.rerun()
+
+            # -- Auto-detect from observability --
+            if st.button(
+                "Auto-Detect Incidents from Observability",
+                key="inc_auto",
+            ):
+                _auto_created = 0
+                if "dq_history" in st.session_state:
+                    _hist = st.session_state.dq_history
+                    for _atn in _hist.get_all_table_latest():
+                        _adeg = _hist.detect_degradation(_atn)
+                        if _adeg.get("degraded"):
+                            _aiid = _inc.auto_create_from_degradation(
+                                _atn, _adeg)
+                            if _aiid:
+                                _auto_created += 1
+                if _dq.scan_results:
+                    for _atn in _dq.scan_results:
+                        if _atn in _dq_tables:
+                            _adrift = _dq.detect_schema_drift(
+                                _dq_tables[_atn], _atn)
+                            if _adrift.get("has_drift"):
+                                _aiid = _inc.auto_create_from_schema_drift(
+                                    _atn, _adrift)
+                                if _aiid:
+                                    _auto_created += 1
+                            _avol = _dq.detect_volume_anomaly(
+                                _dq_tables[_atn], _atn)
+                            if _avol.get("is_anomaly"):
+                                _aiid = _inc.auto_create_from_volume_anomaly(
+                                    _atn, _avol)
+                                if _aiid:
+                                    _auto_created += 1
+                if _auto_created > 0:
+                    st.success(
+                        f"Created {_auto_created} incidents "
+                        f"from observability checks")
+                else:
+                    st.info("No anomalies detected")
+                st.rerun()
+
+            # -- Incident list --
+            st.markdown("---")
+            _all_inc = _inc.get_incidents()
+
+            if _all_inc:
+                for _incident in _all_inc:
+                    _iid = _incident.get("id", "")
+                    _isev = _incident.get("severity", "LOW")
+                    _ist = _incident.get("status", "Open")
+                    _sev_tag = {"CRITICAL": "[CRIT]", "HIGH": "[HIGH]",
+                                "MEDIUM": "[MED]", "LOW": "[LOW]"
+                                }.get(_isev, "[--]")
+
+                    with st.expander(
+                        f"{_sev_tag} {_iid} | "
+                        f"{_incident.get('title', '')[:60]} | {_ist}"
+                    ):
+                        st.write(
+                            f"**Category:** "
+                            f"{_incident.get('category', '')}")
+                        st.write(
+                            f"**Table:** "
+                            f"{_incident.get('table_name', 'N/A')}")
+                        st.write(
+                            f"**Detected:** "
+                            f"{_incident.get('detected_at', '')[:16]}")
+                        st.write(
+                            f"**Description:** "
+                            f"{_incident.get('description', '')}")
+
+                        # Status actions
+                        _act1, _act2, _act3 = st.columns(3)
+                        with _act1:
+                            if _ist == "Open":
+                                if st.button(
+                                    "Acknowledge",
+                                    key=f"inc_ack_{_iid}",
+                                ):
+                                    _inc.acknowledge_incident(
+                                        _iid, "User")
+                                    st.rerun()
+                            elif _ist == "Acknowledged":
+                                if st.button(
+                                    "Mark Resolved",
+                                    key=f"inc_resolve_{_iid}",
+                                ):
+                                    _inc.resolve_incident(
+                                        _iid,
+                                        "Resolved via DQ Engine",
+                                        ["Identified issue",
+                                         "Applied fix"],
+                                        "User")
+                                    st.rerun()
+                            elif _ist == "Resolved":
+                                if st.button(
+                                    "Close (Postmortem)",
+                                    key=f"inc_close_{_iid}",
+                                ):
+                                    _inc.complete_postmortem(_iid)
+                                    st.rerun()
+
+                        # Root cause
+                        with _act2:
+                            _rca = _incident.get("root_cause", {})
+                            if not _rca.get("category"):
+                                _rca_cat = st.selectbox(
+                                    "Root Cause",
+                                    ["ETL Failure", "Schema Change",
+                                     "Source System Outage",
+                                     "Code Deployment",
+                                     "Data Volume Spike",
+                                     "Network Issue", "Human Error",
+                                     "Third Party", "Unknown"],
+                                    key=f"inc_rca_{_iid}")
+                                _rca_desc = st.text_input(
+                                    "RCA Description",
+                                    key=f"inc_rca_desc_{_iid}")
+                                if st.button(
+                                    "Set RCA",
+                                    key=f"inc_set_rca_{_iid}",
+                                ) and _rca_desc:
+                                    _inc.set_root_cause(
+                                        _iid, _rca_cat, _rca_desc,
+                                        identified_by="User")
+                                    st.rerun()
+                            else:
+                                st.write(
+                                    f"**Root Cause:** "
+                                    f"{_rca.get('category', '')}")
+                                st.write(_rca.get("description", ""))
+
+                        # RCA prompts
+                        with _act3:
+                            _prompts = _incident.get("rca_prompts", [])
+                            if _prompts:
+                                st.write("**Investigation prompts:**")
+                                for _p in _prompts:
+                                    st.caption(f"- {_p}")
+
+                        # Impact
+                        _impact = _incident.get(
+                            "impact_assessment", {})
+                        if _impact.get("business_impact"):
+                            st.write(
+                                f"**Business Impact:** "
+                                f"{_impact['business_impact']}")
+
+                        # Timeline
+                        with st.expander("Timeline"):
+                            for _ev in _incident.get("timeline", []):
+                                st.caption(
+                                    f"{_ev.get('at', '')[:16]} - "
+                                    f"{_ev.get('event', '')} "
+                                    f"({_ev.get('by', 'System')})")
+
+                        # Postmortem export
+                        if (_incident.get("postmortem_complete")
+                                or _ist == "Resolved"):
+                            if st.button(
+                                "Generate Postmortem Report",
+                                key=f"inc_pm_{_iid}",
+                            ):
+                                _pm = _inc.generate_postmortem_report(
+                                    _iid)
+                                if _pm:
+                                    st.download_button(
+                                        "Download Postmortem",
+                                        _pm,
+                                        f"postmortem_{_iid}.md",
+                                        "text/markdown",
+                                        key=f"inc_pm_dl_{_iid}")
+            else:
+                st.info(
+                    "No incidents recorded. Incidents are created "
+                    "automatically from observability checks "
+                    "or manually.")
+
+            # Export
+            st.markdown("---")
+            if st.button("Export All Incidents", key="inc_export"):
+                _inc_data = _inc.export_incidents(fmt="json")
+                if _inc_data:
+                    st.download_button(
+                        "Download", _inc_data,
+                        "incidents.json", "application/json",
+                        key="inc_dl")
+
+        # ============================================================
+        # SUBTAB 8: Data Observability (Monte Carlo Style)
+        # ============================================================
+        with dq_subtab8:
             st.markdown("#### Data Observability (Monte Carlo Style)")
 
             if not _dq.scan_results:

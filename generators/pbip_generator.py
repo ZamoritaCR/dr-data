@@ -879,30 +879,41 @@ class PBIPGenerator:
                 return t
         return None
 
-    # Pandas dtype -> PBI dataType mapping
-    _DTYPE_MAP = {
-        "int64": "int64",
-        "Int64": "int64",
-        "float64": "double",
-        "Float64": "double",
-        "object": "string",
-        "string": "string",
-        "bool": "boolean",
-        "boolean": "boolean",
-    }
-
     @classmethod
     def _pandas_dtype_to_pbi(cls, dtype_str, semantic_type):
-        """Map a pandas dtype string to a PBI dataType."""
+        """Map a pandas dtype string to a PBI dataType.
+
+        Uses substring matching instead of an exact-key dict so that all
+        int-like (int8, int16, int32, Int64, UInt32 ...) and float-like
+        (float16, float32, Float64 ...) dtypes map correctly.  Measures
+        are NEVER typed as string -- that would break DAX aggregation
+        functions (SUM, AVERAGE, COUNT, etc.).
+        """
+        dl = dtype_str.lower()
+
+        # 1. Dates
         if semantic_type == "date":
             return "dateTime"
-        # Check for datetime-like dtypes (datetime64[ns], etc.)
-        if "datetime" in dtype_str.lower():
+        if "datetime" in dl or "timestamp" in dl:
             return "dateTime"
-        # Numeric measures stored as object (e.g. Snowflake Decimal) -> double
-        if semantic_type == "measure" and dtype_str in ("object", "string"):
+
+        # 2. Boolean
+        if "bool" in dl:
+            return "boolean"
+
+        # 3. Integer-like
+        if "int" in dl:
+            return "int64"
+
+        # 4. Float / double / decimal
+        if "float" in dl or "double" in dl or "decimal" in dl:
             return "double"
-        return cls._DTYPE_MAP.get(dtype_str, "string")
+
+        # 5. Safety net: measures must ALWAYS be numeric
+        if semantic_type == "measure":
+            return "double"
+
+        return "string"
 
     def _write_tables_tmdl(self, tables_dir, tmdl_model, data_profile,
                            data_file_path, sheet_name=None,

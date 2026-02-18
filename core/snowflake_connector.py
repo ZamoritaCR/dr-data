@@ -122,11 +122,26 @@ class SnowflakeConnector:
             rows = cur.fetchall()
             print(f"[SNOWFLAKE] Query returned {len(rows)} rows")
             df = pd.DataFrame(rows, columns=cols)
-            # Convert Decimal columns to float64 so pandas/PBI get proper types
+            # Fix Snowflake type mismatches that confuse pandas/PBI:
+            #  - Decimal -> float64  (NUMBER columns with scale > 0)
+            #  - datetime.date -> datetime64  (DATE columns)
+            #  - object columns that are all-numeric -> float64
+            import datetime as _dt
             from decimal import Decimal as _Dec
             for c in df.columns:
-                if df[c].dropna().head(1).apply(type).eq(_Dec).any():
+                sample = df[c].dropna().head(20)
+                if sample.empty:
+                    continue
+                first_type = type(sample.iloc[0])
+                if first_type is _Dec:
                     df[c] = pd.to_numeric(df[c], errors="coerce")
+                elif first_type is _dt.date:
+                    df[c] = pd.to_datetime(df[c], errors="coerce")
+                elif df[c].dtype == object:
+                    # Last resort: try numeric coercion on object columns
+                    converted = pd.to_numeric(df[c], errors="coerce")
+                    if converted.notna().sum() > sample.notna().sum() * 0.8:
+                        df[c] = converted
             return df
         except Exception as e:
             print(f"[SNOWFLAKE] query_to_df failed: {e}")

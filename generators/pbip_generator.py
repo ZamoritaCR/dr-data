@@ -94,16 +94,18 @@ class PBIPGenerator:
     # ------------------------------------------------------------------ #
 
     def generate(self, config, data_profile, dashboard_spec, data_file_path=None,
-                 sheet_name=None, relationships=None):
+                 sheet_name=None, relationships=None, snowflake_config=None):
         """Create the full PBIP project.
 
         Args:
-            config:         dict from OpenAIEngine (report_layout + tmdl_model).
-            data_profile:   dict from DataAnalyzer.
-            dashboard_spec: dict from ClaudeInterpreter (for title/theme).
-            data_file_path: optional path to the source data file.
-            sheet_name:     Excel sheet name that was loaded (for M expression).
-            relationships:  optional list of relationship dicts for TMDL model.
+            config:           dict from OpenAIEngine (report_layout + tmdl_model).
+            data_profile:     dict from DataAnalyzer.
+            dashboard_spec:   dict from ClaudeInterpreter (for title/theme).
+            data_file_path:   optional path to the source data file.
+            sheet_name:       Excel sheet name that was loaded (for M expression).
+            relationships:    optional list of relationship dicts for TMDL model.
+            snowflake_config: optional dict with account/warehouse/database/schema
+                              for Snowflake DirectQuery M expression.
 
         Returns:
             str: path to the clean project directory containing ONLY the PBIP files.
@@ -158,7 +160,8 @@ class PBIPGenerator:
         # 13. Table TMDL files (returns table_names AND validated measure names)
         tm = config.get("tmdl_model", {})
         table_names, valid_measure_names = self._write_tables_tmdl(
-            tables_dir, tm, data_profile, data_file_path, sheet_name
+            tables_dir, tm, data_profile, data_file_path, sheet_name,
+            snowflake_config=snowflake_config,
         )
 
         # 14. model.tmdl (with relationships if provided)
@@ -899,7 +902,8 @@ class PBIPGenerator:
         return cls._DTYPE_MAP.get(dtype_str, "string")
 
     def _write_tables_tmdl(self, tables_dir, tmdl_model, data_profile,
-                           data_file_path, sheet_name=None):
+                           data_file_path, sheet_name=None,
+                           snowflake_config=None):
         """Write one .tmdl file per table.
 
         Returns:
@@ -1002,24 +1006,32 @@ class PBIPGenerator:
             lines.append("")
 
         # Partition (M expression)
-        # Build a synthetic table_cfg from the profile for type transforms
-        profile_table_cfg = {
-            "name": tbl_name,
-            "columns": [
-                {
-                    "name": c["name"],
-                    "dataType": self._pandas_dtype_to_pbi(
-                        c.get("dtype", "object"), c.get("semantic_type", "dimension")
-                    ),
-                }
-                for c in profile_columns
-            ],
-        }
-        m_expr = self._build_m_expression(
-            profile_table_cfg, data_file_path, sheet_name
-        )
+        if snowflake_config:
+            m_expr = self._build_snowflake_m_expression(
+                snowflake_config, tbl_name
+            )
+            partition_mode = "directQuery"
+        else:
+            # Build a synthetic table_cfg from the profile for type transforms
+            profile_table_cfg = {
+                "name": tbl_name,
+                "columns": [
+                    {
+                        "name": c["name"],
+                        "dataType": self._pandas_dtype_to_pbi(
+                            c.get("dtype", "object"),
+                            c.get("semantic_type", "dimension"),
+                        ),
+                    }
+                    for c in profile_columns
+                ],
+            }
+            m_expr = self._build_m_expression(
+                profile_table_cfg, data_file_path, sheet_name
+            )
+            partition_mode = "import"
         lines.append(f"\tpartition {quoted_tbl} = m")
-        lines.append("\t\tmode: import")
+        lines.append(f"\t\tmode: {partition_mode}")
         lines.append("\t\tsource =")
         for m_line in m_expr:
             lines.append(f"\t\t\t\t{m_line}")
@@ -1086,6 +1098,34 @@ class PBIPGenerator:
             '    Source = #table({"Col"}, {})',
             "in",
             "    Source",
+        ]
+
+    @staticmethod
+    def _build_snowflake_m_expression(sf_config, table_name):
+        """Build a Snowflake DirectQuery M expression.
+
+        Uses Snowflake.Databases() to connect directly to the warehouse.
+        PBI Desktop will prompt for Snowflake credentials on first open.
+        """
+        acct = sf_config.get("account", "")
+        wh = sf_config.get("warehouse", "")
+        db = sf_config.get("database", "")
+        schema = sf_config.get("schema", "")
+
+        # Build server URL (account can be org-acctname or full URL)
+        if ".snowflakecomputing.com" in acct:
+            server = acct
+        else:
+            server = f"{acct}.snowflakecomputing.com"
+
+        return [
+            "let",
+            f'    Source = Snowflake.Databases("{server}", "{wh}"),',
+            f'    Database = Source{{[Name="{db}"]}}[Data],',
+            f'    Schema = Database{{[Name="{schema}"]}}[Data],',
+            f'    Table = Schema{{[Name="{table_name}"]}}[Data]',
+            "in",
+            "    Table",
         ]
 
     @staticmethod

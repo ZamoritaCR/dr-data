@@ -278,6 +278,7 @@ class DrDataAgent:
 
         # Snowflake data
         self.snowflake_tables = {}
+        self.snowflake_config = None
 
         # Trace logger for audit trail
         self.trace = TraceLogger()
@@ -1866,7 +1867,10 @@ class DrDataAgent:
         pbi_analyzer = DataAnalyzer()
 
         # Derive table name: prefer sheet name (matches Excel data), else file name
-        if self.sheet_name:
+        if self.snowflake_config and self.snowflake_tables:
+            # Use first loaded Snowflake table name as-is
+            table_name = list(self.snowflake_tables.keys())[0]
+        elif self.sheet_name:
             table_name = self.sheet_name.replace(" ", "_").replace("-", "_")
         elif self.data_file_path:
             base = os.path.basename(self.data_file_path)
@@ -1951,6 +1955,7 @@ class DrDataAgent:
                 data_file_path=self.data_file_path,
                 sheet_name=self.sheet_name,
                 relationships=relationships or None,
+                snowflake_config=self.snowflake_config,
             )
             # generator.generate() returns a dict with path + audit info
             result_path = gen_result["path"]

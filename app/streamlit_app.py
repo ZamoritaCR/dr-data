@@ -664,6 +664,12 @@ with st.sidebar:
                                     if not hasattr(agent, "snowflake_tables"):
                                         agent.snowflake_tables = {}
                                     agent.snowflake_tables[tbl_name] = df
+                                    agent.snowflake_config = {
+                                        "account": sf.account,
+                                        "warehouse": sf.warehouse,
+                                        "database": sf.database,
+                                        "schema": sf.schema,
+                                    }
                                 loaded_count += 1
                         except Exception as e:
                             load_status.write(

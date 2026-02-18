@@ -899,6 +899,9 @@ class PBIPGenerator:
         # Check for datetime-like dtypes (datetime64[ns], etc.)
         if "datetime" in dtype_str.lower():
             return "dateTime"
+        # Numeric measures stored as object (e.g. Snowflake Decimal) -> double
+        if semantic_type == "measure" and dtype_str in ("object", "string"):
+            return "double"
         return cls._DTYPE_MAP.get(dtype_str, "string")
 
     def _write_tables_tmdl(self, tables_dir, tmdl_model, data_profile,

@@ -121,7 +121,13 @@ class SnowflakeConnector:
             cols = [desc[0] for desc in cur.description]
             rows = cur.fetchall()
             print(f"[SNOWFLAKE] Query returned {len(rows)} rows")
-            return pd.DataFrame(rows, columns=cols)
+            df = pd.DataFrame(rows, columns=cols)
+            # Convert Decimal columns to float64 so pandas/PBI get proper types
+            from decimal import Decimal as _Dec
+            for c in df.columns:
+                if df[c].dropna().head(1).apply(type).eq(_Dec).any():
+                    df[c] = pd.to_numeric(df[c], errors="coerce")
+            return df
         except Exception as e:
             print(f"[SNOWFLAKE] query_to_df failed: {e}")
             return None

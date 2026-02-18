@@ -767,345 +767,6 @@ with st.sidebar:
             st.rerun()
 
 
-# ============================================
-# MAIN LAYOUT: Workspace (left 65%) + Chat (right 35%)
-# ============================================
-workspace_col, chat_col = st.columns([65, 35])
-
-
-# ============================================
-# LEFT: WORKSPACE -- Shows Dr. Data's work
-# ============================================
-with workspace_col:
-    ws = st.session_state.workspace_content
-
-    # === EXPORT EXECUTION (runs in workspace with visible progress) ===
-    if st.session_state.get("pending_export"):
-        _export_req = st.session_state.pop("pending_export")
-        _export_prompt = _export_req["prompt"]
-        _export_ts = _export_req["timestamp"]
-        _agent = st.session_state.agent
-
-        ws["phase"] = "building"
-        ws["progress_messages"].append(
-            f"Building: {_export_prompt[:80]}..."
-            if len(_export_prompt) > 80 else f"Building: {_export_prompt}"
-        )
-
-        if _agent:
-            with st.status("Building your deliverables...", expanded=True) as _build_status:
-                _build_status.write("Starting generation pipeline...")
-                _response = None
-                try:
-                    _response = _agent.respond(
-                        _export_prompt,
-                        st.session_state.messages,
-                        st.session_state.uploaded_files,
-                    )
-
-                    if _response is None:
-                        _build_status.update(label="Build failed", state="error")
-                        ws["progress_messages"].append("Build failed")
-                        st.session_state.messages.append({
-                            "role": "assistant",
-                            "content": "Something went wrong. Try again.",
-                            "timestamp": _export_ts,
-                        })
-
-                    elif isinstance(_response, dict):
-                        _content = _response.get("content", "")
-                        _downloads = _response.get("downloads", []) or []
-
-                        if _downloads:
-                            _fnames = [
-                                dl.get("filename", dl.get("name", "file"))
-                                for dl in _downloads
-                            ]
-                            _build_status.write(
-                                f"Generated {len(_downloads)} file(s): "
-                                + ", ".join(_fnames)
-                            )
-                            _build_status.update(
-                                label=f"Done -- {len(_downloads)} deliverable(s)",
-                                state="complete",
-                            )
-
-                            # Save to workspace deliverables
-                            for _dl in _downloads:
-                                if os.path.exists(_dl.get("path", "")):
-                                    try:
-                                        _dl_audit = (
-                                            st.session_state.audit_engine
-                                            .audit_deliverable(
-                                                _dl["path"],
-                                                file_type=_dl.get(
-                                                    "filename", ""
-                                                ).split(".")[-1],
-                                            )
-                                        )
-                                        _dl_audit.compute_scores()
-                                        _dl["audit_score"] = _dl_audit.overall_score
-                                        _dl["audit_releasable"] = _dl_audit.is_releasable
-                                    except Exception:
-                                        pass
-                            ws["deliverables"].extend(_downloads)
-                            ws["phase"] = "complete"
-                            ws["progress_messages"].append(
-                                "Deliverables ready -- audited"
-                            )
-
-                            _chat_note = (
-                                f"Built {len(_downloads)} deliverable(s): "
-                                f"{', '.join(_fnames)}. "
-                                f"Check the workspace for downloads."
-                            )
-                            if _content:
-                                _chat_note = _content + "\n\n" + _chat_note
-                        else:
-                            _build_status.update(
-                                label="Done", state="complete"
-                            )
-                            _chat_note = _content or "Done. No files generated."
-
-                        st.session_state.messages.append({
-                            "role": "assistant",
-                            "content": _chat_note,
-                            "downloads": _downloads,
-                            "timestamp": _export_ts,
-                        })
-
-                    elif isinstance(_response, str) and _response.strip():
-                        _build_status.update(label="Done", state="complete")
-                        st.session_state.messages.append({
-                            "role": "assistant",
-                            "content": _response,
-                            "timestamp": _export_ts,
-                        })
-                    else:
-                        _build_status.update(
-                            label="No output", state="error"
-                        )
-                        st.session_state.messages.append({
-                            "role": "assistant",
-                            "content": "No response. Try rephrasing.",
-                            "timestamp": _export_ts,
-                        })
-
-                except Exception as _e:
-                    import traceback
-                    traceback.print_exc()
-                    _build_status.update(label="Error", state="error")
-                    ws["progress_messages"].append("Build error")
-                    st.session_state.messages.append({
-                        "role": "assistant",
-                        "content": f"Hit a snag: {str(_e)[:200]}",
-                        "timestamp": _export_ts,
-                    })
-
-                # Update data preview if needed
-                if _agent.dataframe is not None:
-                    if ws.get("data_preview") is None:
-                        ws["data_preview"] = _agent.dataframe
-
-        st.rerun()  # refresh to show results in chat + workspace
-
-    if ws["phase"] == "waiting" and ws.get("data_preview") is None:
-        # Empty state -- clickable capability cards
-        _safe_html(
-            '<div style="text-align:center;padding:32px 0 8px 0;">'
-            '<div style="font-size:18px;font-weight:600;color:#FFFFFF;margin-bottom:4px;">'
-            'The Art of the Possible</div>'
-            '<div style="font-size:13px;color:#808080;margin-bottom:24px;">'
-            'Upload data in the sidebar, or click a card to get started</div>'
-            '</div>',
-            "The Art of the Possible -- Upload data or click a card to get started."
-        )
-
-        _capabilities = [
-            ("Interactive Dashboard", "dashboard",
-             "HTML dashboard with charts, KPIs, and filters"),
-            ("Power BI Project", "powerbi",
-             "PBIP with semantic model, DAX measures, themed visuals"),
-            ("Reports & Exports", "reports",
-             "PDF, PowerPoint, Word, Excel -- any audience"),
-            ("Tableau Migration", "tableau",
-             "Convert .twb/.twbx workbooks into Power BI"),
-            ("Live Data", "data_connection",
-             "Connect to Snowflake and build from warehouse data"),
-            ("Data Audit", "audit",
-             "Quality checks, completeness scores, release gates"),
-        ]
-
-        _row1 = st.columns(3)
-        for i, (title, key, desc) in enumerate(_capabilities[:3]):
-            with _row1[i]:
-                if st.button(title, key=f"cap_{key}", use_container_width=True):
-                    st.session_state.user_interest = key
-                    st.rerun()
-                st.caption(desc)
-
-        _row2 = st.columns(3)
-        for i, (title, key, desc) in enumerate(_capabilities[3:]):
-            with _row2[i]:
-                if st.button(title, key=f"cap_{key}", use_container_width=True):
-                    st.session_state.user_interest = key
-                    st.rerun()
-                st.caption(desc)
-
-    # === RECENT WORK (always visible if history exists) ===
-    _recent = _get_recent_deliverables(6)
-    if _recent:
-        st.markdown("---")
-        _safe_html(
-            '<div style="font-size:15px;font-weight:600;color:#FFFFFF;'
-            'margin-bottom:12px;">Recent Work</div>',
-            "**Recent Work**"
-        )
-        _type_icons = {
-            "dashboard": "&#9783;",
-            "powerbi": "&#9638;",
-            "pptx": "&#9776;",
-            "pdf": "&#9776;",
-            "docx": "&#9776;",
-            "other": "&#9679;",
-        }
-        _vis_count = min(len(_recent), 6)
-        _rw_cols = st.columns(min(_vis_count, 3))
-        for _ri, _rec in enumerate(_recent[:6]):
-            if _ri < 6:
-                with _rw_cols[_ri % 3]:
-                    _icon = _type_icons.get(_rec.get("type", ""), "&#9679;")
-                    _rdate = _rec.get("created_at", "")[:10]
-                    _safe_html(
-                        f'<div style="background:#1A1A1A;border:1px solid #333;'
-                        f'border-radius:8px;padding:12px;margin-bottom:8px;">'
-                        f'<div style="color:#FFE600;font-size:18px;">{_icon}</div>'
-                        f'<div style="color:#FFF;font-size:13px;font-weight:600;'
-                        f'margin:4px 0 2px 0;">{html_module.escape(_rec.get("name", "Untitled"))}</div>'
-                        f'<div style="color:#808080;font-size:11px;">'
-                        f'{html_module.escape(_rec.get("type", "").upper())} | '
-                        f'{html_module.escape(_rec.get("source_file", "")[:30])} | '
-                        f'{_rdate}</div>'
-                        f'<div style="color:#666;font-size:11px;margin-top:4px;">'
-                        f'{html_module.escape(_rec.get("description", "")[:80])}</div>'
-                        f'</div>',
-                        f'{_rec.get("name", "")} - {_rec.get("type", "")}'
-                    )
-                    _rpath = _rec.get("file_path", "")
-                    if _rpath and os.path.exists(_rpath):
-                        with open(_rpath, "rb") as _rf:
-                            st.download_button(
-                                label="Download",
-                                data=_rf.read(),
-                                file_name=os.path.basename(_rpath),
-                                key=f"rw_dl_{_rec.get('id', _ri)}",
-                                use_container_width=True,
-                            )
-
-        if len(_recent) > 6:
-            with st.expander("Show all"):
-                for _rec in _recent[6:]:
-                    st.markdown(
-                        f"**{_rec.get('name', '')}** -- "
-                        f"{_rec.get('type', '').upper()} | "
-                        f"{_rec.get('created_at', '')[:10]}"
-                    )
-
-    if ws["phase"] != "waiting" or ws.get("data_preview") is not None:
-        # === KPI CARDS ===
-        if ws["kpis"]:
-            kpi_cols = st.columns(len(ws["kpis"]))
-            for col, kpi in zip(kpi_cols, ws["kpis"]):
-                with col:
-                    color = kpi.get("color", "#FFDE00")
-                    _safe_html(f'<div class="kpi-card"><div class="kpi-value" style="color:{color};">{html_module.escape(str(kpi["value"]))}</div><div class="kpi-label">{html_module.escape(str(kpi["label"]))}</div></div>', f'{kpi["value"]} -- {kpi["label"]}')
-
-        # === PROGRESS MESSAGES ===
-        if ws["progress_messages"]:
-            for i, msg in enumerate(ws["progress_messages"]):
-                is_last = i == len(ws["progress_messages"]) - 1
-                status_class = "" if is_last else "complete"
-                _safe_html(f'<div class="phase-status {status_class}"><div class="dot"></div>{html_module.escape(str(msg))}</div>', str(msg))
-
-        # === DATA QUALITY AUDIT (shows BEFORE data preview) ===
-        if ws.get("audit_html"):
-            _safe_html('<div class="workspace-card"><h3>Data Quality Audit</h3></div>', "**Data Quality Audit**")
-            components.html(ws["audit_html"], height=600, scrolling=True)
-
-            # Executive summary always accessible
-            if st.session_state.audience_mode == "analyst" and ws.get("audit_summary"):
-                with st.expander("Executive Summary"):
-                    st.write(ws["audit_summary"])
-            elif st.session_state.audience_mode == "executive" and ws.get("audit_summary"):
-                st.info(ws["audit_summary"])
-
-        # === DATA PREVIEW ===
-        if ws.get("data_preview") is not None:
-            df_preview = ws["data_preview"]
-            _safe_html('<div class="workspace-card"><h3>Data Preview</h3></div>', "**Data Preview**")
-            st.dataframe(
-                df_preview.head(20),
-                width="stretch",
-                height=250,
-            )
-            st.caption(f"{len(df_preview):,} rows x {len(df_preview.columns)} columns")
-
-        # === SCORES ===
-        if ws["scores"]:
-            scores = ws["scores"]
-            _safe_html('<div class="workspace-card"><h3>Quality Scorecard</h3></div>', "**Quality Scorecard**")
-            score_cols = st.columns(5)
-            labels = [
-                ("Overall", "total_score"),
-                ("Data", "data_accuracy"),
-                ("Measures", "measure_quality"),
-                ("Visuals", "visual_effectiveness"),
-                ("UX", "user_experience"),
-            ]
-            for col, (label, key) in zip(score_cols, labels):
-                val = scores.get(key, 0)
-                css_class = (
-                    "score-green" if val >= 80
-                    else "score-amber" if val >= 60
-                    else "score-red"
-                )
-                with col:
-                    _safe_html(f'<div style="text-align:center;"><div class="score-badge {css_class}">{val}</div><div style="font-size:11px;color:#B0B0B0;margin-top:6px;">{label}</div></div>', f'{label}: {val}')
-
-        # === DELIVERABLES (with audit gate) ===
-        if ws["deliverables"]:
-            _safe_html('<div class="workspace-card"><h3>Your Deliverables</h3></div>', "**Your Deliverables**")
-
-            # Audit gate message
-            if ws.get("audit_releasable") is False:
-                st.warning(
-                    "Data quality audit flagged issues. "
-                    "Review the audit findings above before distributing deliverables."
-                )
-
-            for idx, dl in enumerate(ws["deliverables"]):
-                dl_col1, dl_col2 = st.columns([3, 1])
-                with dl_col1:
-                    _safe_html(f'<div class="dl-card"><div class="dl-name">{html_module.escape(dl["name"])}</div><div class="dl-desc">{html_module.escape(dl.get("description", ""))}</div></div>', f'{dl["name"]}: {dl.get("description", "")}')
-                with dl_col2:
-                    if os.path.exists(dl["path"]):
-                        # Audit each deliverable file
-                        dl_audit = st.session_state.audit_engine.audit_deliverable(
-                            dl["path"],
-                            file_type=dl.get("filename", "").split(".")[-1]
-                        )
-                        dl_audit.compute_scores()
-
-                        with open(dl["path"], "rb") as f:
-                            label = "Download"
-                            if not dl_audit.is_releasable:
-                                label = "Download (review flagged)"
-                            st.download_button(
-                                label=label,
-                                data=f.read(),
-                                file_name=dl["filename"],
-                                key=f"ws_dl_{idx}_{dl['filename']}",
-                            )
 
 
 # ============================================
@@ -1149,247 +810,603 @@ def _render_downloads(downloads, key_prefix, ts):
                 st.caption(f"(file expired: {file_name})")
 
 
+
 # ============================================
-# RIGHT: CHAT PANEL -- Conversation with Dr. Data
+# MAIN LAYOUT: Tabs + Workspace/Chat split
 # ============================================
-with chat_col:
-    _safe_html(f'<div style="padding:4px 0 8px 0;border-bottom:1px solid #4a4a4a;margin-bottom:8px;display:flex;align-items:center;gap:8px;">{DR_DATA_AVATAR}<span style="font-size:13px;font-weight:600;color:#FFFFFF;">Chat with Dr. Data</span><span style="font-size:11px;color:#B0B0B0;">|&nbsp; The Art of the Possible</span></div>', "Chat with Dr. Data -- The Art of the Possible")
+tab1, tab2 = st.tabs(["Dr. Data Agent", "Data Quality Engine"])
 
-    # Chat container with scroll
-    chat_container = st.container()
+with tab1:
+    workspace_col, chat_col = st.columns([65, 35])
 
-    with chat_container:
-        # Opening message if empty
-        if not st.session_state.messages:
-            with st.chat_message("assistant"):
-                st.markdown(
-                    "Hello! Great to have you here. I am Dr. Data, your personal "
-                    "data intelligence partner. I believe in **The Art of the Possible** "
-                    "-- every dataset has a story waiting to be told, and I am here "
-                    "to help you tell it.\n\n"
-                    "Upload a file in the sidebar (CSV, Excel, Tableau, Alteryx, or "
-                    "anything else you have) and tell me what you need. I can build "
-                    "interactive dashboards, Power BI projects, PDF reports, PowerPoint "
-                    "presentations, and more. Whatever helps you shine -- I have got "
-                    "you covered. Let us make something great together!"
-                )
 
-        # Render full chat history on every rerender
-        for msg in st.session_state.messages:
-            with st.chat_message(msg["role"]):
-                st.markdown(msg["content"])
-
-    # === HANDLE FILE UPLOAD -- instant acknowledgment, no blocking LLM call ===
-    if st.session_state.file_just_uploaded:
-        file_info = st.session_state.file_just_uploaded
-        st.session_state.file_just_uploaded = None
-
-        names = file_info.get("names", [])
-        name_str = ", ".join(names)
-
+    # ============================================
+    # LEFT: WORKSPACE -- Shows Dr. Data's work
+    # ============================================
+    with workspace_col:
         ws = st.session_state.workspace_content
-        ws["phase"] = "analyzed"
-        ws["progress_messages"].append(f"Loaded {name_str}")
 
-        # Build a quick summary from data already profiled in sidebar
-        preview_note = ""
-        if ws.get("data_preview") is not None:
-            df = ws["data_preview"]
-            cols = ", ".join(df.columns[:6].tolist())
-            more = "..." if len(df.columns) > 6 else ""
-            preview_note = (
-                f" I can see {len(df):,} rows and "
-                f"{len(df.columns)} columns: {cols}{more}."
+        # === EXPORT EXECUTION (runs in workspace with visible progress) ===
+        if st.session_state.get("pending_export"):
+            _export_req = st.session_state.pop("pending_export")
+            _export_prompt = _export_req["prompt"]
+            _export_ts = _export_req["timestamp"]
+            _agent = st.session_state.agent
+
+            ws["phase"] = "building"
+            ws["progress_messages"].append(
+                f"Building: {_export_prompt[:80]}..."
+                if len(_export_prompt) > 80 else f"Building: {_export_prompt}"
             )
 
-        audit_note = ""
-        if ws.get("audit_releasable") is True:
-            audit_note = " Data quality audit passed."
-            ws["progress_messages"].append("Audit passed")
-        elif ws.get("audit_releasable") is False:
-            audit_note = " Data quality audit flagged some issues -- check the workspace."
-            ws["progress_messages"].append("Audit flagged issues")
-
-        st.session_state.messages.append({
-            "role": "assistant",
-            "content": (
-                f"Loaded {name_str}.{preview_note}{audit_note} "
-                f"What would you like me to build? I can create dashboards, "
-                f"Power BI projects, reports, presentations -- whatever you need."
-            ),
-            "timestamp": time.time(),
-        })
-
-        st.rerun()
-
-    # === HANDLE CAPABILITY CARD CLICKS ===
-    if st.session_state.get("user_interest"):
-        _interest = st.session_state.pop("user_interest")
-        _agent = st.session_state.agent
-        if _agent:
-            # Build context based on whether data is loaded
-            if _agent.dataframe is not None:
-                _fname = getattr(_agent, "current_file_name", "their data")
-                _rows = len(_agent.dataframe)
-                _cols = len(_agent.dataframe.columns)
-                _context = (
-                    f"The user just clicked on the {_interest} capability card. "
-                    f"They have {_fname} loaded with {_rows} rows and {_cols} columns. "
-                    f"Respond naturally -- suggest what you would build and why, "
-                    f"based on what you see in their data. If it makes sense, "
-                    f"just start building it."
-                )
-            else:
-                _context = (
-                    f"The user just clicked on the {_interest} capability card. "
-                    f"They have no data loaded yet. Guide them naturally."
-                )
-
-            with chat_container:
-                with st.chat_message("assistant"):
+            if _agent:
+                with st.status("Building your deliverables...", expanded=True) as _build_status:
+                    _build_status.write("Starting generation pipeline...")
+                    _response = None
                     try:
-                        _enriched = _agent._build_context_message(_context)
-                        _full = st.write_stream(_agent.chat_stream(_enriched))
-                    except (AttributeError, Exception):
-                        _resp = _agent.respond(
-                            _context,
+                        _response = _agent.respond(
+                            _export_prompt,
                             st.session_state.messages,
                             st.session_state.uploaded_files,
                         )
-                        _full = (
-                            _resp.get("content", "")
-                            if isinstance(_resp, dict) else str(_resp or "")
+
+                        if _response is None:
+                            _build_status.update(label="Build failed", state="error")
+                            ws["progress_messages"].append("Build failed")
+                            st.session_state.messages.append({
+                                "role": "assistant",
+                                "content": "Something went wrong. Try again.",
+                                "timestamp": _export_ts,
+                            })
+
+                        elif isinstance(_response, dict):
+                            _content = _response.get("content", "")
+                            _downloads = _response.get("downloads", []) or []
+
+                            if _downloads:
+                                _fnames = [
+                                    dl.get("filename", dl.get("name", "file"))
+                                    for dl in _downloads
+                                ]
+                                _build_status.write(
+                                    f"Generated {len(_downloads)} file(s): "
+                                    + ", ".join(_fnames)
+                                )
+                                _build_status.update(
+                                    label=f"Done -- {len(_downloads)} deliverable(s)",
+                                    state="complete",
+                                )
+
+                                # Save to workspace deliverables
+                                for _dl in _downloads:
+                                    if os.path.exists(_dl.get("path", "")):
+                                        try:
+                                            _dl_audit = (
+                                                st.session_state.audit_engine
+                                                .audit_deliverable(
+                                                    _dl["path"],
+                                                    file_type=_dl.get(
+                                                        "filename", ""
+                                                    ).split(".")[-1],
+                                                )
+                                            )
+                                            _dl_audit.compute_scores()
+                                            _dl["audit_score"] = _dl_audit.overall_score
+                                            _dl["audit_releasable"] = _dl_audit.is_releasable
+                                        except Exception:
+                                            pass
+                                ws["deliverables"].extend(_downloads)
+                                ws["phase"] = "complete"
+                                ws["progress_messages"].append(
+                                    "Deliverables ready -- audited"
+                                )
+
+                                _chat_note = (
+                                    f"Built {len(_downloads)} deliverable(s): "
+                                    f"{', '.join(_fnames)}. "
+                                    f"Check the workspace for downloads."
+                                )
+                                if _content:
+                                    _chat_note = _content + "\n\n" + _chat_note
+                            else:
+                                _build_status.update(
+                                    label="Done", state="complete"
+                                )
+                                _chat_note = _content or "Done. No files generated."
+
+                            st.session_state.messages.append({
+                                "role": "assistant",
+                                "content": _chat_note,
+                                "downloads": _downloads,
+                                "timestamp": _export_ts,
+                            })
+
+                        elif isinstance(_response, str) and _response.strip():
+                            _build_status.update(label="Done", state="complete")
+                            st.session_state.messages.append({
+                                "role": "assistant",
+                                "content": _response,
+                                "timestamp": _export_ts,
+                            })
+                        else:
+                            _build_status.update(
+                                label="No output", state="error"
+                            )
+                            st.session_state.messages.append({
+                                "role": "assistant",
+                                "content": "No response. Try rephrasing.",
+                                "timestamp": _export_ts,
+                            })
+
+                    except Exception as _e:
+                        import traceback
+                        traceback.print_exc()
+                        _build_status.update(label="Error", state="error")
+                        ws["progress_messages"].append("Build error")
+                        st.session_state.messages.append({
+                            "role": "assistant",
+                            "content": f"Hit a snag: {str(_e)[:200]}",
+                            "timestamp": _export_ts,
+                        })
+
+                    # Update data preview if needed
+                    if _agent.dataframe is not None:
+                        if ws.get("data_preview") is None:
+                            ws["data_preview"] = _agent.dataframe
+
+            st.rerun()  # refresh to show results in chat + workspace
+
+        if ws["phase"] == "waiting" and ws.get("data_preview") is None:
+            # Empty state -- clickable capability cards
+            _safe_html(
+                '<div style="text-align:center;padding:32px 0 8px 0;">'
+                '<div style="font-size:18px;font-weight:600;color:#FFFFFF;margin-bottom:4px;">'
+                'The Art of the Possible</div>'
+                '<div style="font-size:13px;color:#808080;margin-bottom:24px;">'
+                'Upload data in the sidebar, or click a card to get started</div>'
+                '</div>',
+                "The Art of the Possible -- Upload data or click a card to get started."
+            )
+
+            _capabilities = [
+                ("Interactive Dashboard", "dashboard",
+                 "HTML dashboard with charts, KPIs, and filters"),
+                ("Power BI Project", "powerbi",
+                 "PBIP with semantic model, DAX measures, themed visuals"),
+                ("Reports & Exports", "reports",
+                 "PDF, PowerPoint, Word, Excel -- any audience"),
+                ("Tableau Migration", "tableau",
+                 "Convert .twb/.twbx workbooks into Power BI"),
+                ("Live Data", "data_connection",
+                 "Connect to Snowflake and build from warehouse data"),
+                ("Data Audit", "audit",
+                 "Quality checks, completeness scores, release gates"),
+            ]
+
+            _row1 = st.columns(3)
+            for i, (title, key, desc) in enumerate(_capabilities[:3]):
+                with _row1[i]:
+                    if st.button(title, key=f"cap_{key}", use_container_width=True):
+                        st.session_state.user_interest = key
+                        st.rerun()
+                    st.caption(desc)
+
+            _row2 = st.columns(3)
+            for i, (title, key, desc) in enumerate(_capabilities[3:]):
+                with _row2[i]:
+                    if st.button(title, key=f"cap_{key}", use_container_width=True):
+                        st.session_state.user_interest = key
+                        st.rerun()
+                    st.caption(desc)
+
+        # === RECENT WORK (always visible if history exists) ===
+        _recent = _get_recent_deliverables(6)
+        if _recent:
+            st.markdown("---")
+            _safe_html(
+                '<div style="font-size:15px;font-weight:600;color:#FFFFFF;'
+                'margin-bottom:12px;">Recent Work</div>',
+                "**Recent Work**"
+            )
+            _type_icons = {
+                "dashboard": "&#9783;",
+                "powerbi": "&#9638;",
+                "pptx": "&#9776;",
+                "pdf": "&#9776;",
+                "docx": "&#9776;",
+                "other": "&#9679;",
+            }
+            _vis_count = min(len(_recent), 6)
+            _rw_cols = st.columns(min(_vis_count, 3))
+            for _ri, _rec in enumerate(_recent[:6]):
+                if _ri < 6:
+                    with _rw_cols[_ri % 3]:
+                        _icon = _type_icons.get(_rec.get("type", ""), "&#9679;")
+                        _rdate = _rec.get("created_at", "")[:10]
+                        _safe_html(
+                            f'<div style="background:#1A1A1A;border:1px solid #333;'
+                            f'border-radius:8px;padding:12px;margin-bottom:8px;">'
+                            f'<div style="color:#FFE600;font-size:18px;">{_icon}</div>'
+                            f'<div style="color:#FFF;font-size:13px;font-weight:600;'
+                            f'margin:4px 0 2px 0;">{html_module.escape(_rec.get("name", "Untitled"))}</div>'
+                            f'<div style="color:#808080;font-size:11px;">'
+                            f'{html_module.escape(_rec.get("type", "").upper())} | '
+                            f'{html_module.escape(_rec.get("source_file", "")[:30])} | '
+                            f'{_rdate}</div>'
+                            f'<div style="color:#666;font-size:11px;margin-top:4px;">'
+                            f'{html_module.escape(_rec.get("description", "")[:80])}</div>'
+                            f'</div>',
+                            f'{_rec.get("name", "")} - {_rec.get("type", "")}'
                         )
-                        st.markdown(_full)
+                        _rpath = _rec.get("file_path", "")
+                        if _rpath and os.path.exists(_rpath):
+                            with open(_rpath, "rb") as _rf:
+                                st.download_button(
+                                    label="Download",
+                                    data=_rf.read(),
+                                    file_name=os.path.basename(_rpath),
+                                    key=f"rw_dl_{_rec.get('id', _ri)}",
+                                    use_container_width=True,
+                                )
 
-                    st.session_state.messages.append({
-                        "role": "assistant",
-                        "content": _full or "",
-                        "timestamp": time.time(),
-                    })
+            if len(_recent) > 6:
+                with st.expander("Show all"):
+                    for _rec in _recent[6:]:
+                        st.markdown(
+                            f"**{_rec.get('name', '')}** -- "
+                            f"{_rec.get('type', '').upper()} | "
+                            f"{_rec.get('created_at', '')[:10]}"
+                        )
 
-    # === CHAT INPUT (always active, never disabled) ===
-    if prompt := st.chat_input("Ask Dr. Data anything -- I am here to help!", key="chat_input"):
-        now = time.time()
+        if ws["phase"] != "waiting" or ws.get("data_preview") is not None:
+            # === KPI CARDS ===
+            if ws["kpis"]:
+                kpi_cols = st.columns(len(ws["kpis"]))
+                for col, kpi in zip(kpi_cols, ws["kpis"]):
+                    with col:
+                        color = kpi.get("color", "#FFDE00")
+                        _safe_html(f'<div class="kpi-card"><div class="kpi-value" style="color:{color};">{html_module.escape(str(kpi["value"]))}</div><div class="kpi-label">{html_module.escape(str(kpi["label"]))}</div></div>', f'{kpi["value"]} -- {kpi["label"]}')
 
-        # Append user message to history
-        st.session_state.messages.append({
-            "role": "user",
-            "content": prompt,
-            "timestamp": now,
-        })
+            # === PROGRESS MESSAGES ===
+            if ws["progress_messages"]:
+                for i, msg in enumerate(ws["progress_messages"]):
+                    is_last = i == len(ws["progress_messages"]) - 1
+                    status_class = "" if is_last else "complete"
+                    _safe_html(f'<div class="phase-status {status_class}"><div class="dot"></div>{html_module.escape(str(msg))}</div>', str(msg))
 
-        if not st.session_state.agent:
+            # === DATA QUALITY AUDIT (shows BEFORE data preview) ===
+            if ws.get("audit_html"):
+                _safe_html('<div class="workspace-card"><h3>Data Quality Audit</h3></div>', "**Data Quality Audit**")
+                components.html(ws["audit_html"], height=600, scrolling=True)
+
+                # Executive summary always accessible
+                if st.session_state.audience_mode == "analyst" and ws.get("audit_summary"):
+                    with st.expander("Executive Summary"):
+                        st.write(ws["audit_summary"])
+                elif st.session_state.audience_mode == "executive" and ws.get("audit_summary"):
+                    st.info(ws["audit_summary"])
+
+            # === DATA PREVIEW ===
+            if ws.get("data_preview") is not None:
+                df_preview = ws["data_preview"]
+                _safe_html('<div class="workspace-card"><h3>Data Preview</h3></div>', "**Data Preview**")
+                st.dataframe(
+                    df_preview.head(20),
+                    width="stretch",
+                    height=250,
+                )
+                st.caption(f"{len(df_preview):,} rows x {len(df_preview.columns)} columns")
+
+            # === SCORES ===
+            if ws["scores"]:
+                scores = ws["scores"]
+                _safe_html('<div class="workspace-card"><h3>Quality Scorecard</h3></div>', "**Quality Scorecard**")
+                score_cols = st.columns(5)
+                labels = [
+                    ("Overall", "total_score"),
+                    ("Data", "data_accuracy"),
+                    ("Measures", "measure_quality"),
+                    ("Visuals", "visual_effectiveness"),
+                    ("UX", "user_experience"),
+                ]
+                for col, (label, key) in zip(score_cols, labels):
+                    val = scores.get(key, 0)
+                    css_class = (
+                        "score-green" if val >= 80
+                        else "score-amber" if val >= 60
+                        else "score-red"
+                    )
+                    with col:
+                        _safe_html(f'<div style="text-align:center;"><div class="score-badge {css_class}">{val}</div><div style="font-size:11px;color:#B0B0B0;margin-top:6px;">{label}</div></div>', f'{label}: {val}')
+
+            # === DELIVERABLES (with audit gate) ===
+            if ws["deliverables"]:
+                _safe_html('<div class="workspace-card"><h3>Your Deliverables</h3></div>', "**Your Deliverables**")
+
+                # Audit gate message
+                if ws.get("audit_releasable") is False:
+                    st.warning(
+                        "Data quality audit flagged issues. "
+                        "Review the audit findings above before distributing deliverables."
+                    )
+
+                for idx, dl in enumerate(ws["deliverables"]):
+                    dl_col1, dl_col2 = st.columns([3, 1])
+                    with dl_col1:
+                        _safe_html(f'<div class="dl-card"><div class="dl-name">{html_module.escape(dl["name"])}</div><div class="dl-desc">{html_module.escape(dl.get("description", ""))}</div></div>', f'{dl["name"]}: {dl.get("description", "")}')
+                    with dl_col2:
+                        if os.path.exists(dl["path"]):
+                            # Audit each deliverable file
+                            dl_audit = st.session_state.audit_engine.audit_deliverable(
+                                dl["path"],
+                                file_type=dl.get("filename", "").split(".")[-1]
+                            )
+                            dl_audit.compute_scores()
+
+                            with open(dl["path"], "rb") as f:
+                                label = "Download"
+                                if not dl_audit.is_releasable:
+                                    label = "Download (review flagged)"
+                                st.download_button(
+                                    label=label,
+                                    data=f.read(),
+                                    file_name=dl["filename"],
+                                    key=f"ws_dl_{idx}_{dl['filename']}",
+                                )
+
+
+    # ============================================
+    # MIME types for download buttons
+    # ============================================
+
+
+    # ============================================
+    # RIGHT: CHAT PANEL -- Conversation with Dr. Data
+    # ============================================
+    with chat_col:
+        _safe_html(f'<div style="padding:4px 0 8px 0;border-bottom:1px solid #4a4a4a;margin-bottom:8px;display:flex;align-items:center;gap:8px;">{DR_DATA_AVATAR}<span style="font-size:13px;font-weight:600;color:#FFFFFF;">Chat with Dr. Data</span><span style="font-size:11px;color:#B0B0B0;">|&nbsp; The Art of the Possible</span></div>', "Chat with Dr. Data -- The Art of the Possible")
+
+        # Chat container with scroll
+        chat_container = st.container()
+
+        with chat_container:
+            # Opening message if empty
+            if not st.session_state.messages:
+                with st.chat_message("assistant"):
+                    st.markdown(
+                        "Hello! Great to have you here. I am Dr. Data, your personal "
+                        "data intelligence partner. I believe in **The Art of the Possible** "
+                        "-- every dataset has a story waiting to be told, and I am here "
+                        "to help you tell it.\n\n"
+                        "Upload a file in the sidebar (CSV, Excel, Tableau, Alteryx, or "
+                        "anything else you have) and tell me what you need. I can build "
+                        "interactive dashboards, Power BI projects, PDF reports, PowerPoint "
+                        "presentations, and more. Whatever helps you shine -- I have got "
+                        "you covered. Let us make something great together!"
+                    )
+
+            # Render full chat history on every rerender
+            for msg in st.session_state.messages:
+                with st.chat_message(msg["role"]):
+                    st.markdown(msg["content"])
+
+        # === HANDLE FILE UPLOAD -- instant acknowledgment, no blocking LLM call ===
+        if st.session_state.file_just_uploaded:
+            file_info = st.session_state.file_just_uploaded
+            st.session_state.file_just_uploaded = None
+
+            names = file_info.get("names", [])
+            name_str = ", ".join(names)
+
+            ws = st.session_state.workspace_content
+            ws["phase"] = "analyzed"
+            ws["progress_messages"].append(f"Loaded {name_str}")
+
+            # Build a quick summary from data already profiled in sidebar
+            preview_note = ""
+            if ws.get("data_preview") is not None:
+                df = ws["data_preview"]
+                cols = ", ".join(df.columns[:6].tolist())
+                more = "..." if len(df.columns) > 6 else ""
+                preview_note = (
+                    f" I can see {len(df):,} rows and "
+                    f"{len(df.columns)} columns: {cols}{more}."
+                )
+
+            audit_note = ""
+            if ws.get("audit_releasable") is True:
+                audit_note = " Data quality audit passed."
+                ws["progress_messages"].append("Audit passed")
+            elif ws.get("audit_releasable") is False:
+                audit_note = " Data quality audit flagged some issues -- check the workspace."
+                ws["progress_messages"].append("Audit flagged issues")
+
             st.session_state.messages.append({
                 "role": "assistant",
                 "content": (
-                    "I am just warming up my analysis engines -- almost "
-                    "ready! Give me one moment and try again."
+                    f"Loaded {name_str}.{preview_note}{audit_note} "
+                    f"What would you like me to build? I can create dashboards, "
+                    f"Power BI projects, reports, presentations -- whatever you need."
                 ),
-                "timestamp": now,
+                "timestamp": time.time(),
             })
+
             st.rerun()
 
-        agent = st.session_state.agent
-
-        with chat_container:
-            with st.chat_message("user"):
-                st.markdown(prompt)
-
-            with st.chat_message("assistant"):
-
-                msg_lower = prompt.lower() if isinstance(prompt, str) else ""
-                is_export = any(kw in msg_lower for kw in [
-                    "power bi", "powerbi", "pbi", "pbip", "pbix",
-                    "dashboard", "html", "interactive",
-                    "powerpoint", "pptx", "slides", "presentation", "deck",
-                    "pdf", "report", "word", "docx", "document",
-                    "all formats", "all three", "everything",
-                ])
-
-                if is_export:
-                    # ====== EXPORT PATH -- hand off to workspace ======
-                    st.session_state.pending_export = {
-                        "prompt": prompt,
-                        "timestamp": now,
-                    }
-                    st.rerun()  # workspace will pick this up
-
+        # === HANDLE CAPABILITY CARD CLICKS ===
+        if st.session_state.get("user_interest"):
+            _interest = st.session_state.pop("user_interest")
+            _agent = st.session_state.agent
+            if _agent:
+                # Build context based on whether data is loaded
+                if _agent.dataframe is not None:
+                    _fname = getattr(_agent, "current_file_name", "their data")
+                    _rows = len(_agent.dataframe)
+                    _cols = len(_agent.dataframe.columns)
+                    _context = (
+                        f"The user just clicked on the {_interest} capability card. "
+                        f"They have {_fname} loaded with {_rows} rows and {_cols} columns. "
+                        f"Respond naturally -- suggest what you would build and why, "
+                        f"based on what you see in their data. If it makes sense, "
+                        f"just start building it."
+                    )
                 else:
-                    # ====== CHAT PATH -- streaming, no spinner ======
+                    _context = (
+                        f"The user just clicked on the {_interest} capability card. "
+                        f"They have no data loaded yet. Guide them naturally."
+                    )
 
-                    # Auto-load data if the agent hasn't ingested it yet
-                    if st.session_state.uploaded_files and agent.dataframe is None:
-                        for name, info in st.session_state.uploaded_files.items():
-                            path = info.get("path", "")
-                            if path and os.path.exists(path):
-                                agent.data_file_path = path
-                                agent.data_path = path
-                                ext = info.get("ext", path.rsplit(".", 1)[-1].lower())
-                                try:
-                                    if ext == "csv":
-                                        agent.dataframe = pd.read_csv(path)
-                                    elif ext in ("xlsx", "xls"):
-                                        from app.file_handler import load_excel_smart
-                                        agent.dataframe, agent.sheet_name = load_excel_smart(path)
-                                    elif ext == "parquet":
-                                        agent.dataframe = pd.read_parquet(path)
-                                    elif ext == "json":
-                                        agent.dataframe = pd.read_json(path)
-                                    if agent.dataframe is not None and agent.data_profile is None:
-                                        agent.data_profile = agent.analyzer.profile(agent.dataframe)
-                                except Exception:
-                                    pass
-                                break
+                with chat_container:
+                    with st.chat_message("assistant"):
+                        try:
+                            _enriched = _agent._build_context_message(_context)
+                            _full = st.write_stream(_agent.chat_stream(_enriched))
+                        except (AttributeError, Exception):
+                            _resp = _agent.respond(
+                                _context,
+                                st.session_state.messages,
+                                st.session_state.uploaded_files,
+                            )
+                            _full = (
+                                _resp.get("content", "")
+                                if isinstance(_resp, dict) else str(_resp or "")
+                            )
+                            st.markdown(_full)
 
-                    # Build context and stream response word-by-word
-                    enriched = agent._build_context_message(prompt)
-                    try:
-                        full_text = st.write_stream(agent.chat_stream(enriched))
-                    except AttributeError:
-                        # Fallback: blocking call if streaming unavailable
-                        response = agent.respond(
-                            prompt, st.session_state.messages,
-                            st.session_state.uploaded_files,
-                        )
-                        full_text = (
-                            response.get("content", "")
-                            if isinstance(response, dict) else str(response or "")
-                        )
-                        st.markdown(full_text)
+                        st.session_state.messages.append({
+                            "role": "assistant",
+                            "content": _full or "",
+                            "timestamp": time.time(),
+                        })
 
-                    # Check for any files generated during tool calls
-                    chat_downloads = []
-                    for fpath in agent.generated_files:
-                        if os.path.exists(fpath):
-                            fname = os.path.basename(fpath)
-                            chat_downloads.append({
-                                "name": fname,
-                                "filename": fname,
-                                "path": fpath,
-                                "description": "Generated file",
-                            })
-                    if chat_downloads:
-                        # Notify in chat -- downloads go to workspace
-                        file_names = [dl["filename"] for dl in chat_downloads]
-                        st.markdown(
-                            f"Built {len(chat_downloads)} deliverable(s): "
-                            f"{', '.join(file_names)}. "
-                            f"Check the workspace for downloads."
-                        )
+        # === CHAT INPUT (always active, never disabled) ===
+        if prompt := st.chat_input("Ask Dr. Data anything -- I am here to help!", key="chat_input"):
+            now = time.time()
 
-                    # Save chat response to history
-                    st.session_state.messages.append({
-                        "role": "assistant",
-                        "content": full_text or "",
-                        "downloads": chat_downloads,
-                        "timestamp": now,
-                    })
+            # Append user message to history
+            st.session_state.messages.append({
+                "role": "user",
+                "content": prompt,
+                "timestamp": now,
+            })
 
-                    ws = st.session_state.workspace_content
-                    if chat_downloads:
-                        ws["deliverables"].extend(chat_downloads)
-                        ws["phase"] = "complete"
-                    if agent.dataframe is not None:
-                        if ws.get("data_preview") is None:
-                            ws["data_preview"] = agent.dataframe
+            if not st.session_state.agent:
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": (
+                        "I am just warming up my analysis engines -- almost "
+                        "ready! Give me one moment and try again."
+                    ),
+                    "timestamp": now,
+                })
+                st.rerun()
+
+            agent = st.session_state.agent
+
+            with chat_container:
+                with st.chat_message("user"):
+                    st.markdown(prompt)
+
+                with st.chat_message("assistant"):
+
+                    msg_lower = prompt.lower() if isinstance(prompt, str) else ""
+                    is_export = any(kw in msg_lower for kw in [
+                        "power bi", "powerbi", "pbi", "pbip", "pbix",
+                        "dashboard", "html", "interactive",
+                        "powerpoint", "pptx", "slides", "presentation", "deck",
+                        "pdf", "report", "word", "docx", "document",
+                        "all formats", "all three", "everything",
+                    ])
+
+                    if is_export:
+                        # ====== EXPORT PATH -- hand off to workspace ======
+                        st.session_state.pending_export = {
+                            "prompt": prompt,
+                            "timestamp": now,
+                        }
+                        st.rerun()  # workspace will pick this up
+
+                    else:
+                        # ====== CHAT PATH -- streaming, no spinner ======
+
+                        # Auto-load data if the agent hasn't ingested it yet
+                        if st.session_state.uploaded_files and agent.dataframe is None:
+                            for name, info in st.session_state.uploaded_files.items():
+                                path = info.get("path", "")
+                                if path and os.path.exists(path):
+                                    agent.data_file_path = path
+                                    agent.data_path = path
+                                    ext = info.get("ext", path.rsplit(".", 1)[-1].lower())
+                                    try:
+                                        if ext == "csv":
+                                            agent.dataframe = pd.read_csv(path)
+                                        elif ext in ("xlsx", "xls"):
+                                            from app.file_handler import load_excel_smart
+                                            agent.dataframe, agent.sheet_name = load_excel_smart(path)
+                                        elif ext == "parquet":
+                                            agent.dataframe = pd.read_parquet(path)
+                                        elif ext == "json":
+                                            agent.dataframe = pd.read_json(path)
+                                        if agent.dataframe is not None and agent.data_profile is None:
+                                            agent.data_profile = agent.analyzer.profile(agent.dataframe)
+                                    except Exception:
+                                        pass
+                                    break
+
+                        # Build context and stream response word-by-word
+                        enriched = agent._build_context_message(prompt)
+                        try:
+                            full_text = st.write_stream(agent.chat_stream(enriched))
+                        except AttributeError:
+                            # Fallback: blocking call if streaming unavailable
+                            response = agent.respond(
+                                prompt, st.session_state.messages,
+                                st.session_state.uploaded_files,
+                            )
+                            full_text = (
+                                response.get("content", "")
+                                if isinstance(response, dict) else str(response or "")
+                            )
+                            st.markdown(full_text)
+
+                        # Check for any files generated during tool calls
+                        chat_downloads = []
+                        for fpath in agent.generated_files:
+                            if os.path.exists(fpath):
+                                fname = os.path.basename(fpath)
+                                chat_downloads.append({
+                                    "name": fname,
+                                    "filename": fname,
+                                    "path": fpath,
+                                    "description": "Generated file",
+                                })
+                        if chat_downloads:
+                            # Notify in chat -- downloads go to workspace
+                            file_names = [dl["filename"] for dl in chat_downloads]
+                            st.markdown(
+                                f"Built {len(chat_downloads)} deliverable(s): "
+                                f"{', '.join(file_names)}. "
+                                f"Check the workspace for downloads."
+                            )
+
+                        # Save chat response to history
+                        st.session_state.messages.append({
+                            "role": "assistant",
+                            "content": full_text or "",
+                            "downloads": chat_downloads,
+                            "timestamp": now,
+                        })
+
+                        ws = st.session_state.workspace_content
+                        if chat_downloads:
+                            ws["deliverables"].extend(chat_downloads)
+                            ws["phase"] = "complete"
+                        if agent.dataframe is not None:
+                            if ws.get("data_preview") is None:
+                                ws["data_preview"] = agent.dataframe
+
+
+with tab2:
+    st.markdown("### Data Quality Engine")
+    st.markdown("*Enterprise data quality assessment powered by DAMA-DMBOK*")
+    st.info("Connect a data source in the sidebar, then select tables to scan.")

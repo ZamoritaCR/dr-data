@@ -50,29 +50,14 @@ Thumbs.db
 # Claude Code
 .claude/
 
-# Legacy root-level scripts (moved to app/ and core/)
-agentic_migration_engine.py
-app_integration.py
-app_v2.py
+# Archived legacy scripts
+_archive/
+
+# Legacy root-level scripts (if any remain)
 assemble_pbix.ps1
-audit_engine.py
-build_dashboard.py
-claude_agent.py
-dr_data_chat.py
-dr_data_chat_v2.py
-enhanced_tableau_parser.py
-multi_file_handler.py
-output_formatter.py
-pbix_assembler.py
-powerbi_visual_generator.py
-quick_start.py
-run_migration.py
 setup_cli.sh
-source_connectors.py
-streamlit_app.py
 test_migration.py
 windows_test.py
-app_v2.py
 
 # Legacy folders
 connectors/

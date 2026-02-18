@@ -48,6 +48,33 @@ from generators.pbip_reference import (
 )
 
 
+def _parse_tableau_field_ref(ref):
+    """Parse a Tableau field reference like '[Table].[Column]' or 'Table.Column'.
+
+    Returns (table_name, column_name). If no table part, returns ('', column).
+    """
+    import re
+    ref = ref.strip()
+    # Pattern: [Table].[Column]
+    m = re.match(r'\[([^\]]+)\]\.\[([^\]]+)\]', ref)
+    if m:
+        return m.group(1), m.group(2)
+    # Pattern: Table.[Column]
+    m = re.match(r'([^.\[]+)\.\[([^\]]+)\]', ref)
+    if m:
+        return m.group(1).strip(), m.group(2)
+    # Pattern: [Table].Column
+    m = re.match(r'\[([^\]]+)\]\.(.+)', ref)
+    if m:
+        return m.group(1), m.group(2).strip()
+    # Pattern: Table.Column
+    if '.' in ref:
+        parts = ref.split('.', 1)
+        return parts[0].strip(), parts[1].strip()
+    # Just a column name
+    return '', ref
+
+
 class PBIPGenerator:
     """Generate a complete PBIP project from AI config."""
 
@@ -67,7 +94,7 @@ class PBIPGenerator:
     # ------------------------------------------------------------------ #
 
     def generate(self, config, data_profile, dashboard_spec, data_file_path=None,
-                 sheet_name=None):
+                 sheet_name=None, relationships=None):
         """Create the full PBIP project.
 
         Args:
@@ -76,6 +103,7 @@ class PBIPGenerator:
             dashboard_spec: dict from ClaudeInterpreter (for title/theme).
             data_file_path: optional path to the source data file.
             sheet_name:     Excel sheet name that was loaded (for M expression).
+            relationships:  optional list of relationship dicts for TMDL model.
 
         Returns:
             str: path to the clean project directory containing ONLY the PBIP files.
@@ -133,8 +161,12 @@ class PBIPGenerator:
             tables_dir, tm, data_profile, data_file_path, sheet_name
         )
 
-        # 14. model.tmdl
-        self._write_model_tmdl(model_def, table_names)
+        # 14. model.tmdl (with relationships if provided)
+        all_relationships = list(relationships or [])
+        # Also check config for relationships (passed from agent)
+        if config.get("relationships"):
+            all_relationships.extend(config["relationships"])
+        self._write_model_tmdl(model_def, table_names, all_relationships or None)
 
         # --- Now build Report side using only validated names ---
 
@@ -543,7 +575,7 @@ class PBIPGenerator:
     #  TMDL files                                                          #
     # ------------------------------------------------------------------ #
 
-    def _write_model_tmdl(self, model_def, table_names):
+    def _write_model_tmdl(self, model_def, table_names, relationships=None):
         """Write definition/model.tmdl."""
         lines = [
             "model Model",
@@ -564,11 +596,116 @@ class PBIPGenerator:
         for tbl in table_names:
             lines.append(f"ref table {self._tmdl_quote(tbl)}")
         lines.append("")
+
+        # Relationships
+        rel_lines = self._generate_relationships(relationships, table_names)
+        if rel_lines:
+            lines.extend(rel_lines)
+            lines.append("")
+
         lines.append("ref cultureInfo en-US")
         lines.append("")
 
         self._write_text(model_def / "model.tmdl", "\n".join(lines) + "\n")
-        print(f"    [+] model.tmdl ({len(table_names)} tables)")
+        rel_count = len(relationships) if relationships else 0
+        print(f"    [+] model.tmdl ({len(table_names)} tables, {rel_count} relationships)")
+
+    def _generate_relationships(self, relationships, table_names):
+        """Generate TMDL relationship blocks from detected relationships.
+
+        Args:
+            relationships: list of dicts, each with keys:
+                - from_table, from_column, to_table, to_column
+                - Optional: cardinality ('many-to-one', 'one-to-many', etc.)
+                - Or: left_table, right_table, left_col, right_col (RelationshipDetector format)
+                - Or: left, right, type (Tableau parser format)
+            table_names: list of table names actually present in the model.
+
+        Returns:
+            list of TMDL lines (empty if no valid relationships).
+        """
+        if not relationships:
+            return []
+
+        table_set = set(table_names)
+        lines = []
+
+        for rel in relationships:
+            # Normalize the different relationship formats into from/to
+            from_table, from_col, to_table, to_col = self._normalize_relationship(rel)
+
+            if not all([from_table, from_col, to_table, to_col]):
+                continue
+
+            # Both tables must exist in the model
+            if from_table not in table_set or to_table not in table_set:
+                # If tables don't match exactly, check if one is a substring
+                # (e.g., "Orders" matching "Orders" table)
+                from_match = self._find_table_match(from_table, table_set)
+                to_match = self._find_table_match(to_table, table_set)
+                if from_match and to_match:
+                    from_table = from_match
+                    to_table = to_match
+                else:
+                    print(f"    [SKIP] relationship {from_table}[{from_col}] -> "
+                          f"{to_table}[{to_col}]: table not in model")
+                    continue
+
+            from_q = self._tmdl_quote(from_table)
+            to_q = self._tmdl_quote(to_table)
+            from_col_q = self._tmdl_quote(from_col)
+            to_col_q = self._tmdl_quote(to_col)
+
+            lines.append(f"relationship {from_q}[{from_col_q}] -> {to_q}[{to_col_q}]")
+            lines.append("\tcrossFilteringBehavior: oneDirection")
+            lines.append("\tfromCardinality: many")
+            lines.append("\ttoCardinality: one")
+            lines.append("\tisActive")
+            lines.append("\tsecurityFilteringBehavior: oneDirection")
+            lines.append("")
+
+        if lines:
+            print(f"    [+] {len([l for l in lines if l.startswith('relationship')])} "
+                  f"relationships generated")
+        return lines
+
+    @staticmethod
+    def _normalize_relationship(rel):
+        """Normalize different relationship dict formats to (from_table, from_col, to_table, to_col)."""
+        # Format 1: explicit from/to keys (our canonical format)
+        if "from_table" in rel:
+            return (
+                rel["from_table"], rel["from_column"],
+                rel["to_table"], rel["to_column"],
+            )
+
+        # Format 2: RelationshipDetector format (left/right)
+        if "left_table" in rel:
+            return (
+                rel["left_table"], rel["left_col"],
+                rel["right_table"], rel["right_col"],
+            )
+
+        # Format 3: Tableau parser format (left/right are "table.column" strings)
+        if "left" in rel and "right" in rel:
+            left = rel["left"]
+            right = rel["right"]
+            # Parse "table.column" or "[table].[column]" patterns
+            from_table, from_col = _parse_tableau_field_ref(left)
+            to_table, to_col = _parse_tableau_field_ref(right)
+            return (from_table, from_col, to_table, to_col)
+
+        return (None, None, None, None)
+
+    @staticmethod
+    def _find_table_match(name, table_set):
+        """Find a table in table_set that matches name (case-insensitive, underscore-agnostic)."""
+        norm = name.lower().replace(" ", "_").replace("-", "_")
+        for t in table_set:
+            t_norm = t.lower().replace(" ", "_").replace("-", "_")
+            if norm == t_norm:
+                return t
+        return None
 
     # Pandas dtype -> PBI dataType mapping
     _DTYPE_MAP = {
@@ -666,12 +803,18 @@ class PBIPGenerator:
 
             lines.append("")
 
-        # Measures -- from AI output, validated against real columns
+        # Measures -- from AI output, validated against real columns + DAX syntax
         valid_measure_names = set()
         for m in all_measures:
             m_name = m["name"]
             dax = m.get("dax", m.get("expression", "BLANK()"))
             fmt = m.get("format", m.get("formatString", "#,0"))
+
+            # Validate DAX syntax (balanced parens, no foreign syntax, etc.)
+            syntax_issue = self._validate_dax_syntax(dax)
+            if syntax_issue:
+                print(f"    [SKIP] measure '{m_name}': {syntax_issue}")
+                continue
 
             # Validate: extract column refs like [ColName] or Table[ColName]
             # and check they exist in the actual data
@@ -861,6 +1004,58 @@ class PBIPGenerator:
                 continue
             bad.add(ref)
         return bad
+
+    @staticmethod
+    def _validate_dax_syntax(formula):
+        """Basic DAX syntax validation -- safety net, not a full parser.
+
+        Returns None if the formula looks OK, or a reason string if it should be skipped.
+        Better to skip a bad measure than crash Power BI Desktop.
+        """
+        if not formula or not formula.strip():
+            return "empty formula"
+
+        f = formula.strip()
+
+        # a. Balanced parentheses
+        if f.count("(") != f.count(")"):
+            return (f"unbalanced parentheses: {f.count('(')} open vs "
+                    f"{f.count(')')} close")
+
+        # b. Balanced double quotes
+        if f.count('"') % 2 != 0:
+            return f"unbalanced double quotes ({f.count('\"')} found)"
+
+        # c. No Python/SQL syntax leaking through
+        import re
+        foreign_patterns = [
+            (r'\bdef\s+', "Python 'def' keyword"),
+            (r'\bimport\s+', "Python 'import' keyword"),
+            (r'\bSELECT\s+', "SQL SELECT statement"),
+            (r'\bFROM\s+\w+\s+WHERE\b', "SQL FROM...WHERE pattern"),
+            (r'\blambda\s+', "Python 'lambda' keyword"),
+            (r'\bclass\s+', "Python 'class' keyword"),
+        ]
+        for pattern, desc in foreign_patterns:
+            if re.search(pattern, f, re.IGNORECASE):
+                return f"contains {desc}"
+
+        # d. No bare Tableau syntax: [Field] without Table prefix in aggregation context
+        # Tableau uses SUM([Field]) -- DAX requires SUM(Table[Field])
+        # Look for AGG_FUNC([Field]) where [Field] is NOT preceded by a table name
+        tableau_agg_leak = re.findall(
+            r'\b(SUM|AVERAGE|COUNT|MIN|MAX|COUNTD|AVG)\s*\(\s*\[',
+            f, re.IGNORECASE
+        )
+        if tableau_agg_leak:
+            return (f"Tableau syntax detected: {tableau_agg_leak[0]}([...]) "
+                    f"-- DAX requires {tableau_agg_leak[0]}(Table[Column])")
+
+        # e. Completely nonsensical: just a number or a bare string
+        if re.match(r'^[\d.]+$', f):
+            return "formula is just a literal number"
+
+        return None  # All checks passed
 
     def _safe_name(self, name):
         safe = name.replace(" ", "_").replace("/", "_").replace("\\", "_")

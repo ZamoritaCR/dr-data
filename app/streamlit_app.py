@@ -795,106 +795,7 @@ with chat_col:
             "timestamp": now,
         })
 
-        if st.session_state.agent:
-            response_data = None
-            content = ""
-            downloads = []
-
-            # Show spinner inside chat while agent works
-            with chat_container:
-                with st.chat_message("user"):
-                    st.markdown(prompt)
-                with st.chat_message("assistant"):
-                    try:
-                        import concurrent.futures
-                        with st.spinner("Dr. Data is on it..."):
-                            with concurrent.futures.ThreadPoolExecutor() as executor:
-                                future = executor.submit(
-                                    st.session_state.agent.respond,
-                                    prompt,
-                                    st.session_state.messages,
-                                    st.session_state.uploaded_files,
-                                )
-                                try:
-                                    response_data = future.result(timeout=180)
-                                except concurrent.futures.TimeoutError:
-                                    response_data = {
-                                        "content": (
-                                            "That is taking longer than expected with this "
-                                            "dataset. Try asking for a specific deliverable "
-                                            "like just a dashboard or just a PowerPoint."
-                                        ),
-                                        "downloads": [],
-                                        "scores": None,
-                                    }
-                    except Exception as e:
-                        response_data = {
-                            "content": (
-                                f"I ran into a small hiccup there: {str(e)[:200]}. "
-                                f"No worries though -- these things happen! Could you "
-                                f"try rephrasing what you need?"
-                            ),
-                            "downloads": [],
-                            "scores": None,
-                        }
-
-                    # Defensive response handling
-                    if response_data is None:
-                        content = "Dr. Data hit a snag. Try your request again."
-                    elif isinstance(response_data, dict):
-                        content = response_data.get("content", "") or ""
-                        downloads = response_data.get("downloads", []) or []
-                    elif isinstance(response_data, str):
-                        content = response_data
-                    else:
-                        content = str(response_data)
-
-                    if not content.strip() and not downloads:
-                        content = "Dr. Data is processing. Try asking again in a moment."
-
-                    # Render response text inside chat_message
-                    if content.strip():
-                        st.markdown(content)
-
-                    # Render download buttons inside chat_message
-                    _render_downloads(downloads, key_prefix="chat", ts=now)
-
-            # Save assistant message to history (with downloads for replay)
-            st.session_state.messages.append({
-                "role": "assistant",
-                "content": content if content.strip() else "Deliverables ready.",
-                "downloads": downloads if downloads else None,
-                "timestamp": now,
-            })
-
-            # Update workspace state
-            ws = st.session_state.workspace_content
-            if isinstance(response_data, dict):
-                if downloads:
-                    for dl in downloads:
-                        if os.path.exists(dl.get("path", "")):
-                            try:
-                                dl_audit = st.session_state.audit_engine.audit_deliverable(
-                                    dl["path"],
-                                    file_type=dl.get("filename", "").split(".")[-1],
-                                )
-                                dl_audit.compute_scores()
-                                dl["audit_score"] = dl_audit.overall_score
-                                dl["audit_releasable"] = dl_audit.is_releasable
-                            except Exception:
-                                pass
-                    ws["deliverables"].extend(downloads)
-                    ws["phase"] = "complete"
-                    ws["progress_messages"].append("Deliverables ready -- audited")
-
-                if response_data.get("scores"):
-                    ws["scores"] = response_data["scores"]
-
-            agent = st.session_state.agent
-            if agent.dataframe is not None and ws.get("data_preview") is None:
-                ws["data_preview"] = agent.dataframe
-
-        else:
+        if not st.session_state.agent:
             st.session_state.messages.append({
                 "role": "assistant",
                 "content": (
@@ -904,3 +805,265 @@ with chat_col:
                 "timestamp": now,
             })
             st.rerun()
+
+        agent = st.session_state.agent
+
+        # Detect export intent (same keywords as agent)
+        msg_lower = prompt.lower()
+        _export_kws = (
+            "powerpoint", "pptx", "presentation", "slides", "deck",
+            "pdf", "report", "word", "docx", "document",
+            "dashboard", "html", "interactive", "explore",
+            "drill down", "filter",
+            "power bi", "pbi", "pbip", "pbix",
+            "all formats", "all three", "everything",
+        )
+        want_export = any(k in msg_lower for k in _export_kws)
+        has_data = agent.dataframe is not None
+
+        with chat_container:
+            with st.chat_message("user"):
+                st.markdown(prompt)
+
+            if want_export and has_data:
+                # ============================================
+                # EXPORT FLOW -- Claude CLI style
+                # ============================================
+                with st.chat_message("assistant"):
+                    # Phase 2: Instant acknowledgment (no LLM, instant)
+                    dataset_name = "your dataset"
+                    if agent.data_file_path:
+                        dataset_name = (
+                            os.path.splitext(
+                                os.path.basename(agent.data_file_path)
+                            )[0].replace("_", " ").strip()
+                            or "your dataset"
+                        )
+                    st.markdown(
+                        f"On it. Building your deliverables from "
+                        f"**{dataset_name}**. This will take a moment."
+                    )
+
+                    # Phase 3: Live progress via st.status
+                    response_data = None
+                    with st.status(
+                        "Working...", expanded=True
+                    ) as status_widget:
+                        def _progress_cb(msg):
+                            status_widget.write(msg)
+
+                        try:
+                            response_data = agent.respond(
+                                prompt,
+                                st.session_state.messages,
+                                st.session_state.uploaded_files,
+                                progress_callback=_progress_cb,
+                            )
+                        except Exception as e:
+                            response_data = {
+                                "type": "export",
+                                "acknowledgment": "",
+                                "downloads": [],
+                                "errors": [str(e)[:200]],
+                                "progress_steps": [],
+                                "followup_context": "",
+                            }
+                            status_widget.write(
+                                f"Hit a snag: {str(e)[:200]}"
+                            )
+
+                        status_widget.update(
+                            label="All deliverables ready",
+                            state="complete",
+                            expanded=False,
+                        )
+
+                    # Phase 4: Download buttons
+                    downloads = response_data.get("downloads", []) or []
+                    _render_downloads(downloads, key_prefix="chat", ts=now)
+
+                    # Phase 5: Dr. Data wrap-up (streamed)
+                    followup = ""
+                    ctx = response_data.get("followup_context", "")
+                    if ctx:
+                        try:
+                            followup = st.write_stream(
+                                agent.narrate_export_stream(ctx)
+                            )
+                        except Exception:
+                            followup = agent._narrate_export(
+                                downloads,
+                                response_data.get("errors", []),
+                            )
+                            st.markdown(followup)
+                    elif not downloads:
+                        followup = (
+                            "Hmm, nothing came out of that build. "
+                            "Tell me what you need and I will try "
+                            "a different angle."
+                        )
+                        st.markdown(followup)
+
+                # Phase 6: Save to history
+                ack_text = response_data.get(
+                    "acknowledgment",
+                    f"On it. Building your deliverables from {dataset_name}.",
+                )
+                full_content = ack_text
+                if followup:
+                    full_content += "\n\n" + followup
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": full_content,
+                    "downloads": downloads if downloads else None,
+                    "timestamp": now,
+                })
+
+                # Update workspace state
+                ws = st.session_state.workspace_content
+                if downloads:
+                    for dl in downloads:
+                        if os.path.exists(dl.get("path", "")):
+                            try:
+                                dl_audit = (
+                                    st.session_state.audit_engine
+                                    .audit_deliverable(
+                                        dl["path"],
+                                        file_type=dl.get(
+                                            "filename", ""
+                                        ).split(".")[-1],
+                                    )
+                                )
+                                dl_audit.compute_scores()
+                                dl["audit_score"] = dl_audit.overall_score
+                                dl["audit_releasable"] = (
+                                    dl_audit.is_releasable
+                                )
+                            except Exception:
+                                pass
+                    ws["deliverables"].extend(downloads)
+                    ws["phase"] = "complete"
+                    ws["progress_messages"].append(
+                        "Deliverables ready -- audited"
+                    )
+                if agent.dataframe is not None:
+                    if ws.get("data_preview") is None:
+                        ws["data_preview"] = agent.dataframe
+
+            else:
+                # ============================================
+                # CHAT FLOW -- normal conversation
+                # ============================================
+                with st.chat_message("assistant"):
+                    content = ""
+                    downloads = []
+                    response_data = None
+
+                    try:
+                        import concurrent.futures
+                        with st.spinner("Dr. Data is thinking..."):
+                            with concurrent.futures.ThreadPoolExecutor() as ex:
+                                future = ex.submit(
+                                    agent.respond,
+                                    prompt,
+                                    st.session_state.messages,
+                                    st.session_state.uploaded_files,
+                                )
+                                try:
+                                    response_data = future.result(
+                                        timeout=180
+                                    )
+                                except concurrent.futures.TimeoutError:
+                                    response_data = {
+                                        "type": "chat",
+                                        "content": (
+                                            "That is taking longer than "
+                                            "expected. Try asking for a "
+                                            "specific deliverable."
+                                        ),
+                                    }
+                    except Exception as e:
+                        response_data = {
+                            "type": "chat",
+                            "content": (
+                                f"Hit a snag: {str(e)[:200]}. "
+                                f"Try rephrasing what you need."
+                            ),
+                        }
+
+                    # Defensive response handling
+                    if response_data is None:
+                        content = (
+                            "Dr. Data hit a snag. "
+                            "Try your request again."
+                        )
+                    elif isinstance(response_data, dict):
+                        content = response_data.get("content", "") or ""
+                        downloads = (
+                            response_data.get("downloads", []) or []
+                        )
+                    elif isinstance(response_data, str):
+                        content = response_data
+                    else:
+                        content = str(response_data)
+
+                    if not content.strip() and not downloads:
+                        content = (
+                            "Dr. Data is processing. "
+                            "Try asking again in a moment."
+                        )
+
+                    if content.strip():
+                        st.markdown(content)
+                    if downloads:
+                        _render_downloads(
+                            downloads, key_prefix="chat", ts=now
+                        )
+
+                # Save to history
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": (
+                        content if content.strip()
+                        else "Done."
+                    ),
+                    "downloads": downloads if downloads else None,
+                    "timestamp": now,
+                })
+
+                # Update workspace state
+                ws = st.session_state.workspace_content
+                if isinstance(response_data, dict):
+                    if downloads:
+                        for dl in downloads:
+                            if os.path.exists(dl.get("path", "")):
+                                try:
+                                    dl_audit = (
+                                        st.session_state.audit_engine
+                                        .audit_deliverable(
+                                            dl["path"],
+                                            file_type=dl.get(
+                                                "filename", ""
+                                            ).split(".")[-1],
+                                        )
+                                    )
+                                    dl_audit.compute_scores()
+                                    dl["audit_score"] = (
+                                        dl_audit.overall_score
+                                    )
+                                    dl["audit_releasable"] = (
+                                        dl_audit.is_releasable
+                                    )
+                                except Exception:
+                                    pass
+                        ws["deliverables"].extend(downloads)
+                        ws["phase"] = "complete"
+                        ws["progress_messages"].append(
+                            "Deliverables ready -- audited"
+                        )
+                    if response_data.get("scores"):
+                        ws["scores"] = response_data["scores"]
+
+                if agent.dataframe is not None:
+                    if ws.get("data_preview") is None:
+                        ws["data_preview"] = agent.dataframe

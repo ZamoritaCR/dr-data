@@ -1037,23 +1037,63 @@ class DrDataAgent:
             "all formats", "all three", "everything",
         ))
 
-        any_export = (
+        is_export = (
             want_pptx or want_pdf or want_docx
             or want_dash or want_pbi or want_all
         )
 
-        if any_export:
+        print(f'[ROUTE] Message: {user_message[:50]}... -> {"export" if is_export else "chat"}')
+
+        if is_export:
             # Guard: need data first
             if self.dataframe is None:
                 return {
+                    "type": "chat",
                     "content": (
                         "Upload a file first and I will build that for you. "
                         "Drop a CSV, Excel, or any data file in the sidebar "
                         "and I will get right on it."
                     ),
-                    "downloads": [],
-                    "scores": None,
                 }
+
+            if want_all:
+                want_pptx = want_pdf = want_docx = want_dash = want_pbi = True
+
+            # -- Build instant acknowledgment --
+            dataset_name = "your dataset"
+            if self.data_file_path:
+                dataset_name = os.path.splitext(
+                    os.path.basename(self.data_file_path)
+                )[0].replace("_", " ").strip() or "your dataset"
+            items = []
+            if want_dash:
+                items.append("interactive dashboard")
+            if want_pbi:
+                items.append("Power BI project")
+            if want_pptx:
+                items.append("PowerPoint")
+            if want_pdf:
+                items.append("PDF report")
+            if want_docx:
+                items.append("Word document")
+            if not items:
+                items.append("deliverables")
+            item_str = (" and ".join(items) if len(items) <= 2
+                        else ", ".join(items[:-1]) + ", and " + items[-1])
+            row_count = len(self.dataframe)
+            col_count = len(self.dataframe.columns)
+            acknowledgment = (
+                f"On it. Building your {item_str} from {dataset_name} "
+                f"({row_count:,} rows, {col_count} columns). "
+                f"This will take a moment."
+            )
+
+            # -- Progress tracking --
+            progress_steps = []
+            def _progress(msg):
+                progress_steps.append(msg)
+                if progress_callback:
+                    progress_callback(msg)
 
             title = "Dr. Data Report"
             if self.data_file_path:
@@ -1068,11 +1108,14 @@ class DrDataAgent:
             downloads = []
             errors = []
 
-            if want_all:
-                want_pptx = want_pdf = want_docx = want_dash = want_pbi = True
+            _progress(
+                f"Reading data profile... "
+                f"{row_count:,} rows across {col_count} columns"
+            )
 
             # -- Interactive HTML Dashboard --
             if want_dash:
+                _progress("Generating interactive dashboard...")
                 try:
                     p = self.dashboard_builder.generate(
                         self.dataframe, title,
@@ -1094,11 +1137,14 @@ class DrDataAgent:
                             "Interactive Dashboard", p,
                             {"title": title, "type": "html"},
                         )
+                        _progress("  Dashboard complete.")
                 except Exception as e:
                     errors.append(f"Interactive Dashboard: {e}")
+                    _progress(f"  Dashboard failed: {str(e)[:80]}")
 
             # -- PowerPoint --
             if want_pptx:
+                _progress("Generating PowerPoint presentation...")
                 try:
                     p = self.export_engine.generate_pptx(
                         self.dataframe, title,
@@ -1118,11 +1164,14 @@ class DrDataAgent:
                             "PowerPoint", p,
                             {"title": title, "type": "pptx"},
                         )
+                        _progress("  PowerPoint complete.")
                 except Exception as e:
                     errors.append(f"PowerPoint: {e}")
+                    _progress(f"  PowerPoint failed: {str(e)[:80]}")
 
             # -- PDF --
             if want_pdf:
+                _progress("Generating PDF report...")
                 try:
                     p = self.export_engine.generate_pdf(
                         self.dataframe, title,
@@ -1141,11 +1190,14 @@ class DrDataAgent:
                             "PDF Report", p,
                             {"title": title, "type": "pdf"},
                         )
+                        _progress("  PDF complete.")
                 except Exception as e:
                     errors.append(f"PDF Report: {e}")
+                    _progress(f"  PDF failed: {str(e)[:80]}")
 
             # -- Word --
             if want_docx:
+                _progress("Generating Word document...")
                 try:
                     p = self.export_engine.generate_docx(
                         self.dataframe, title,
@@ -1164,18 +1216,22 @@ class DrDataAgent:
                             "Word Document", p,
                             {"title": title, "type": "docx"},
                         )
+                        _progress("  Word document complete.")
                 except Exception as e:
                     errors.append(f"Word Document: {e}")
+                    _progress(f"  Word document failed: {str(e)[:80]}")
 
             # -- Power BI project --
             if want_pbi:
+                _progress("Generating Power BI project...")
+                _progress("  Building data model...")
                 try:
-                    # Route through the LLM tool-calling path so the
-                    # full Power BI pipeline (design + build) runs.
                     pbi_prompt = self._build_context_message(
                         f"Build a Power BI .pbip project from this data. "
                         f"Title: {title}."
                     )
+                    _progress("  Writing DAX measures...")
+                    _progress("  Configuring visuals...")
                     pbi_result = self.chat(pbi_prompt)
                     for fpath in pbi_result.get("files", []):
                         if os.path.exists(fpath):
@@ -1193,11 +1249,14 @@ class DrDataAgent:
                                 "Power BI Project", fpath,
                                 {"title": title, "type": "pbip"},
                             )
+                    _progress("  Power BI project complete.")
                 except Exception as e:
                     errors.append(f"Power BI Project: {e}")
+                    _progress(f"  Power BI failed: {str(e)[:80]}")
 
             # -- Generate trace log and add to downloads --
             if downloads:
+                _progress("Generating trace log...")
                 try:
                     trace_path = self.trace.generate_trace_doc(
                         os.path.join(self.output_dir, "trace_log.html"),
@@ -1215,89 +1274,98 @@ class DrDataAgent:
                 except Exception:
                     pass
 
-            # Build response content
-            if downloads or errors:
-                parts = []
-                if downloads:
-                    fmt_names = [d["name"] for d in downloads]
-                    if len(fmt_names) == 1:
-                        parts.append(
-                            f"Your {fmt_names[0]} is ready."
-                        )
-                    else:
-                        parts.append(
-                            f"Built {' and '.join(fmt_names)} from your "
-                            f"{len(self.dataframe):,}-row dataset."
-                        )
-                if errors:
-                    for err in errors:
-                        parts.append(
-                            f"Hit a snag on {err.split(':')[0]} -- "
-                            f"I will retry if you ask again."
-                        )
-                return {
-                    "content": " ".join(parts),
-                    "downloads": downloads,
-                    "scores": None,
-                }
-
-        # Enrich user message with context so Claude never asks for paths
-        enriched = self._build_context_message(user_message)
-
-        # Route: use OpenAI for large-context or analysis-heavy requests,
-        # but ONLY when no tool calling is needed. If tools might be needed
-        # (build, design, parse), always use Claude's tool loop.
-        _tool_keywords = (
-            "build", "power bi", "pbi", "pbip", "tableau", "alteryx",
-            "parse", "migrate",
-        )
-        needs_tools = any(kw in msg_lower for kw in _tool_keywords)
-
-        if not needs_tools and self.openai_client:
-            estimated_tokens = len(enriched) // 4
-            is_heavy = (
-                estimated_tokens > 5000
-                or any(kw in msg_lower for kw in self._HEAVY_KEYWORDS)
+            # Build followup context for LLM narration
+            detail_lines = []
+            for d in downloads:
+                detail_lines.append(
+                    f"- {d['name']}: {d.get('description', '')}"
+                )
+            if errors:
+                for e in errors:
+                    detail_lines.append(f"- Failed: {e}")
+            data_hint = ""
+            if self.data_profile:
+                insights = self.data_profile.get("quick_insights", [])
+                if insights:
+                    data_hint = (
+                        "\nInteresting things in the data: "
+                        + "; ".join(insights[:3])
+                    )
+            followup_context = (
+                f"I just built the following deliverables for the user:\n"
+                + "\n".join(detail_lines)
+                + f"\nThe dataset has {row_count:,} rows and "
+                f"{col_count} columns.{data_hint}"
             )
-            if is_heavy:
-                oai_text = self._call_openai(DR_DATA_SYSTEM_PROMPT, enriched)
-                if oai_text is not None:
-                    return {
-                        "content": oai_text,
-                        "downloads": [],
-                        "scores": None,
-                    }
-                # OpenAI failed -- fall through to Claude
 
-        # Use Claude chat() with tool-calling loop
-        result = self.chat(enriched, progress_callback=progress_callback)
+            return {
+                "type": "export",
+                "acknowledgment": acknowledgment,
+                "downloads": downloads,
+                "errors": errors,
+                "progress_steps": progress_steps,
+                "followup_context": followup_context,
+            }
 
-        # Translate to workspace-friendly format
-        downloads = []
-        for fpath in result.get("files", []):
-            if os.path.exists(fpath):
-                fname = os.path.basename(fpath)
-                downloads.append({
-                    "name": fname,
-                    "description": "Generated file",
-                    "path": fpath,
-                    "filename": fname,
-                })
+        else:
+            # ---- Normal chat path (guaranteed if not export) ----
+            enriched = self._build_context_message(user_message)
 
-        scores = None
-        analyst_path = os.path.join(self.output_dir, "analyst_scores.json")
-        if os.path.exists(analyst_path):
-            try:
-                with open(analyst_path, "r", encoding="utf-8") as f:
-                    scores = json.load(f).get("scorecard")
-            except Exception:
-                pass
+            # Route: use OpenAI for large-context or analysis-heavy requests,
+            # but ONLY when no tool calling is needed.
+            _tool_keywords = (
+                "build", "power bi", "pbi", "pbip", "tableau", "alteryx",
+                "parse", "migrate",
+            )
+            needs_tools = any(kw in msg_lower for kw in _tool_keywords)
 
-        return {
-            "content": result.get("text", ""),
-            "downloads": downloads,
-            "scores": scores,
-        }
+            if not needs_tools and self.openai_client:
+                estimated_tokens = len(enriched) // 4
+                is_heavy = (
+                    estimated_tokens > 5000
+                    or any(kw in msg_lower for kw in self._HEAVY_KEYWORDS)
+                )
+                if is_heavy:
+                    oai_text = self._call_openai(
+                        DR_DATA_SYSTEM_PROMPT, enriched
+                    )
+                    if oai_text is not None:
+                        return {
+                            "type": "chat",
+                            "content": oai_text,
+                        }
+                    # OpenAI failed -- fall through to Claude
+
+            # Use Claude chat() with tool-calling loop
+            result = self.chat(enriched, progress_callback=progress_callback)
+
+            # Translate to workspace-friendly format
+            chat_downloads = []
+            for fpath in result.get("files", []):
+                if os.path.exists(fpath):
+                    fname = os.path.basename(fpath)
+                    chat_downloads.append({
+                        "name": fname,
+                        "description": "Generated file",
+                        "path": fpath,
+                        "filename": fname,
+                    })
+
+            scores = None
+            analyst_path = os.path.join(self.output_dir, "analyst_scores.json")
+            if os.path.exists(analyst_path):
+                try:
+                    with open(analyst_path, "r", encoding="utf-8") as f:
+                        scores = json.load(f).get("scorecard")
+                except Exception:
+                    pass
+
+            return {
+                "type": "chat",
+                "content": result.get("text", ""),
+                "downloads": chat_downloads,
+                "scores": scores,
+            }
 
     def _build_context_message(self, user_message):
         """Inject context about loaded data so Claude never asks for file paths."""
@@ -1342,6 +1410,118 @@ class DrDataAgent:
         if context_parts:
             return "\n".join(context_parts) + "\n\n" + user_message
         return user_message
+
+    def _narrate_export(self, downloads, errors):
+        """Ask the LLM to narrate what was just built in Dr. Data's voice."""
+        details = []
+        for d in downloads:
+            details.append(f"- {d['name']}: {d.get('description', '')}")
+        if errors:
+            for e in errors:
+                details.append(f"- Failed: {e}")
+
+        if not details:
+            return (
+                "Hmm, nothing came out of that build. "
+                "Tell me what you need and I will try a different angle."
+            )
+
+        row_count = len(self.dataframe) if self.dataframe is not None else 0
+        col_count = (
+            len(self.dataframe.columns) if self.dataframe is not None else 0
+        )
+
+        data_hint = ""
+        if self.data_profile:
+            insights = self.data_profile.get("quick_insights", [])
+            if insights:
+                data_hint = (
+                    "\nInteresting things in the data: "
+                    + "; ".join(insights[:3])
+                )
+
+        detail_text = "\n".join(details)
+        llm_prompt = (
+            f"I just built the following deliverables for the user:\n"
+            f"{detail_text}\n"
+            f"The dataset has {row_count:,} rows and "
+            f"{col_count} columns.{data_hint}\n\n"
+            f"Write a short 1-2 sentence response confirming what you built. "
+            f"Mention something specific and interesting you noticed about "
+            f"the data while building it. Be natural and conversational, "
+            f"not robotic."
+        )
+
+        try:
+            resp = self.client.messages.create(
+                model=self.MODEL,
+                max_tokens=300,
+                temperature=0.7,
+                system=DR_DATA_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": llm_prompt}],
+                timeout=30.0,
+            )
+            text = resp.content[0].text.strip()
+            if text:
+                self.trace.log_llm_call(
+                    "claude", self.MODEL,
+                    "narrate_export", text[:200],
+                )
+                return text
+        except Exception:
+            pass
+
+        # Fallback -- still natural, not robotic
+        if downloads:
+            fmt = downloads[0]["name"] if len(downloads) == 1 else "deliverables"
+            fallback = (
+                f"Done -- your {fmt} is in the downloads. "
+                f"Take a look and tell me what you want to tweak."
+            )
+        else:
+            fallback = (
+                "Ran into some issues with the build. "
+                "Tell me what you need and I will try again."
+            )
+        if errors:
+            err_names = [e.split(":")[0] for e in errors]
+            fallback += f" (Heads up: {', '.join(err_names)} had issues.)"
+        return fallback
+
+    def narrate_export_stream(self, followup_context):
+        """Stream Dr. Data's response about what was built. Yields text chunks.
+
+        Use with st.write_stream() in Streamlit for live typing effect.
+        """
+        prompt = (
+            f"{followup_context}\n\n"
+            "Write a short 1-2 sentence response confirming what you built. "
+            "Mention something specific and interesting you noticed about "
+            "the data while building it. Be natural and conversational, "
+            "not robotic."
+        )
+        try:
+            with self.client.messages.stream(
+                model=self.MODEL,
+                max_tokens=300,
+                temperature=0.7,
+                system=DR_DATA_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": prompt}],
+            ) as stream:
+                full_text = ""
+                for text in stream.text_stream:
+                    full_text += text
+                    yield text
+                if full_text:
+                    self.trace.log_llm_call(
+                        "claude", self.MODEL,
+                        "narrate_export", full_text[:200],
+                    )
+        except Exception:
+            yield (
+                "Done -- your deliverables are ready. "
+                "Take a look and tell me what you want to tweak."
+            )
 
     # ------------------------------------------------------------------ #
     #  Tool Execution                                                      #
@@ -1543,13 +1723,41 @@ class DrDataAgent:
 
         try:
             # Step 2: Claude interprets request -> dashboard spec
-            self._report_progress(
-                "Step 2/5: Claude is designing your dashboard "
-                "(pages, visuals, DAX measures)..."
-            )
             from core.claude_interpreter import ClaudeInterpreter
             interpreter = ClaudeInterpreter()
-            dashboard_spec = interpreter.interpret(request, pbi_profile)
+
+            if self.tableau_spec:
+                # --- TABLEAU MIGRATION PATH ---
+                self._report_progress(
+                    "Step 2/5: Claude is translating your Tableau "
+                    "workbook to Power BI..."
+                )
+                translate_request = self._build_tableau_translate_request(
+                    request, table_name
+                )
+                dashboard_spec = interpreter.interpret(
+                    translate_request, pbi_profile
+                )
+
+                # Enrich spec with Tableau metadata for downstream stages
+                dashboard_spec["source"] = "tableau_migration"
+                dashboard_spec["tableau_worksheets"] = (
+                    self.tableau_spec.get("worksheets", [])
+                )
+                dashboard_spec["tableau_dashboards"] = (
+                    self.tableau_spec.get("dashboards", [])
+                )
+                dashboard_spec["tableau_calcs"] = (
+                    self.tableau_spec.get("calculated_fields", [])
+                )
+            else:
+                # --- FRESH DESIGN PATH (CSV / Excel) ---
+                self._report_progress(
+                    "Step 2/5: Claude is designing your dashboard "
+                    "(pages, visuals, DAX measures)..."
+                )
+                dashboard_spec = interpreter.interpret(request, pbi_profile)
+
             self.dashboard_spec = dashboard_spec
 
             page_count = len(dashboard_spec.get("pages", []))
@@ -1575,10 +1783,19 @@ class DrDataAgent:
             from generators.pbip_generator import PBIPGenerator
             output_dir = str(PROJECT_ROOT / "output")
             generator = PBIPGenerator(output_dir)
+
+            # Collect relationships from all sources
+            relationships = []
+            if self.session and self.session.relationships:
+                relationships.extend(self.session.relationships)
+            if self.tableau_spec and self.tableau_spec.get("relationships"):
+                relationships.extend(self.tableau_spec["relationships"])
+
             result_path = generator.generate(
                 config, pbi_profile, dashboard_spec,
                 data_file_path=self.data_file_path,
                 sheet_name=self.sheet_name,
+                relationships=relationships or None,
             )
 
             # Step 5: Bundle data file + ZIP for download
@@ -1627,6 +1844,225 @@ class DrDataAgent:
                 "error": f"Power BI generation failed: {e}",
                 "suggestion": "Try building an HTML dashboard instead."
             })
+
+    # ------------------------------------------------------------------ #
+    #  Tableau -> Power BI translation helper                               #
+    # ------------------------------------------------------------------ #
+
+    # Tableau -> Power BI chart type mapping
+    _TABLEAU_CHART_MAP = {
+        "bar": "clusteredBarChart",
+        "stacked-bar": "stackedBarChart",
+        "line": "lineChart",
+        "area": "areaChart",
+        "map": "map",
+        "filled-map": "filledMap",
+        "text": "tableEx",
+        "text-table": "tableEx",
+        "crosstab": "matrix",
+        "scatter": "scatterChart",
+        "pie": "pieChart",
+        "treemap": "treemap",
+        "heatmap": "matrix",
+        "highlight-table": "matrix",
+        "dual-axis": "lineClusteredColumnComboChart",
+        "combo": "lineClusteredColumnComboChart",
+        "histogram": "clusteredBarChart",
+        "box-plot": "clusteredBarChart",
+        "gantt": "clusteredBarChart",
+        "bullet": "clusteredBarChart",
+        "waterfall": "waterfallChart",
+        "funnel": "funnelChart",
+        "donut": "donutChart",
+    }
+
+    # Tableau formula -> DAX mapping reference (included in prompt)
+    _TABLEAU_DAX_MAP = (
+        "Tableau formula syntax mapping:\n"
+        "- SUM([Field]) -> SUM(TableName[Field])\n"
+        "- AVG([Field]) -> AVERAGE(TableName[Field])\n"
+        "- COUNTD([Field]) -> DISTINCTCOUNT(TableName[Field])\n"
+        "- COUNT([Field]) -> COUNT(TableName[Field])\n"
+        "- MIN([Field]) -> MIN(TableName[Field])\n"
+        "- MAX([Field]) -> MAX(TableName[Field])\n"
+        "- IF condition THEN x ELSE y END -> IF(condition, x, y)\n"
+        "- DATETRUNC('month', [Date]) -> STARTOFMONTH(TableName[Date])\n"
+        "- DATEDIFF('unit', [start], [end]) -> "
+        "DATEDIFF(TableName[start], TableName[end], unit)\n"
+        "- ZN([Field]) -> IF(ISBLANK(TableName[Field]), 0, "
+        "TableName[Field])\n"
+        "- CONTAINS([String], 'text') -> "
+        "CONTAINSSTRING(TableName[String], \"text\")\n"
+        "- LEFT/RIGHT/MID -> LEFT/RIGHT/MID (same in DAX)\n"
+        "- ATTR([Field]) -> SELECTEDVALUE(TableName[Field])\n"
+        "- WINDOW_SUM/AVG/COUNT -> use DAX window functions\n"
+        "- RUNNING_SUM -> use CALCULATE with FILTER\n"
+        "Keep the same measure names as the Tableau calculated fields."
+    )
+
+    def _build_tableau_translate_request(self, user_request, table_name):
+        """Build a Tableau-to-Power BI translation prompt for ClaudeInterpreter.
+
+        Instead of asking Claude to design from scratch, we give it the
+        full Tableau structure and ask it to RECREATE the same layout
+        in Power BI format.
+        """
+        spec = self.tableau_spec
+        parts = []
+
+        parts.append(
+            "The user uploaded a Tableau workbook. Your job is to "
+            "TRANSLATE this into an equivalent Power BI dashboard -- "
+            "do NOT redesign from scratch. Preserve the structure, "
+            "layout, and intent of the original."
+        )
+
+        # -- Worksheets --
+        worksheets = spec.get("worksheets", [])
+        if worksheets:
+            ws_lines = []
+            for ws in worksheets:
+                name = ws.get("name", "Untitled")
+                chart_type = ws.get("type", ws.get("chart_type", "unknown"))
+                pbi_type = self._TABLEAU_CHART_MAP.get(
+                    chart_type.lower().replace(" ", "-"),
+                    "clusteredBarChart",
+                )
+                rows = ws.get("rows", [])
+                cols = ws.get("columns", [])
+                marks = ws.get("marks", ws.get("mark_type", ""))
+                filters = ws.get("filters", [])
+
+                line = f'  - "{name}": {chart_type} -> PBI {pbi_type}'
+                if rows:
+                    line += f", rows={rows}"
+                if cols:
+                    line += f", columns={cols}"
+                if marks:
+                    line += f", marks={marks}"
+                if filters:
+                    line += f", filters={filters}"
+                ws_lines.append(line)
+            parts.append(
+                "TABLEAU WORKSHEETS:\n" + "\n".join(ws_lines)
+            )
+
+        # -- Dashboards --
+        dashboards = spec.get("dashboards", [])
+        if dashboards:
+            db_lines = []
+            for db in dashboards:
+                name = db.get("name", "Dashboard")
+                sheets = db.get("worksheets", db.get("sheets", []))
+                size = db.get("size", {})
+                w = size.get("width", size.get("maxwidth", ""))
+                h = size.get("height", size.get("maxheight", ""))
+
+                line = f'  - "{name}": contains {sheets}'
+                if w and h:
+                    line += f", size={w}x{h}"
+                    # Proportional mapping to PBI 1280x720
+                    try:
+                        tw = int(str(w).replace("px", ""))
+                        th = int(str(h).replace("px", ""))
+                        if tw > 0 and th > 0:
+                            line += (
+                                f" (map proportionally to PBI "
+                                f"1280x720 canvas)"
+                            )
+                    except (ValueError, TypeError):
+                        pass
+
+                # Include layout positions if available
+                zones = db.get("zones", db.get("layout", []))
+                if zones:
+                    line += f", layout_zones={len(zones)} zones"
+
+                db_lines.append(line)
+            parts.append(
+                "TABLEAU DASHBOARDS:\n" + "\n".join(db_lines)
+            )
+
+        # -- Calculated fields --
+        calc_fields = spec.get("calculated_fields", [])
+        if calc_fields:
+            calc_lines = []
+            for cf in calc_fields:
+                if isinstance(cf, dict):
+                    name = cf.get("name", "?")
+                    formula = cf.get("formula", "?")
+                    calc_lines.append(f'  - "{name}": {formula}')
+                elif isinstance(cf, str):
+                    calc_lines.append(f"  - {cf}")
+            parts.append(
+                "TABLEAU CALCULATED FIELDS (convert to DAX):\n"
+                + "\n".join(calc_lines[:30])
+            )
+            parts.append(
+                self._TABLEAU_DAX_MAP.replace("TableName", table_name)
+            )
+
+        # -- Parameters --
+        parameters = spec.get("parameters", [])
+        if parameters:
+            param_lines = []
+            for p in parameters:
+                if isinstance(p, dict):
+                    name = p.get("name", "?")
+                    dtype = p.get("datatype", p.get("type", "?"))
+                    value = p.get("value", p.get("current_value", ""))
+                    param_lines.append(
+                        f'  - "{name}": {dtype}, value={value}'
+                    )
+            if param_lines:
+                parts.append(
+                    "TABLEAU PARAMETERS (convert to What-If "
+                    "parameters or slicers):\n"
+                    + "\n".join(param_lines)
+                )
+
+        # -- Filters --
+        filters = spec.get("filters", [])
+        if filters:
+            filter_lines = []
+            for f in filters:
+                if isinstance(f, dict):
+                    col = f.get("column", f.get("field", "?"))
+                    ftype = f.get("type", "?")
+                    filter_lines.append(f"  - {col}: {ftype}")
+                elif isinstance(f, str):
+                    filter_lines.append(f"  - {f}")
+            if filter_lines:
+                parts.append(
+                    "TABLEAU FILTERS:\n"
+                    + "\n".join(filter_lines[:20])
+                )
+
+        # -- Chart type mapping reference --
+        parts.append(
+            "CHART TYPE MAPPING:\n"
+            "  Tableau bar -> PBI clusteredBarChart\n"
+            "  Tableau stacked bar -> PBI stackedBarChart\n"
+            "  Tableau line -> PBI lineChart\n"
+            "  Tableau area -> PBI areaChart\n"
+            "  Tableau map -> PBI map\n"
+            "  Tableau text table -> PBI tableEx\n"
+            "  Tableau scatter -> PBI scatterChart\n"
+            "  Tableau pie -> PBI pieChart\n"
+            "  Tableau treemap -> PBI treemap\n"
+            "  Tableau heatmap -> PBI matrix with conditional formatting\n"
+            "  Tableau dual-axis -> PBI lineClusteredColumnComboChart\n"
+            "  Tableau donut -> PBI donutChart\n"
+            "  Tableau waterfall -> PBI waterfallChart"
+        )
+
+        # -- Original user request --
+        if user_request and "power bi" not in user_request.lower():
+            parts.append(
+                f"ADDITIONAL USER REQUEST: {user_request}"
+            )
+
+        return "\n\n".join(parts)
 
     def _tool_build_docs(self, inputs):
         """Build documentation."""

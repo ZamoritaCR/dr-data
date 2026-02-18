@@ -77,8 +77,8 @@ st.markdown("""
         background-color: #0D0D0D;
         font-family: 'Inter', sans-serif !important;
     }
-    html, body, p, span, div, h1, h2, h3, h4, h5, h6, li, td, th, label, input, textarea, button {
-        font-family: 'Inter', sans-serif !important;
+    html, body {
+        font-family: 'Inter', sans-serif;
     }
 
     /* === FULL HEIGHT CHAT LAYOUT === */

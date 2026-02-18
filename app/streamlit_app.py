@@ -392,6 +392,41 @@ st.markdown("""
         border: 1px solid #4a4a4a;
         border-radius: 8px;
     }
+
+    /* === CAPABILITY CARDS GRID === */
+    .cap-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 16px;
+        padding: 24px 0;
+    }
+    .cap-card {
+        background: linear-gradient(135deg, #1A1A1A 0%, #262626 100%);
+        border: 1px solid #333333;
+        border-radius: 12px;
+        padding: 24px 20px;
+        text-align: center;
+        transition: border-color 0.2s;
+    }
+    .cap-card:hover {
+        border-color: #FFDE00;
+    }
+    .cap-icon {
+        font-size: 32px;
+        margin-bottom: 12px;
+        display: block;
+    }
+    .cap-title {
+        font-size: 14px;
+        font-weight: 600;
+        color: #FFFFFF;
+        margin-bottom: 6px;
+    }
+    .cap-desc {
+        font-size: 12px;
+        color: #808080;
+        line-height: 1.5;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -755,9 +790,48 @@ with workspace_col:
     ws = st.session_state.workspace_content
 
     if ws["phase"] == "waiting" and ws.get("data_preview") is None:
-        # Empty state
-        avatar_lg = DR_DATA_AVATAR.replace('width="36" height="36"', 'width="64" height="64"')
-        _safe_html(f'<div style="text-align:center;padding:80px 40px;color:#B0B0B0;"><div style="margin-bottom:16px;opacity:0.6;">{avatar_lg}</div><div style="font-size:16px;font-weight:500;color:#FFFFFF;margin-bottom:8px;">Welcome! I am Dr. Data.</div><div style="font-size:13px;max-width:440px;margin:0 auto;line-height:1.6;">I am here to help you unlock the full potential of your data. Upload a file in the sidebar -- CSV, Excel, Tableau, Alteryx, whatever you have -- and let me show you The Art of the Possible. I can build dashboards, reports, PowerPoints, and more. Let us get started!</div></div>', "Welcome! I am Dr. Data. Upload a file in the sidebar to get started.")
+        # Empty state -- capability showcase
+        _safe_html(
+            '<div style="text-align:center;padding:32px 0 8px 0;">'
+            '<div style="font-size:18px;font-weight:600;color:#FFFFFF;margin-bottom:4px;">'
+            'The Art of the Possible</div>'
+            '<div style="font-size:13px;color:#808080;margin-bottom:24px;">'
+            'Upload data in the sidebar to get started</div>'
+            '</div>'
+            '<div class="cap-grid">'
+            '  <div class="cap-card">'
+            '    <span class="cap-icon">&#9783;</span>'
+            '    <div class="cap-title">Interactive Dashboard</div>'
+            '    <div class="cap-desc">Full HTML dashboard with charts, KPIs, and filters -- ready to share</div>'
+            '  </div>'
+            '  <div class="cap-card">'
+            '    <span class="cap-icon">&#9638;</span>'
+            '    <div class="cap-title">Power BI Project</div>'
+            '    <div class="cap-desc">PBIP project with semantic model, DAX measures, and themed visuals</div>'
+            '  </div>'
+            '  <div class="cap-card">'
+            '    <span class="cap-icon">&#9776;</span>'
+            '    <div class="cap-title">Reports &amp; Exports</div>'
+            '    <div class="cap-desc">PDF, PowerPoint, Word, and Excel -- formatted for any audience</div>'
+            '  </div>'
+            '  <div class="cap-card">'
+            '    <span class="cap-icon">&#8644;</span>'
+            '    <div class="cap-title">Tableau Migration</div>'
+            '    <div class="cap-desc">Convert .twb/.twbx workbooks into Power BI with field mapping</div>'
+            '  </div>'
+            '  <div class="cap-card">'
+            '    <span class="cap-icon">&#9735;</span>'
+            '    <div class="cap-title">Live Data</div>'
+            '    <div class="cap-desc">Connect to Snowflake, query tables, and build from live warehouse data</div>'
+            '  </div>'
+            '  <div class="cap-card">'
+            '    <span class="cap-icon">&#9745;</span>'
+            '    <div class="cap-title">Data Audit</div>'
+            '    <div class="cap-desc">Automated quality checks, completeness scores, and release gates</div>'
+            '  </div>'
+            '</div>',
+            "Welcome to Dr. Data. Upload data in the sidebar to get started."
+        )
 
     else:
         # === KPI CARDS ===

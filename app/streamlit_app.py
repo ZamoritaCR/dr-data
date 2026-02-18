@@ -64,15 +64,21 @@ WU_LOGO = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 40" width="1
 # === CUSTOM CSS -- THE ENTIRE LOOK (Western Union) ===
 st.markdown("""
 <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
     /* Kill Streamlit defaults */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
     .stDeployButton {display: none;}
 
-    /* Dark foundation */
+    /* Dark foundation + Inter font */
     .stApp {
-        background-color: #1a1a1a;
+        background-color: #0D0D0D;
+        font-family: 'Inter', sans-serif !important;
+    }
+    html, body, [class*="st-"] {
+        font-family: 'Inter', sans-serif !important;
     }
 
     /* === FULL HEIGHT CHAT LAYOUT === */
@@ -96,15 +102,15 @@ st.markdown("""
         bottom: 0 !important;
         left: 0 !important;
         right: 0 !important;
-        background: #1a1a1a !important;
-        border-top: 2px solid #FFDE00 !important;
+        background: #0D0D0D !important;
+        border-top: 2px solid #FFE600 !important;
         padding: 12px 2rem !important;
         z-index: 999 !important;
     }
     div[data-testid="stBottomBlockContainer"] {
-        background: #1a1a1a !important;
+        background: #0D0D0D !important;
         padding: 10px 20px !important;
-        border-top: 2px solid #FFDE00 !important;
+        border-top: 2px solid #FFE600 !important;
     }
 
     /* Chat input wider and styled */
@@ -114,7 +120,7 @@ st.markdown("""
     div[data-testid='stChatInput'] textarea,
     div[data-testid='stChatInput'] div[contenteditable='true'] {
         background: #0d1117 !important;
-        border: 2px solid #FFDE00 !important;
+        border: 2px solid #FFE600 !important;
         color: #ffffff !important;
         caret-color: #ffffff !important;
         -webkit-text-fill-color: #ffffff !important;
@@ -145,13 +151,13 @@ st.markdown("""
         border-radius: 3px;
     }
     div[data-testid='stChatMessageContainer']::-webkit-scrollbar-track {
-        background: #1a1a1a;
+        background: #0D0D0D;
     }
 
     /* Download buttons inside chat */
     div[data-testid='stChatMessage'] .stDownloadButton button {
-        background: #FFDE00 !important;
-        color: #1a1a1a !important;
+        background: #FFE600 !important;
+        color: #000000 !important;
         font-weight: 700 !important;
         border: none !important;
         border-radius: 6px !important;
@@ -170,8 +176,8 @@ st.markdown("""
 
     /* === COMPACT HEADER BAR === */
     .top-header {
-        background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
-        border-bottom: 1px solid #4a4a4a;
+        background: linear-gradient(135deg, #0D0D0D 0%, #1A1A1A 100%);
+        border-bottom: 1px solid #333333;
         padding: 6px 24px;
         display: flex;
         align-items: center;
@@ -185,7 +191,7 @@ st.markdown("""
         position: absolute;
         top: 0; left: 0; right: 0;
         height: 2px;
-        background: linear-gradient(90deg, #FFDE00, #FFE600, #FFDE00);
+        background: #FFE600;
     }
     .header-left {
         display: flex;
@@ -213,8 +219,8 @@ st.markdown("""
     section[data-testid='stSidebar'] {
         width: 280px !important;
         min-width: 280px !important;
-        background: #1a1a1a !important;
-        border-right: 1px solid #4a4a4a;
+        background: #0D0D0D !important;
+        border-right: 1px solid #333333;
     }
     section[data-testid='stSidebar'] .block-container {
         padding: 1rem !important;
@@ -374,8 +380,8 @@ st.markdown("""
 
     /* Download buttons -- WU branding */
     div.stDownloadButton > button {
-        background-color: #FFDE00 !important;
-        color: #1a1a1a !important;
+        background-color: #FFE600 !important;
+        color: #000000 !important;
         font-weight: 700 !important;
         border: none !important;
         padding: 8px 20px !important;
@@ -385,6 +391,7 @@ st.markdown("""
     }
     div.stDownloadButton > button:hover {
         background-color: #FFE600 !important;
+        filter: brightness(1.1);
     }
 
     /* Make data tables dark */

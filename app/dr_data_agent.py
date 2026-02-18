@@ -43,6 +43,7 @@ from core.html_dashboard import HTMLDashboardBuilder
 from core.pdf_report import PDFReportBuilder
 from core.export_engine import ExportEngine
 from core.interactive_dashboard import InteractiveDashboard
+from core.trace_logger import TraceLogger
 
 # ------------------------------------------------------------------ #
 #  Tool Definitions for Claude                                         #
@@ -275,6 +276,9 @@ class DrDataAgent:
         self.session = None
         self.session_bridge = None
 
+        # Trace logger for audit trail
+        self.trace = TraceLogger()
+
         # OpenAI secondary engine (for large-context / data-heavy tasks)
         self.openai_client = None
         openai_key = os.getenv("OPENAI_API_KEY") or _get_secret("OPENAI_API_KEY")
@@ -439,6 +443,21 @@ class DrDataAgent:
                     })
             self.messages.append({"role": "assistant", "content": content_dicts})
 
+            # Trace: log Claude call
+            _resp_summary = ""
+            for b in assistant_content:
+                if hasattr(b, "text") and b.text:
+                    _resp_summary = b.text[:200]
+                    break
+                if hasattr(b, "name"):
+                    _resp_summary = f"tool_use:{b.name}"
+                    break
+            self.trace.log_llm_call(
+                "claude", self.MODEL,
+                user_message[:200] if isinstance(user_message, str) else "tool_results",
+                _resp_summary,
+            )
+
             # Check if we need to handle tool calls
             if response.stop_reason == "tool_use":
                 tool_results = []
@@ -500,6 +519,15 @@ class DrDataAgent:
             if self.data_profile is None:
                 self.data_profile = self.analyzer.profile(df)
 
+        # Trace: log each loaded file
+        for d in session.data_files:
+            ddf = d.get("df")
+            if ddf is not None:
+                self.trace.log_file_loaded(
+                    d["filename"], len(ddf), len(ddf.columns),
+                    str(ddf.dtypes.value_counts().to_dict()),
+                )
+
         if session.tableau_spec:
             self.tableau_spec = session.tableau_spec
         if session.alteryx_spec:
@@ -547,8 +575,12 @@ class DrDataAgent:
                     ],
                     timeout=120.0,
                 )
-                text = resp.choices[0].message.content
-                return text or ""
+                text = resp.choices[0].message.content or ""
+                self.trace.log_llm_call(
+                    "openai", model,
+                    user_message[:200], text[:200],
+                )
+                return text
             except Exception as e:
                 last_err = e
                 if attempt < 2:
@@ -644,6 +676,11 @@ class DrDataAgent:
             first_key = next(iter(dfs))
             self.dataframe = dfs[first_key]
             self.data_profile = self.analyzer.profile(self.dataframe)
+            self.trace.log_file_loaded(
+                os.path.basename(file_path),
+                len(self.dataframe), len(self.dataframe.columns),
+                str(self.dataframe.dtypes.value_counts().to_dict()),
+            )
 
         # Store report structure (Tableau, Alteryx, Business Objects)
         if result.get("report_structure"):
@@ -707,6 +744,7 @@ class DrDataAgent:
         if session.relationships:
             rel_summary = session.detector.summarize(session.relationships)
             extra_parts.append(rel_summary)
+            self.trace.log_relationships(session.relationships)
         if session.join_log:
             extra_parts.append("JOIN LOG: " + " | ".join(session.join_log))
 
@@ -930,6 +968,20 @@ class DrDataAgent:
         if needs_data:
             parts.append("NOTE: Still waiting for data files to be uploaded.")
 
+        # Trace: log the analysis performed
+        if self.dataframe is not None:
+            methods = ["statistical_profiling"]
+            insights_found = []
+            cols_analyzed = list(self.dataframe.columns[:15])
+            if len(self.dataframe.select_dtypes(include="number").columns) >= 2:
+                methods.append("correlation_analysis")
+            methods.extend(["outlier_detection", "null_analysis", "trend_analysis"])
+            # Extract short insight summaries from parts
+            for p in parts:
+                if any(tag in p for tag in ("CORRELATION", "OUTLIER", "TREND", "CONCENTRATION")):
+                    insights_found.append(p.split("\n")[0][:150])
+            self.trace.log_analysis(insights_found, cols_analyzed, methods)
+
         return "\n".join(parts)
 
     def respond(self, user_message, conversation_history, uploaded_files,
@@ -1038,6 +1090,10 @@ class DrDataAgent:
                                 "search, sort, copy, and CSV export"
                             ),
                         })
+                        self.trace.log_deliverable(
+                            "Interactive Dashboard", p,
+                            {"title": title, "type": "html"},
+                        )
                 except Exception as e:
                     errors.append(f"Interactive Dashboard: {e}")
 
@@ -1058,6 +1114,10 @@ class DrDataAgent:
                                 "stats and trends"
                             ),
                         })
+                        self.trace.log_deliverable(
+                            "PowerPoint", p,
+                            {"title": title, "type": "pptx"},
+                        )
                 except Exception as e:
                     errors.append(f"PowerPoint: {e}")
 
@@ -1077,6 +1137,10 @@ class DrDataAgent:
                                 "Executive PDF report with data summary"
                             ),
                         })
+                        self.trace.log_deliverable(
+                            "PDF Report", p,
+                            {"title": title, "type": "pdf"},
+                        )
                 except Exception as e:
                     errors.append(f"PDF Report: {e}")
 
@@ -1096,6 +1160,10 @@ class DrDataAgent:
                                 "Detailed Word document with data analysis"
                             ),
                         })
+                        self.trace.log_deliverable(
+                            "Word Document", p,
+                            {"title": title, "type": "docx"},
+                        )
                 except Exception as e:
                     errors.append(f"Word Document: {e}")
 
@@ -1121,8 +1189,31 @@ class DrDataAgent:
                                     "visuals, and data model"
                                 ),
                             })
+                            self.trace.log_deliverable(
+                                "Power BI Project", fpath,
+                                {"title": title, "type": "pbip"},
+                            )
                 except Exception as e:
                     errors.append(f"Power BI Project: {e}")
+
+            # -- Generate trace log and add to downloads --
+            if downloads:
+                try:
+                    trace_path = self.trace.generate_trace_doc(
+                        os.path.join(self.output_dir, "trace_log.html"),
+                        format="html",
+                    )
+                    downloads.append({
+                        "name": "Processing Trace Log",
+                        "filename": "trace_log.html",
+                        "path": trace_path,
+                        "description": (
+                            "Full audit trail: files loaded, analysis "
+                            "performed, LLM calls, QA recommendations"
+                        ),
+                    })
+                except Exception:
+                    pass
 
             # Build response content
             if downloads or errors:

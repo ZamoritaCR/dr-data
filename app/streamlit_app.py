@@ -39,6 +39,7 @@ from core.data_catalog import DataCatalog
 from core.rules_engine import BusinessRulesEngine
 from core.dq_history import DQHistory
 from core.trust_scoring import TrustScorer
+from core.copdq import COPDQCalculator
 
 
 def _safe_html(html_str, fallback_text=""):
@@ -1928,6 +1929,111 @@ with tab2:
                                     )
                                     st.success(
                                         f"{_tsn} marked as {_tcert}")
+
+                # ── COPDQ Calculator ──
+                st.markdown("---")
+                st.markdown("#### Cost of Poor Data Quality (COPDQ)")
+
+                if "copdq" not in st.session_state:
+                    st.session_state.copdq = COPDQCalculator()
+
+                _copdq = st.session_state.copdq
+
+                if _dq.scan_results:
+                    with st.expander(
+                        "Cost Parameters (adjust for your organization)"
+                    ):
+                        _cp1, _cp2, _cp3 = st.columns(3)
+                        with _cp1:
+                            _analyst_rate = st.number_input(
+                                "Analyst hourly rate ($)",
+                                value=67, key="copdq_rate",
+                            )
+                            _fix_min = st.number_input(
+                                "Minutes to fix per record",
+                                value=5, key="copdq_fix_min",
+                            )
+                        with _cp2:
+                            _txn_cost = st.number_input(
+                                "Failed transaction cost ($)",
+                                value=25, key="copdq_txn",
+                            )
+                            _fine_cost = st.number_input(
+                                "Compliance fine per violation ($)",
+                                value=1000, key="copdq_fine",
+                            )
+                        with _cp3:
+                            _rpts_month = st.number_input(
+                                "Reports per month",
+                                value=50, key="copdq_reports",
+                            )
+                            _annual_rev = st.number_input(
+                                "Annual revenue ($)",
+                                value=4_100_000_000,
+                                key="copdq_revenue",
+                            )
+
+                    _custom_params = {
+                        "avg_analyst_hourly_rate": _analyst_rate,
+                        "avg_manual_fix_minutes_per_record": _fix_min,
+                        "avg_failed_transaction_cost": _txn_cost,
+                        "avg_compliance_fine_per_violation": _fine_cost,
+                        "reports_per_month": _rpts_month,
+                        "annual_revenue": _annual_rev,
+                    }
+
+                    if st.button(
+                        "Calculate COPDQ", type="primary",
+                        key="copdq_calc",
+                    ):
+                        _copdq_result = _copdq.calculate_copdq(
+                            _dq.scan_results, cost_params=_custom_params)
+                        st.session_state.copdq_result = _copdq_result
+
+                    if (
+                        "copdq_result" in st.session_state
+                        and st.session_state.copdq_result
+                    ):
+                        _cr = st.session_state.copdq_result
+
+                        co1, co2, co3 = st.columns(3)
+                        co1.metric(
+                            "Annual Cost of Poor Data",
+                            _copdq.format_currency(
+                                _cr["total_annual_cost"]),
+                        )
+                        co2.metric(
+                            "Monthly Cost",
+                            _copdq.format_currency(
+                                _cr["total_monthly_cost"]),
+                        )
+                        co3.metric(
+                            "Revenue Impact",
+                            f"{_cr['revenue_impact_pct']:.3f}%",
+                        )
+
+                        st.caption(
+                            _cr.get("gartner_benchmark", ""))
+
+                        # Per-table breakdown
+                        for _ctn, _ctc in _cr.get(
+                            "cost_breakdown", {}
+                        ).items():
+                            with st.expander(
+                                f"{_ctn}: "
+                                f"{_copdq.format_currency(_ctc['total'])}"
+                                f"/year"
+                            ):
+                                for _cdim, _cdi in _ctc.get(
+                                    "costs", {}
+                                ).items():
+                                    st.write(
+                                        f"**{_cdim.title()}** - "
+                                        f"{_copdq.format_currency(_cdi.get('annual_cost', 0))}"
+                                        f"/year"
+                                    )
+                                    st.caption(
+                                        _cdi.get("description", ""))
 
                 # ── Export ──
                 st.markdown("---")

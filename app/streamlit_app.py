@@ -751,7 +751,7 @@ with chat_col:
     _safe_html(f'<div style="padding:4px 0 8px 0;border-bottom:1px solid #4a4a4a;margin-bottom:8px;display:flex;align-items:center;gap:8px;">{DR_DATA_AVATAR}<span style="font-size:13px;font-weight:600;color:#FFFFFF;">Chat with Dr. Data</span><span style="font-size:11px;color:#B0B0B0;">|&nbsp; The Art of the Possible</span></div>', "Chat with Dr. Data -- The Art of the Possible")
 
     # Chat container with scroll
-    chat_container = st.container(height=None)
+    chat_container = st.container()
 
     with chat_container:
         # Opening message if empty

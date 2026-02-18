@@ -779,6 +779,136 @@ workspace_col, chat_col = st.columns([65, 35])
 with workspace_col:
     ws = st.session_state.workspace_content
 
+    # === EXPORT EXECUTION (runs in workspace with visible progress) ===
+    if st.session_state.get("pending_export"):
+        _export_req = st.session_state.pop("pending_export")
+        _export_prompt = _export_req["prompt"]
+        _export_ts = _export_req["timestamp"]
+        _agent = st.session_state.agent
+
+        ws["phase"] = "building"
+        ws["progress_messages"].append(
+            f"Building: {_export_prompt[:80]}..."
+            if len(_export_prompt) > 80 else f"Building: {_export_prompt}"
+        )
+
+        if _agent:
+            with st.status("Building your deliverables...", expanded=True) as _build_status:
+                _build_status.write("Starting generation pipeline...")
+                _response = None
+                try:
+                    _response = _agent.respond(
+                        _export_prompt,
+                        st.session_state.messages,
+                        st.session_state.uploaded_files,
+                    )
+
+                    if _response is None:
+                        _build_status.update(label="Build failed", state="error")
+                        ws["progress_messages"].append("Build failed")
+                        st.session_state.messages.append({
+                            "role": "assistant",
+                            "content": "Something went wrong. Try again.",
+                            "timestamp": _export_ts,
+                        })
+
+                    elif isinstance(_response, dict):
+                        _content = _response.get("content", "")
+                        _downloads = _response.get("downloads", []) or []
+
+                        if _downloads:
+                            _fnames = [
+                                dl.get("filename", dl.get("name", "file"))
+                                for dl in _downloads
+                            ]
+                            _build_status.write(
+                                f"Generated {len(_downloads)} file(s): "
+                                + ", ".join(_fnames)
+                            )
+                            _build_status.update(
+                                label=f"Done -- {len(_downloads)} deliverable(s)",
+                                state="complete",
+                            )
+
+                            # Save to workspace deliverables
+                            for _dl in _downloads:
+                                if os.path.exists(_dl.get("path", "")):
+                                    try:
+                                        _dl_audit = (
+                                            st.session_state.audit_engine
+                                            .audit_deliverable(
+                                                _dl["path"],
+                                                file_type=_dl.get(
+                                                    "filename", ""
+                                                ).split(".")[-1],
+                                            )
+                                        )
+                                        _dl_audit.compute_scores()
+                                        _dl["audit_score"] = _dl_audit.overall_score
+                                        _dl["audit_releasable"] = _dl_audit.is_releasable
+                                    except Exception:
+                                        pass
+                            ws["deliverables"].extend(_downloads)
+                            ws["phase"] = "complete"
+                            ws["progress_messages"].append(
+                                "Deliverables ready -- audited"
+                            )
+
+                            _chat_note = (
+                                f"Built {len(_downloads)} deliverable(s): "
+                                f"{', '.join(_fnames)}. "
+                                f"Check the workspace for downloads."
+                            )
+                            if _content:
+                                _chat_note = _content + "\n\n" + _chat_note
+                        else:
+                            _build_status.update(
+                                label="Done", state="complete"
+                            )
+                            _chat_note = _content or "Done. No files generated."
+
+                        st.session_state.messages.append({
+                            "role": "assistant",
+                            "content": _chat_note,
+                            "downloads": _downloads,
+                            "timestamp": _export_ts,
+                        })
+
+                    elif isinstance(_response, str) and _response.strip():
+                        _build_status.update(label="Done", state="complete")
+                        st.session_state.messages.append({
+                            "role": "assistant",
+                            "content": _response,
+                            "timestamp": _export_ts,
+                        })
+                    else:
+                        _build_status.update(
+                            label="No output", state="error"
+                        )
+                        st.session_state.messages.append({
+                            "role": "assistant",
+                            "content": "No response. Try rephrasing.",
+                            "timestamp": _export_ts,
+                        })
+
+                except Exception as _e:
+                    import traceback
+                    traceback.print_exc()
+                    _build_status.update(label="Error", state="error")
+                    ws["progress_messages"].append("Build error")
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": f"Hit a snag: {str(_e)[:200]}",
+                        "timestamp": _export_ts,
+                    })
+
+                # Update data preview if needed
+                if _agent.dataframe is not None:
+                    if ws.get("data_preview") is None:
+                        ws["data_preview"] = _agent.dataframe
+
+        st.rerun()  # refresh to show results in chat + workspace
+
     if ws["phase"] == "waiting" and ws.get("data_preview") is None:
         # Empty state -- clickable capability cards
         _safe_html(
@@ -1178,112 +1308,12 @@ with chat_col:
                 ])
 
                 if is_export:
-                    # ====== EXPORT PATH -- brief placeholder while building ======
-                    ws = st.session_state.workspace_content
-                    ws["phase"] = "building"
-                    ws["progress_messages"].append(
-                        f"Building: {prompt[:80]}..."
-                        if len(prompt) > 80 else f"Building: {prompt}"
-                    )
-
-                    # Show a brief message while the agent works
-                    _progress = st.empty()
-                    _progress.markdown(
-                        "*On it -- building your deliverables. "
-                        "This usually takes 15-30 seconds...*"
-                    )
-
-                    response = None
-                    try:
-                        response = agent.respond(
-                            prompt,
-                            st.session_state.messages,
-                            st.session_state.uploaded_files,
-                        )
-                        _progress.empty()  # clear the placeholder
-
-                        if response is None:
-                            ws["progress_messages"].append("Build failed")
-                            st.markdown("Something went wrong. Try again.")
-
-                        elif isinstance(response, dict):
-                            content = response.get("content", "")
-                            downloads = response.get("downloads", []) or []
-
-                            if downloads:
-                                file_names = [dl.get("filename", dl.get("name", "file")) for dl in downloads]
-                                workspace_note = (
-                                    f"Built {len(downloads)} deliverable(s): "
-                                    f"{', '.join(file_names)}. "
-                                    f"Check the workspace for downloads."
-                                )
-                                if content:
-                                    st.markdown(content + "\n\n" + workspace_note)
-                                else:
-                                    st.markdown(workspace_note)
-                            else:
-                                if content:
-                                    st.markdown(content)
-                                else:
-                                    st.markdown("No output generated. Try rephrasing your request.")
-
-                        elif isinstance(response, str) and response.strip():
-                            st.markdown(response)
-
-                        else:
-                            st.markdown("No response. Try rephrasing your request.")
-
-                    except Exception as e:
-                        import traceback
-                        traceback.print_exc()
-                        _progress.empty()
-                        ws["progress_messages"].append("Build error")
-                        st.markdown(f"Hit a snag: {str(e)[:200]}")
-
-                    # Save export response to history
-                    if response:
-                        msg_data = {
-                            "role": "assistant",
-                            "content": (
-                                response.get("content", response)
-                                if isinstance(response, dict) else response
-                            ),
-                            "downloads": (
-                                response.get("downloads", [])
-                                if isinstance(response, dict) else []
-                            ),
-                            "timestamp": now,
-                        }
-                        st.session_state.messages.append(msg_data)
-
-                        ws = st.session_state.workspace_content
-                        dl_list = msg_data["downloads"] or []
-                        if dl_list:
-                            for dl in dl_list:
-                                if os.path.exists(dl.get("path", "")):
-                                    try:
-                                        dl_audit = (
-                                            st.session_state.audit_engine
-                                            .audit_deliverable(
-                                                dl["path"],
-                                                file_type=dl.get(
-                                                    "filename", ""
-                                                ).split(".")[-1],
-                                            )
-                                        )
-                                        dl_audit.compute_scores()
-                                        dl["audit_score"] = dl_audit.overall_score
-                                        dl["audit_releasable"] = dl_audit.is_releasable
-                                    except Exception:
-                                        pass
-                            ws["deliverables"].extend(dl_list)
-                            ws["phase"] = "complete"
-                            ws["progress_messages"].append(
-                                "Deliverables ready -- audited"
-                            )
-                        if agent.dataframe is not None:
-                            if ws.get("data_preview") is None:
-                                ws["data_preview"] = agent.dataframe
+                    # ====== EXPORT PATH -- hand off to workspace ======
+                    st.session_state.pending_export = {
+                        "prompt": prompt,
+                        "timestamp": now,
+                    }
+                    st.rerun()  # workspace will pick this up
 
                 else:
                     # ====== CHAT PATH -- streaming, no spinner ======

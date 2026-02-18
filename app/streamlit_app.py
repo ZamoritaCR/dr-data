@@ -36,6 +36,7 @@ from core.audit_engine import AuditEngine
 from core.deliverable_registry import get_recent as _get_recent_deliverables
 from core.dq_engine import DataQualityEngine
 from core.data_catalog import DataCatalog
+from core.rules_engine import BusinessRulesEngine
 
 
 def _safe_html(html_str, fallback_text=""):

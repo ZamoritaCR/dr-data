@@ -1021,18 +1021,24 @@ class DrDataAgent:
 
         # --- Export interception: handle deliverables before LLM ---
         msg_lower = user_message.lower()
+
+        # Power BI checked FIRST — highest priority
+        want_pbi = any(k in msg_lower for k in (
+            "power bi", "powerbi", "pbi", "pbip", "pbix", "power_bi",
+        ))
+        # Dashboard only when NOT a PBI request (avoid "powerbi dashboard" -> HTML)
+        want_dash = (
+            any(k in msg_lower for k in (
+                "dashboard", "html", "interactive", "explore",
+                "drill down", "filter",
+            ))
+            and not want_pbi
+        )
         want_pptx = any(k in msg_lower for k in (
             "powerpoint", "pptx", "presentation", "slides", "deck",
         ))
         want_pdf = any(k in msg_lower for k in ("pdf", "report"))
         want_docx = any(k in msg_lower for k in ("word", "docx", "document"))
-        want_dash = any(k in msg_lower for k in (
-            "dashboard", "html", "interactive", "explore",
-            "drill down", "filter",
-        ))
-        want_pbi = any(k in msg_lower for k in (
-            "power bi", "pbi", "pbip", "pbix",
-        ))
         want_all = any(k in msg_lower for k in (
             "all formats", "all three", "everything",
         ))
@@ -1042,6 +1048,11 @@ class DrDataAgent:
             or want_dash or want_pbi or want_all
         )
 
+        print(f"[EXPORT CHECK] Message: {user_message[:80]}")
+        print(f"[EXPORT CHECK] wants_pbi={want_pbi}, wants_dashboard={want_dash}, "
+              f"wants_pptx={want_pptx}, wants_pdf={want_pdf}, wants_docx={want_docx}")
+        print(f"[EXPORT CHECK] DataFrame available: {self.dataframe is not None}, "
+              f"shape: {self.dataframe.shape if self.dataframe is not None else 'None'}")
         print(f'[ROUTE] Message: {user_message[:50]}... -> {"export" if is_export else "chat"}')
 
         if is_export:
@@ -1104,6 +1115,7 @@ class DrDataAgent:
             safe = "".join(
                 c if c.isalnum() or c in " _-" else "_" for c in title
             )
+            import traceback as _tb
             os.makedirs(self.output_dir, exist_ok=True)
             downloads = []
             errors = []
@@ -1115,6 +1127,7 @@ class DrDataAgent:
 
             # -- Interactive HTML Dashboard --
             if want_dash:
+                print('[BUILD] Starting dashboard generation...')
                 _progress("Generating interactive dashboard...")
                 try:
                     p = self.dashboard_builder.generate(
@@ -1139,11 +1152,14 @@ class DrDataAgent:
                         )
                         _progress("  Dashboard complete.")
                 except Exception as e:
+                    print('[BUILD] Dashboard FAILED:')
+                    _tb.print_exc()
                     errors.append(f"Interactive Dashboard: {e}")
                     _progress(f"  Dashboard failed: {str(e)[:80]}")
 
             # -- PowerPoint --
             if want_pptx:
+                print('[BUILD] Starting PowerPoint generation...')
                 _progress("Generating PowerPoint presentation...")
                 try:
                     p = self.export_engine.generate_pptx(
@@ -1166,11 +1182,14 @@ class DrDataAgent:
                         )
                         _progress("  PowerPoint complete.")
                 except Exception as e:
+                    print('[BUILD] PowerPoint FAILED:')
+                    _tb.print_exc()
                     errors.append(f"PowerPoint: {e}")
                     _progress(f"  PowerPoint failed: {str(e)[:80]}")
 
             # -- PDF --
             if want_pdf:
+                print('[BUILD] Starting PDF generation...')
                 _progress("Generating PDF report...")
                 try:
                     p = self.export_engine.generate_pdf(
@@ -1192,11 +1211,14 @@ class DrDataAgent:
                         )
                         _progress("  PDF complete.")
                 except Exception as e:
+                    print('[BUILD] PDF FAILED:')
+                    _tb.print_exc()
                     errors.append(f"PDF Report: {e}")
                     _progress(f"  PDF failed: {str(e)[:80]}")
 
             # -- Word --
             if want_docx:
+                print('[BUILD] Starting Word document generation...')
                 _progress("Generating Word document...")
                 try:
                     p = self.export_engine.generate_docx(
@@ -1218,39 +1240,50 @@ class DrDataAgent:
                         )
                         _progress("  Word document complete.")
                 except Exception as e:
+                    print('[BUILD] Word FAILED:')
+                    _tb.print_exc()
                     errors.append(f"Word Document: {e}")
                     _progress(f"  Word document failed: {str(e)[:80]}")
 
-            # -- Power BI project --
+            # -- Power BI project (direct call, no LLM routing) --
             if want_pbi:
                 _progress("Generating Power BI project...")
-                _progress("  Building data model...")
+                print(f"[PBI] Starting Power BI generation...")
+                print(f"[PBI] DataFrame available: {self.dataframe is not None}, "
+                      f"shape: {self.dataframe.shape if self.dataframe is not None else 'None'}")
                 try:
-                    pbi_prompt = self._build_context_message(
-                        f"Build a Power BI .pbip project from this data. "
-                        f"Title: {title}."
-                    )
-                    _progress("  Writing DAX measures...")
-                    _progress("  Configuring visuals...")
-                    pbi_result = self.chat(pbi_prompt)
-                    for fpath in pbi_result.get("files", []):
-                        if os.path.exists(fpath):
-                            fname = os.path.basename(fpath)
+                    pbi_inputs = {
+                        "request": user_message,
+                        "audience": "executive",
+                        "project_name": title,
+                    }
+                    pbi_result_json = self._tool_build_powerbi(pbi_inputs)
+                    print(f"[PBI] Generation complete: {pbi_result_json[:200] if pbi_result_json else 'None'}")
+                    pbi_result = json.loads(pbi_result_json)
+                    if "error" in pbi_result:
+                        errors.append(f"Power BI Project: {pbi_result['error']}")
+                        _progress(f"  Power BI failed: {pbi_result['error'][:80]}")
+                    else:
+                        zip_path = pbi_result.get("file_path")
+                        if zip_path and os.path.exists(zip_path):
+                            fname = os.path.basename(zip_path)
                             downloads.append({
                                 "name": "Power BI Project",
                                 "filename": fname,
-                                "path": fpath,
+                                "path": zip_path,
                                 "description": (
                                     "Full .pbip project with DAX measures, "
                                     "visuals, and data model"
                                 ),
                             })
                             self.trace.log_deliverable(
-                                "Power BI Project", fpath,
+                                "Power BI Project", zip_path,
                                 {"title": title, "type": "pbip"},
                             )
-                    _progress("  Power BI project complete.")
+                        _progress("  Power BI project complete.")
                 except Exception as e:
+                    print(f"[PBI] GENERATION FAILED:")
+                    _tb.print_exc()
                     errors.append(f"Power BI Project: {e}")
                     _progress(f"  Power BI failed: {str(e)[:80]}")
 

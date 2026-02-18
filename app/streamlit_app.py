@@ -75,14 +75,109 @@ st.markdown("""
         background-color: #1a1a1a;
     }
 
-    /* === HEADER BAR === */
+    /* === FULL HEIGHT CHAT LAYOUT === */
+    section.main > div.block-container {
+        max-width: 100% !important;
+        padding: 0 2rem 120px 2rem !important;
+    }
+
+    /* Chat messages container -- full viewport height */
+    div[data-testid='stChatMessageContainer'] {
+        height: calc(100vh - 200px) !important;
+        max-height: calc(100vh - 200px) !important;
+        overflow-y: auto !important;
+        padding: 1rem !important;
+        scroll-behavior: smooth !important;
+    }
+
+    /* Chat input pinned to bottom */
+    div[data-testid='stBottom'] {
+        position: fixed !important;
+        bottom: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
+        background: #1a1a1a !important;
+        border-top: 2px solid #FFDE00 !important;
+        padding: 12px 2rem !important;
+        z-index: 999 !important;
+    }
+    div[data-testid="stBottomBlockContainer"] {
+        background: #1a1a1a !important;
+        padding: 10px 20px !important;
+        border-top: 2px solid #FFDE00 !important;
+    }
+
+    /* Chat input wider and styled */
+    div[data-testid='stChatInput'] {
+        max-width: 100% !important;
+    }
+    div[data-testid='stChatInput'] textarea,
+    div[data-testid='stChatInput'] div[contenteditable='true'] {
+        background: #0d1117 !important;
+        border: 2px solid #FFDE00 !important;
+        color: #ffffff !important;
+        caret-color: #ffffff !important;
+        -webkit-text-fill-color: #ffffff !important;
+        font-size: 15px !important;
+        min-height: 50px !important;
+        border-radius: 8px !important;
+    }
+    div[data-testid='stChatInput'] textarea::placeholder {
+        color: #808080 !important;
+        -webkit-text-fill-color: #808080 !important;
+    }
+
+    /* Assistant messages -- wider, more readable */
+    div[data-testid='stChatMessage'] {
+        max-width: 90% !important;
+        padding: 12px 16px !important;
+        margin-bottom: 8px !important;
+        line-height: 1.7 !important;
+        font-size: 15px !important;
+    }
+
+    /* Scrollbar styling */
+    div[data-testid='stChatMessageContainer']::-webkit-scrollbar {
+        width: 6px;
+    }
+    div[data-testid='stChatMessageContainer']::-webkit-scrollbar-thumb {
+        background: #4a4a4a;
+        border-radius: 3px;
+    }
+    div[data-testid='stChatMessageContainer']::-webkit-scrollbar-track {
+        background: #1a1a1a;
+    }
+
+    /* Download buttons inside chat */
+    div[data-testid='stChatMessage'] .stDownloadButton button {
+        background: #FFDE00 !important;
+        color: #1a1a1a !important;
+        font-weight: 700 !important;
+        border: none !important;
+        border-radius: 6px !important;
+        padding: 8px 16px !important;
+        margin-top: 6px !important;
+        font-size: 13px !important;
+    }
+
+    /* Status containers inside chat */
+    div[data-testid='stChatMessage'] div[data-testid='stStatusWidget'] {
+        background: #2d2d2d !important;
+        border: 1px solid #4a4a4a !important;
+        border-radius: 8px !important;
+        margin: 8px 0 !important;
+    }
+
+    /* === COMPACT HEADER BAR === */
     .top-header {
-        background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 50%, #2d2d2d 100%);
+        background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
         border-bottom: 1px solid #4a4a4a;
-        padding: 16px 24px;
+        padding: 6px 24px;
         display: flex;
         align-items: center;
         justify-content: space-between;
+        height: 50px;
+        max-height: 50px;
         position: relative;
     }
     .top-header::before {
@@ -95,23 +190,48 @@ st.markdown("""
     .header-left {
         display: flex;
         align-items: center;
-        gap: 12px;
+        gap: 10px;
     }
     .top-header h1 {
-        font-size: 18px;
+        font-size: 16px;
         font-weight: 600;
         color: #FFFFFF;
         margin: 0;
         letter-spacing: -0.3px;
+        display: inline;
     }
     .top-header .role {
         font-size: 11px;
         color: #B0B0B0;
         letter-spacing: 0.5px;
         text-transform: uppercase;
+        display: inline;
+        margin-left: 8px;
     }
 
-    /* === WORKSPACE AREA (center) === */
+    /* === COMPACT SIDEBAR === */
+    section[data-testid='stSidebar'] {
+        width: 280px !important;
+        min-width: 280px !important;
+        background: #1a1a1a !important;
+        border-right: 1px solid #4a4a4a;
+    }
+    section[data-testid='stSidebar'] .block-container {
+        padding: 1rem !important;
+    }
+    section[data-testid="stSidebar"] .stFileUploader {
+        border: 1px dashed #4a4a4a;
+        border-radius: 8px;
+        padding: 12px;
+    }
+
+    /* === CHAT PANEL BORDER === */
+    div[data-testid="column"]:last-child {
+        border-left: 1px solid #4a4a4a;
+        padding-left: 16px !important;
+    }
+
+    /* === WORKSPACE AREA === */
     .workspace-card {
         background: #2d2d2d;
         border: 1px solid #4a4a4a;
@@ -205,28 +325,7 @@ st.markdown("""
         50% { opacity: 0.3; }
     }
 
-    /* === CHAT PANEL STYLING === */
-    div[data-testid="column"]:last-child {
-        border-left: 1px solid #4a4a4a;
-        padding-left: 16px !important;
-    }
-
-    /* Chat input fix -- ALWAYS visible and readable */
-    div[data-testid='stChatInput'] textarea,
-    div[data-testid='stChatInput'] div[contenteditable='true'] {
-        background: #1a1a1a !important;
-        border: 2px solid #FFDE00 !important;
-        color: #ffffff !important;
-        caret-color: #ffffff !important;
-        font-size: 14px !important;
-        -webkit-text-fill-color: #ffffff !important;
-    }
-    div[data-testid='stChatInput'] textarea::placeholder {
-        color: #808080 !important;
-        -webkit-text-fill-color: #808080 !important;
-    }
-
-    /* Chat messages */
+    /* Chat messages custom classes */
     .dr-msg {
         background: #2d2d2d;
         border: 1px solid #4a4a4a;
@@ -293,32 +392,6 @@ st.markdown("""
         border: 1px solid #4a4a4a;
         border-radius: 8px;
     }
-
-    /* Chat area -- taller, scrollable */
-    div[data-testid="stChatMessageContainer"] {
-        max-height: 75vh !important;
-        overflow-y: auto !important;
-    }
-    section.main > div {
-        max-width: 1200px !important;
-        padding-bottom: 120px !important;
-    }
-    div[data-testid="stBottomBlockContainer"] {
-        background: #1a1a1a !important;
-        padding: 10px 20px !important;
-        border-top: 2px solid #FFDE00 !important;
-    }
-
-    /* Sidebar refinement */
-    section[data-testid="stSidebar"] {
-        background-color: #1a1a1a;
-        border-right: 1px solid #4a4a4a;
-    }
-    section[data-testid="stSidebar"] .stFileUploader {
-        border: 1px dashed #4a4a4a;
-        border-radius: 8px;
-        padding: 12px;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -369,7 +442,7 @@ if "audience_mode" not in st.session_state:
 # ============================================
 # HEADER (with avatar)
 # ============================================
-_safe_html(f'<div class="top-header"><div class="header-left">{DR_DATA_AVATAR}<div><h1>Dr. Data</h1><div class="role">Chief Data Intelligence Officer</div></div></div><div>{WU_LOGO}</div></div>', "Dr. Data -- Chief Data Intelligence Officer")
+_safe_html(f'<div class="top-header"><div class="header-left">{DR_DATA_AVATAR}<h1>Dr. Data</h1><span class="role">|&nbsp; Chief Data Intelligence Officer</span></div><div>{WU_LOGO}</div></div>', "Dr. Data -- Chief Data Intelligence Officer")
 
 
 # ============================================
@@ -675,10 +748,10 @@ def _render_downloads(downloads, key_prefix, ts):
 # RIGHT: CHAT PANEL -- Conversation with Dr. Data
 # ============================================
 with chat_col:
-    _safe_html(f'<div style="padding:8px 0 12px 0;border-bottom:1px solid #4a4a4a;margin-bottom:12px;display:flex;align-items:center;gap:10px;">{DR_DATA_AVATAR}<div><div style="font-size:13px;font-weight:600;color:#FFFFFF;">Chat with Dr. Data</div><div style="font-size:11px;color:#B0B0B0;">The Art of the Possible</div></div></div>', "Chat with Dr. Data -- The Art of the Possible")
+    _safe_html(f'<div style="padding:4px 0 8px 0;border-bottom:1px solid #4a4a4a;margin-bottom:8px;display:flex;align-items:center;gap:8px;">{DR_DATA_AVATAR}<span style="font-size:13px;font-weight:600;color:#FFFFFF;">Chat with Dr. Data</span><span style="font-size:11px;color:#B0B0B0;">|&nbsp; The Art of the Possible</span></div>', "Chat with Dr. Data -- The Art of the Possible")
 
     # Chat container with scroll
-    chat_container = st.container(height=550)
+    chat_container = st.container(height=None)
 
     with chat_container:
         # Opening message if empty
@@ -808,234 +881,172 @@ with chat_col:
 
         agent = st.session_state.agent
 
-        # Detect export intent (same keywords as agent)
-        msg_lower = prompt.lower()
-        _export_kws = (
-            "powerpoint", "pptx", "presentation", "slides", "deck",
-            "pdf", "report", "word", "docx", "document",
-            "dashboard", "html", "interactive", "explore",
-            "drill down", "filter",
-            "power bi", "pbi", "pbip", "pbix",
-            "all formats", "all three", "everything",
-        )
-        want_export = any(k in msg_lower for k in _export_kws)
-        has_data = agent.dataframe is not None
-
         with chat_container:
             with st.chat_message("user"):
                 st.markdown(prompt)
 
-            if want_export and has_data:
-                # ============================================
-                # EXPORT FLOW -- Claude CLI style
-                # ============================================
-                with st.chat_message("assistant"):
-                    # Phase 2: Instant acknowledgment (no LLM, instant)
-                    dataset_name = "your dataset"
-                    if agent.data_file_path:
-                        dataset_name = (
-                            os.path.splitext(
-                                os.path.basename(agent.data_file_path)
-                            )[0].replace("_", " ").strip()
-                            or "your dataset"
+            with st.chat_message("assistant"):
+                response = None
+
+                # Check if agent will route to export
+                msg_lower = prompt.lower()
+                is_export_request = any(kw in msg_lower for kw in [
+                    "power bi", "powerbi", "pbi", "dashboard", "html",
+                    "interactive", "powerpoint", "pptx", "slides",
+                    "pdf", "report", "word", "docx",
+                ])
+
+                if is_export_request:
+                    # ============================================
+                    # EXPORT FLOW -- show every step like Claude CLI
+                    # ============================================
+                    progress_placeholder = st.empty()
+                    status_messages = []
+
+                    def update_status(msg):
+                        status_messages.append(msg)
+                        progress_placeholder.markdown(
+                            "\n\n".join([
+                                f"**{m}**" if i == len(status_messages) - 1
+                                else f'<span style="color:#808080">{m}</span>'
+                                for i, m in enumerate(status_messages)
+                            ]),
+                            unsafe_allow_html=True,
                         )
-                    st.markdown(
-                        f"On it. Building your deliverables from "
-                        f"**{dataset_name}**. This will take a moment."
-                    )
 
-                    # Phase 3: Live progress via st.status
-                    response_data = None
-                    with st.status(
-                        "Working...", expanded=True
-                    ) as status_widget:
-                        def _progress_cb(msg):
-                            status_widget.write(msg)
+                    update_status("Received your request. Let me get to work.")
 
+                    # Detect what's needed
+                    if any(kw in msg_lower for kw in ["power bi", "powerbi", "pbi"]):
+                        update_status("Setting up Power BI project generation...")
+                    if any(kw in msg_lower for kw in ["dashboard", "html", "interactive"]):
+                        update_status("Preparing interactive dashboard builder...")
+                    if any(kw in msg_lower for kw in ["powerpoint", "pptx", "slides"]):
+                        update_status("Preparing PowerPoint generator...")
+
+                    time.sleep(0.3)
+
+                    update_status("Analyzing your data profile...")
+
+                    # Call the agent
+                    try:
+                        response = agent.respond(
+                            prompt,
+                            st.session_state.messages,
+                            st.session_state.uploaded_files,
+                        )
+
+                        if response and isinstance(response, dict):
+                            downloads = response.get("downloads", []) or []
+                            content = response.get("content", "")
+
+                            if downloads:
+                                update_status(f"Generation complete. {len(downloads)} file(s) ready.")
+                                progress_placeholder.empty()
+
+                                if content:
+                                    st.markdown(content)
+
+                                st.markdown("---")
+                                st.markdown("**Your files:**")
+                                for idx, dl in enumerate(downloads):
+                                    file_path = dl.get("path", "")
+                                    file_name = dl.get("filename", dl.get("name", f"file_{idx}"))
+                                    if file_path and os.path.exists(file_path):
+                                        with open(file_path, "rb") as f:
+                                            file_bytes = f.read()
+                                        mime_map = {
+                                            ".html": "text/html",
+                                            ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                                            ".pdf": "application/pdf",
+                                            ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                            ".zip": "application/zip",
+                                            ".csv": "text/csv",
+                                        }
+                                        ext = os.path.splitext(file_name)[1].lower()
+                                        st.download_button(
+                                            label=f"Download {file_name}",
+                                            data=file_bytes,
+                                            file_name=file_name,
+                                            mime=mime_map.get(ext, "application/octet-stream"),
+                                            key=f"dl_{file_name}_{int(now)}_{idx}",
+                                        )
+                                    else:
+                                        st.warning(f"File not found: {file_path}")
+                            else:
+                                progress_placeholder.empty()
+                                st.markdown(
+                                    content if content
+                                    else "Generation complete but no files were produced. Check the terminal for errors."
+                                )
+                        elif response and isinstance(response, str):
+                            progress_placeholder.empty()
+                            st.markdown(response)
+                        else:
+                            progress_placeholder.empty()
+                            st.warning("Dr. Data hit a snag. Try your request again.")
+
+                    except Exception as e:
+                        progress_placeholder.empty()
+                        st.error(f"Error: {str(e)[:200]}. Check terminal for details.")
+
+                else:
+                    # ============================================
+                    # NORMAL CHAT FLOW -- spinner then response
+                    # ============================================
+                    with st.spinner(""):
                         try:
-                            response_data = agent.respond(
+                            response = agent.respond(
                                 prompt,
                                 st.session_state.messages,
                                 st.session_state.uploaded_files,
-                                progress_callback=_progress_cb,
                             )
+
+                            if response and isinstance(response, dict):
+                                content = response.get("content", "")
+                                if content:
+                                    st.markdown(content)
+                                downloads = response.get("downloads", []) or []
+                                if downloads:
+                                    for idx, dl in enumerate(downloads):
+                                        file_path = dl.get("path", "")
+                                        file_name = dl.get("filename", dl.get("name", f"file_{idx}"))
+                                        if file_path and os.path.exists(file_path):
+                                            with open(file_path, "rb") as f:
+                                                st.download_button(
+                                                    label=f"Download {file_name}",
+                                                    data=f.read(),
+                                                    file_name=file_name,
+                                                    key=f"dl_{file_name}_{int(now)}_{idx}",
+                                                )
+                            elif response and isinstance(response, str):
+                                st.markdown(response)
+                            else:
+                                st.warning("Dr. Data is thinking. Try again.")
                         except Exception as e:
-                            response_data = {
-                                "type": "export",
-                                "acknowledgment": "",
-                                "downloads": [],
-                                "errors": [str(e)[:200]],
-                                "progress_steps": [],
-                                "followup_context": "",
-                            }
-                            status_widget.write(
-                                f"Hit a snag: {str(e)[:200]}"
-                            )
+                            st.error(f"Error: {str(e)[:200]}")
 
-                        status_widget.update(
-                            label="All deliverables ready",
-                            state="complete",
-                            expanded=False,
-                        )
+                # SAVE TO HISTORY -- always
+                if response:
+                    msg_data = {
+                        "role": "assistant",
+                        "content": (
+                            response.get("content", response)
+                            if isinstance(response, dict) else response
+                        ),
+                        "downloads": (
+                            response.get("downloads", [])
+                            if isinstance(response, dict) else []
+                        ),
+                        "timestamp": now,
+                    }
+                    st.session_state.messages.append(msg_data)
 
-                    # Phase 4: Download buttons
-                    downloads = response_data.get("downloads", []) or []
-                    _render_downloads(downloads, key_prefix="chat", ts=now)
-
-                    # Phase 5: Dr. Data wrap-up (streamed)
-                    followup = ""
-                    ctx = response_data.get("followup_context", "")
-                    if ctx:
-                        try:
-                            followup = st.write_stream(
-                                agent.narrate_export_stream(ctx)
-                            )
-                        except Exception:
-                            followup = agent._narrate_export(
-                                downloads,
-                                response_data.get("errors", []),
-                            )
-                            st.markdown(followup)
-                    elif not downloads:
-                        followup = (
-                            "Hmm, nothing came out of that build. "
-                            "Tell me what you need and I will try "
-                            "a different angle."
-                        )
-                        st.markdown(followup)
-
-                # Phase 6: Save to history
-                ack_text = response_data.get(
-                    "acknowledgment",
-                    f"On it. Building your deliverables from {dataset_name}.",
-                )
-                full_content = ack_text
-                if followup:
-                    full_content += "\n\n" + followup
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": full_content,
-                    "downloads": downloads if downloads else None,
-                    "timestamp": now,
-                })
-
-                # Update workspace state
-                ws = st.session_state.workspace_content
-                if downloads:
-                    for dl in downloads:
-                        if os.path.exists(dl.get("path", "")):
-                            try:
-                                dl_audit = (
-                                    st.session_state.audit_engine
-                                    .audit_deliverable(
-                                        dl["path"],
-                                        file_type=dl.get(
-                                            "filename", ""
-                                        ).split(".")[-1],
-                                    )
-                                )
-                                dl_audit.compute_scores()
-                                dl["audit_score"] = dl_audit.overall_score
-                                dl["audit_releasable"] = (
-                                    dl_audit.is_releasable
-                                )
-                            except Exception:
-                                pass
-                    ws["deliverables"].extend(downloads)
-                    ws["phase"] = "complete"
-                    ws["progress_messages"].append(
-                        "Deliverables ready -- audited"
-                    )
-                if agent.dataframe is not None:
-                    if ws.get("data_preview") is None:
-                        ws["data_preview"] = agent.dataframe
-
-            else:
-                # ============================================
-                # CHAT FLOW -- normal conversation
-                # ============================================
-                with st.chat_message("assistant"):
-                    content = ""
-                    downloads = []
-                    response_data = None
-
-                    try:
-                        import concurrent.futures
-                        with st.spinner("Dr. Data is thinking..."):
-                            with concurrent.futures.ThreadPoolExecutor() as ex:
-                                future = ex.submit(
-                                    agent.respond,
-                                    prompt,
-                                    st.session_state.messages,
-                                    st.session_state.uploaded_files,
-                                )
-                                try:
-                                    response_data = future.result(
-                                        timeout=180
-                                    )
-                                except concurrent.futures.TimeoutError:
-                                    response_data = {
-                                        "type": "chat",
-                                        "content": (
-                                            "That is taking longer than "
-                                            "expected. Try asking for a "
-                                            "specific deliverable."
-                                        ),
-                                    }
-                    except Exception as e:
-                        response_data = {
-                            "type": "chat",
-                            "content": (
-                                f"Hit a snag: {str(e)[:200]}. "
-                                f"Try rephrasing what you need."
-                            ),
-                        }
-
-                    # Defensive response handling
-                    if response_data is None:
-                        content = (
-                            "Dr. Data hit a snag. "
-                            "Try your request again."
-                        )
-                    elif isinstance(response_data, dict):
-                        content = response_data.get("content", "") or ""
-                        downloads = (
-                            response_data.get("downloads", []) or []
-                        )
-                    elif isinstance(response_data, str):
-                        content = response_data
-                    else:
-                        content = str(response_data)
-
-                    if not content.strip() and not downloads:
-                        content = (
-                            "Dr. Data is processing. "
-                            "Try asking again in a moment."
-                        )
-
-                    if content.strip():
-                        st.markdown(content)
-                    if downloads:
-                        _render_downloads(
-                            downloads, key_prefix="chat", ts=now
-                        )
-
-                # Save to history
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": (
-                        content if content.strip()
-                        else "Done."
-                    ),
-                    "downloads": downloads if downloads else None,
-                    "timestamp": now,
-                })
-
-                # Update workspace state
-                ws = st.session_state.workspace_content
-                if isinstance(response_data, dict):
-                    if downloads:
-                        for dl in downloads:
+                    # Update workspace state
+                    ws = st.session_state.workspace_content
+                    dl_list = msg_data["downloads"] or []
+                    if dl_list:
+                        for dl in dl_list:
                             if os.path.exists(dl.get("path", "")):
                                 try:
                                     dl_audit = (
@@ -1048,22 +1059,15 @@ with chat_col:
                                         )
                                     )
                                     dl_audit.compute_scores()
-                                    dl["audit_score"] = (
-                                        dl_audit.overall_score
-                                    )
-                                    dl["audit_releasable"] = (
-                                        dl_audit.is_releasable
-                                    )
+                                    dl["audit_score"] = dl_audit.overall_score
+                                    dl["audit_releasable"] = dl_audit.is_releasable
                                 except Exception:
                                     pass
-                        ws["deliverables"].extend(downloads)
+                        ws["deliverables"].extend(dl_list)
                         ws["phase"] = "complete"
                         ws["progress_messages"].append(
                             "Deliverables ready -- audited"
                         )
-                    if response_data.get("scores"):
-                        ws["scores"] = response_data["scores"]
-
-                if agent.dataframe is not None:
-                    if ws.get("data_preview") is None:
-                        ws["data_preview"] = agent.dataframe
+                    if agent.dataframe is not None:
+                        if ws.get("data_preview") is None:
+                            ws["data_preview"] = agent.dataframe

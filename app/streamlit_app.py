@@ -294,6 +294,21 @@ st.markdown("""
         border-radius: 8px;
     }
 
+    /* Chat area -- taller, scrollable */
+    div[data-testid="stChatMessageContainer"] {
+        max-height: 75vh !important;
+        overflow-y: auto !important;
+    }
+    section.main > div {
+        max-width: 1200px !important;
+        padding-bottom: 120px !important;
+    }
+    div[data-testid="stBottomBlockContainer"] {
+        background: #1a1a1a !important;
+        padding: 10px 20px !important;
+        border-top: 2px solid #FFDE00 !important;
+    }
+
     /* Sidebar refinement */
     section[data-testid="stSidebar"] {
         background-color: #1a1a1a;
@@ -616,27 +631,82 @@ with workspace_col:
 
 
 # ============================================
+# MIME types for download buttons
+# ============================================
+_MIME_TYPES = {
+    ".html": "text/html",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".pdf": "application/pdf",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".pbip": "application/zip",
+    ".zip": "application/zip",
+    ".csv": "text/csv",
+}
+
+
+def _render_downloads(downloads, key_prefix, ts):
+    """Render download buttons inside the current container."""
+    if not downloads:
+        return
+    st.markdown("---")
+    dl_cols = st.columns(min(len(downloads), 3))
+    for idx, dl in enumerate(downloads):
+        file_path = dl.get("path", "")
+        file_name = dl.get("filename", os.path.basename(file_path) if file_path else "file")
+        with dl_cols[idx % len(dl_cols)]:
+            if file_path and os.path.exists(file_path):
+                with open(file_path, "rb") as f:
+                    file_bytes = f.read()
+                ext = os.path.splitext(file_name)[1].lower()
+                mime = _MIME_TYPES.get(ext, "application/octet-stream")
+                st.download_button(
+                    label=f"Download {file_name}",
+                    data=file_bytes,
+                    file_name=file_name,
+                    mime=mime,
+                    key=f"{key_prefix}_{idx}_{file_name}_{ts}",
+                )
+            else:
+                st.caption(f"(file expired: {file_name})")
+
+
+# ============================================
 # RIGHT: CHAT PANEL -- Conversation with Dr. Data
 # ============================================
 with chat_col:
     _safe_html(f'<div style="padding:8px 0 12px 0;border-bottom:1px solid #4a4a4a;margin-bottom:12px;display:flex;align-items:center;gap:10px;">{DR_DATA_AVATAR}<div><div style="font-size:13px;font-weight:600;color:#FFFFFF;">Chat with Dr. Data</div><div style="font-size:11px;color:#B0B0B0;">The Art of the Possible</div></div></div>', "Chat with Dr. Data -- The Art of the Possible")
 
     # Chat container with scroll
-    chat_container = st.container(height=500)
+    chat_container = st.container(height=550)
 
     with chat_container:
         # Opening message if empty
         if not st.session_state.messages:
-            _safe_html('<div class="dr-msg"><div class="dr-name">Dr. Data</div>Hello! Great to have you here. I am Dr. Data, your personal data intelligence partner. I believe in The Art of the Possible -- every dataset has a story waiting to be told, and I am here to help you tell it.<br><br>Upload a file in the sidebar (CSV, Excel, Tableau, Alteryx, or anything else you have) and tell me what you need. I can build interactive dashboards, Power BI projects, PDF reports, PowerPoint presentations, and more. Whatever helps you shine -- I have got you covered. Let us make something great together!</div>', "Dr. Data: Hello! Upload a file in the sidebar and tell me what you need.")
+            with st.chat_message("assistant"):
+                st.markdown(
+                    "Hello! Great to have you here. I am Dr. Data, your personal "
+                    "data intelligence partner. I believe in **The Art of the Possible** "
+                    "-- every dataset has a story waiting to be told, and I am here "
+                    "to help you tell it.\n\n"
+                    "Upload a file in the sidebar (CSV, Excel, Tableau, Alteryx, or "
+                    "anything else you have) and tell me what you need. I can build "
+                    "interactive dashboards, Power BI projects, PDF reports, PowerPoint "
+                    "presentations, and more. Whatever helps you shine -- I have got "
+                    "you covered. Let us make something great together!"
+                )
 
-        # Render chat history
+        # Render full chat history on every rerender
         for msg in st.session_state.messages:
-            escaped = html_module.escape(msg["content"])
-            escaped = escaped.replace("\n", "<br>")
-            if msg["role"] == "assistant":
-                _safe_html(f'<div class="dr-msg"><div class="dr-name">Dr. Data</div>{escaped}</div>', f'Dr. Data: {msg["content"]}')
-            else:
-                _safe_html(f'<div class="user-msg">{escaped}</div>', msg["content"])
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+                # Re-render download buttons for assistant messages that had them
+                if msg["role"] == "assistant" and msg.get("downloads"):
+                    _render_downloads(
+                        msg["downloads"],
+                        key_prefix="hist",
+                        ts=msg.get("timestamp", 0),
+                    )
 
     # === HANDLE AUTO-ANALYSIS ON FILE UPLOAD ===
     if st.session_state.file_just_uploaded:
@@ -652,37 +722,31 @@ with chat_col:
         ws["progress_messages"].append("Running deep analysis...")
 
         if st.session_state.agent:
-            status_container = st.status(
-                f"Analyzing {name_str}...", expanded=True
-            )
             try:
-                status_container.write(f"Loaded: {name_str}")
-                status_container.write("Running data quality audit...")
-
                 response = st.session_state.agent.analyze_uploaded_file()
                 if not response or not str(response).strip():
-                    response = "Dr. Data is thinking... try sending your message again."
+                    response = (
+                        f"I have loaded your files: {name_str}. "
+                        f"The data looks great and is ready to go! "
+                        f"What would you like me to build?"
+                    )
                 st.session_state.messages.append({
                     "role": "assistant",
                     "content": response,
+                    "timestamp": time.time(),
                 })
                 ws["phase"] = "analyzed"
-                ws["progress_messages"].append("Analysis complete -- audit passed" if ws.get("audit_releasable") else "Analysis complete -- review audit findings")
-
-                status_container.update(
-                    label="Analysis complete", state="complete",
-                    expanded=False,
+                ws["progress_messages"].append(
+                    "Analysis complete -- audit passed"
+                    if ws.get("audit_releasable")
+                    else "Analysis complete -- review audit findings"
                 )
 
                 agent = st.session_state.agent
                 if agent.dataframe is not None and ws.get("data_preview") is None:
                     ws["data_preview"] = agent.dataframe
 
-            except Exception as e:
-                status_container.update(
-                    label="Files loaded", state="complete",
-                    expanded=False,
-                )
+            except Exception:
                 st.session_state.messages.append({
                     "role": "assistant",
                     "content": (
@@ -692,6 +756,7 @@ with chat_col:
                         f"dashboards, reports, presentations -- whatever "
                         f"helps you most. The Art of the Possible starts here!"
                     ),
+                    "timestamp": time.time(),
                 })
         else:
             preview_note = ""
@@ -714,125 +779,101 @@ with chat_col:
                     f"is and what story you want to tell -- I will take "
                     f"it from there!"
                 ),
+                "timestamp": time.time(),
             })
 
         st.rerun()
 
-    # === CHAT INPUT ===
+    # === CHAT INPUT (always active, never disabled) ===
     if prompt := st.chat_input("Ask Dr. Data anything -- I am here to help!", key="chat_input"):
-        # 1. Immediately show user message in chat
+        now = time.time()
+
+        # Append user message to history
         st.session_state.messages.append({
             "role": "user",
             "content": prompt,
+            "timestamp": now,
         })
-        escaped_prompt = html_module.escape(prompt).replace("\n", "<br>")
-        _safe_html(f'<div class="user-msg">{escaped_prompt}</div>', prompt)
 
-        # 2. Show spinner while agent works, with timeout
-        with st.chat_message("assistant"):
-            if st.session_state.agent:
-                response_data = None
-                try:
-                    import concurrent.futures
-                    with st.spinner("Dr. Data is on it..."):
-                        with concurrent.futures.ThreadPoolExecutor() as executor:
-                            future = executor.submit(
-                                st.session_state.agent.respond,
-                                prompt,
-                                st.session_state.messages,
-                                st.session_state.uploaded_files,
-                            )
-                            try:
-                                response_data = future.result(timeout=180)
-                            except concurrent.futures.TimeoutError:
-                                response_data = {
-                                    "content": (
-                                        "That is taking longer than expected with this "
-                                        "dataset. Try asking for a specific deliverable "
-                                        "like just a dashboard or just a PowerPoint."
-                                    ),
-                                    "downloads": [],
-                                    "scores": None,
-                                }
-                except Exception as e:
-                    response_data = {
-                        "content": (
-                            f"I ran into a small hiccup there: {str(e)[:200]}. "
-                            f"No worries though -- these things happen! Could you "
-                            f"try rephrasing what you need? I want to make sure "
-                            f"I get it right for you."
-                        ),
-                        "downloads": [],
-                        "scores": None,
-                    }
+        if st.session_state.agent:
+            response_data = None
+            content = ""
+            downloads = []
 
-                # 3. Defensive response handling
-                if response_data is None:
-                    content = "Dr. Data hit a snag. Try your request again."
-                    downloads = []
-                elif isinstance(response_data, dict):
-                    content = response_data.get("content", "") or ""
-                    downloads = response_data.get("downloads", []) or []
-                elif isinstance(response_data, str):
-                    content = response_data
-                    downloads = []
-                else:
-                    content = str(response_data)
-                    downloads = []
-
-                if not content.strip() and not downloads:
-                    content = "Dr. Data is processing. Try asking again in a moment."
-
-                # Show text response
-                if content.strip():
-                    st.markdown(content)
-
-                # 4. Working download buttons with MIME types
-                _MIME_TYPES = {
-                    ".html": "text/html",
-                    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                    ".pdf": "application/pdf",
-                    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    ".pbip": "application/zip",
-                    ".zip": "application/zip",
-                    ".csv": "text/csv",
-                }
-
-                if downloads:
-                    st.markdown("---")
-                    dl_cols = st.columns(min(len(downloads), 3))
-                    for idx, dl in enumerate(downloads):
-                        file_path = dl.get("path", "")
-                        file_name = dl.get("filename", os.path.basename(file_path))
-                        with dl_cols[idx % len(dl_cols)]:
-                            if file_path and os.path.exists(file_path):
-                                with open(file_path, "rb") as f:
-                                    file_bytes = f.read()
-                                ext = os.path.splitext(file_name)[1].lower()
-                                mime = _MIME_TYPES.get(ext, "application/octet-stream")
-                                st.download_button(
-                                    label=f"Download {file_name}",
-                                    data=file_bytes,
-                                    file_name=file_name,
-                                    mime=mime,
-                                    key=f"chat_dl_{file_name}_{idx}_{int(time.time())}",
+            # Show spinner inside chat while agent works
+            with chat_container:
+                with st.chat_message("user"):
+                    st.markdown(prompt)
+                with st.chat_message("assistant"):
+                    try:
+                        import concurrent.futures
+                        with st.spinner("Dr. Data is on it..."):
+                            with concurrent.futures.ThreadPoolExecutor() as executor:
+                                future = executor.submit(
+                                    st.session_state.agent.respond,
+                                    prompt,
+                                    st.session_state.messages,
+                                    st.session_state.uploaded_files,
                                 )
-                            else:
-                                st.error(f"File not found: {file_path}")
+                                try:
+                                    response_data = future.result(timeout=180)
+                                except concurrent.futures.TimeoutError:
+                                    response_data = {
+                                        "content": (
+                                            "That is taking longer than expected with this "
+                                            "dataset. Try asking for a specific deliverable "
+                                            "like just a dashboard or just a PowerPoint."
+                                        ),
+                                        "downloads": [],
+                                        "scores": None,
+                                    }
+                    except Exception as e:
+                        response_data = {
+                            "content": (
+                                f"I ran into a small hiccup there: {str(e)[:200]}. "
+                                f"No worries though -- these things happen! Could you "
+                                f"try rephrasing what you need?"
+                            ),
+                            "downloads": [],
+                            "scores": None,
+                        }
 
-                # Save to message history
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": content if content.strip() else "Deliverables ready.",
-                })
+                    # Defensive response handling
+                    if response_data is None:
+                        content = "Dr. Data hit a snag. Try your request again."
+                    elif isinstance(response_data, dict):
+                        content = response_data.get("content", "") or ""
+                        downloads = response_data.get("downloads", []) or []
+                    elif isinstance(response_data, str):
+                        content = response_data
+                    else:
+                        content = str(response_data)
 
-                # Update workspace state
-                ws = st.session_state.workspace_content
-                if isinstance(response_data, dict):
-                    if downloads:
-                        for dl in downloads:
-                            if os.path.exists(dl.get("path", "")):
+                    if not content.strip() and not downloads:
+                        content = "Dr. Data is processing. Try asking again in a moment."
+
+                    # Render response text inside chat_message
+                    if content.strip():
+                        st.markdown(content)
+
+                    # Render download buttons inside chat_message
+                    _render_downloads(downloads, key_prefix="chat", ts=now)
+
+            # Save assistant message to history (with downloads for replay)
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": content if content.strip() else "Deliverables ready.",
+                "downloads": downloads if downloads else None,
+                "timestamp": now,
+            })
+
+            # Update workspace state
+            ws = st.session_state.workspace_content
+            if isinstance(response_data, dict):
+                if downloads:
+                    for dl in downloads:
+                        if os.path.exists(dl.get("path", "")):
+                            try:
                                 dl_audit = st.session_state.audit_engine.audit_deliverable(
                                     dl["path"],
                                     file_type=dl.get("filename", "").split(".")[-1],
@@ -840,26 +881,26 @@ with chat_col:
                                 dl_audit.compute_scores()
                                 dl["audit_score"] = dl_audit.overall_score
                                 dl["audit_releasable"] = dl_audit.is_releasable
-                        ws["deliverables"].extend(downloads)
-                        ws["phase"] = "complete"
-                        ws["progress_messages"].append("Deliverables ready -- audited")
+                            except Exception:
+                                pass
+                    ws["deliverables"].extend(downloads)
+                    ws["phase"] = "complete"
+                    ws["progress_messages"].append("Deliverables ready -- audited")
 
-                    if response_data.get("scores"):
-                        ws["scores"] = response_data["scores"]
+                if response_data.get("scores"):
+                    ws["scores"] = response_data["scores"]
 
-                agent = st.session_state.agent
-                if agent.dataframe is not None and ws.get("data_preview") is None:
-                    ws["data_preview"] = agent.dataframe
+            agent = st.session_state.agent
+            if agent.dataframe is not None and ws.get("data_preview") is None:
+                ws["data_preview"] = agent.dataframe
 
-            else:
-                st.warning(
+        else:
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": (
                     "I am just warming up my analysis engines -- almost "
                     "ready! Give me one moment and try again."
-                )
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": (
-                        "I am just warming up my analysis engines -- almost "
-                        "ready! Give me one moment and try again."
-                    ),
-                })
+                ),
+                "timestamp": now,
+            })
+            st.rerun()

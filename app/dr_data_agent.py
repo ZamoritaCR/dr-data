@@ -291,6 +291,14 @@ class DrDataAgent:
         elif not openai_key:
             print("[INFO] OPENAI_API_KEY not set -- using Claude for all requests.")
 
+        # Gemini tertiary engine (large-context analysis, vision, failover)
+        self.gemini_engine = None
+        try:
+            from core.gemini_engine import GeminiEngine
+            self.gemini_engine = GeminiEngine()
+        except Exception as e:
+            print(f"[INFO] Gemini engine not loaded: {e}")
+
     def _fix_orphaned_tool_calls(self):
         """Ensure every assistant tool_use block has a matching tool_result.
 

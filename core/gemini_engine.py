@@ -21,23 +21,53 @@ except ImportError:
     _HAS_GENAI = False
 
 
+def _get_gemini_key():
+    """Resolve Gemini API key from Streamlit secrets or environment."""
+    # Streamlit secrets first
+    try:
+        import streamlit as st
+        for key in ("GEMINI_API_KEY", "GOOGLE_API_KEY"):
+            if key in st.secrets:
+                return st.secrets[key]
+    except Exception:
+        pass
+    # Fall back to os.environ / .env
+    return os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or ""
+
+
+def _retry_generate(model, content, max_retries=3):
+    """Call model.generate_content with exponential-backoff retries."""
+    for attempt in range(max_retries):
+        try:
+            return model.generate_content(content)
+        except Exception as e:
+            err = str(e).lower()
+            # Only retry on transient / rate-limit errors
+            if attempt < max_retries - 1 and any(
+                kw in err for kw in ("429", "rate", "resource", "503", "500", "overloaded")
+            ):
+                wait = 2 ** attempt
+                print(f"[GEMINI] Retry {attempt + 1}/{max_retries} after {wait}s -- {e}")
+                time.sleep(wait)
+            else:
+                raise
+
+
 class GeminiEngine:
     """Google Gemini integration for analysis, vision, and failover chat."""
 
     def __init__(self):
         self.available = False
         self.model = None
-        self.model_pro = None
 
         if not _HAS_GENAI:
             print("[GEMINI] google-generativeai not installed. Gemini engine disabled.")
             return
 
-        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        api_key = _get_gemini_key()
         if api_key:
             genai.configure(api_key=api_key)
             self.model = genai.GenerativeModel("gemini-2.0-flash")
-            self.model_pro = genai.GenerativeModel("gemini-2.0-flash")
             self.available = True
             print("[OK] Gemini engine ready (model: gemini-2.0-flash)")
         else:
@@ -87,7 +117,7 @@ class GeminiEngine:
             prompt += f"\n\nDATASET ({len(df):,} rows, {len(df.columns)} columns):\n{csv_str}"
 
             t0 = time.time()
-            response = self.model.generate_content(prompt)
+            response = _retry_generate(self.model, prompt)
             elapsed = time.time() - t0
             print(f"[GEMINI] Dataset analysis: {elapsed:.1f}s, "
                   f"{len(df):,} rows analyzed")
@@ -115,7 +145,7 @@ class GeminiEngine:
             return None
 
         try:
-            response = self.model.generate_content([
+            response = _retry_generate(self.model, [
                 prompt,
                 {"mime_type": "image/png", "data": image_bytes},
             ])
@@ -253,7 +283,7 @@ class GeminiEngine:
                 )
 
             t0 = time.time()
-            response = self.model.generate_content([prompt, uploaded])
+            response = _retry_generate(self.model, [prompt, uploaded])
             elapsed = time.time() - t0
             print(f"[GEMINI] Document analysis ({filename}): {elapsed:.1f}s")
             return response.text
@@ -299,7 +329,20 @@ class GeminiEngine:
             full_message = f"[SYSTEM]: {system_prompt}\n\n{message}"
 
             t0 = time.time()
-            response = chat_session.send_message(full_message)
+            for attempt in range(3):
+                try:
+                    response = chat_session.send_message(full_message)
+                    break
+                except Exception as e:
+                    err = str(e).lower()
+                    if attempt < 2 and any(
+                        kw in err for kw in ("429", "rate", "resource", "503", "500", "overloaded")
+                    ):
+                        wait = 2 ** attempt
+                        print(f"[GEMINI] Chat retry {attempt + 1}/3 after {wait}s -- {e}")
+                        time.sleep(wait)
+                    else:
+                        raise
             elapsed = time.time() - t0
             print(f"[GEMINI] Chat response: {elapsed:.1f}s")
             return response.text

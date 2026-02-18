@@ -22,6 +22,7 @@ def _get_secret(key):
 
 ANTHROPIC_API_KEY = _get_secret("ANTHROPIC_API_KEY")
 OPENAI_API_KEY = _get_secret("OPENAI_API_KEY")
+GEMINI_API_KEY = _get_secret("GEMINI_API_KEY") or _get_secret("GOOGLE_API_KEY")
 
 # Validate
 def validate_keys():
@@ -30,4 +31,6 @@ def validate_keys():
         issues.append("ANTHROPIC_API_KEY not set")
     if not OPENAI_API_KEY:
         issues.append("OPENAI_API_KEY not set")
+    if not GEMINI_API_KEY:
+        issues.append("GEMINI_API_KEY not set (optional -- Gemini features disabled)")
     return issues

@@ -1375,14 +1375,7 @@ with tab1:
                         st.rerun()  # workspace will pick this up
 
                     else:
-                        # ====== CHAT PATH -- streaming with live status ======
-
-                        # Container for the status widget (above the streamed text)
-                        _chat_status_slot = st.empty()
-                        _chat_status_ctx = _chat_status_slot.status(
-                            "Reading your data...", expanded=False,
-                        )
-                        _chat_status_ctx.__enter__()
+                        # ====== CHAT PATH -- streaming, no spinner ======
 
                         # Auto-load data if the agent hasn't ingested it yet
                         if st.session_state.uploaded_files and agent.dataframe is None:
@@ -1392,9 +1385,6 @@ with tab1:
                                     agent.data_file_path = path
                                     agent.data_path = path
                                     ext = info.get("ext", path.rsplit(".", 1)[-1].lower())
-                                    _chat_status_ctx.update(
-                                        label=f"Loading {name}...",
-                                    )
                                     try:
                                         if ext == "csv":
                                             agent.dataframe = pd.read_csv(path)
@@ -1406,40 +1396,15 @@ with tab1:
                                         elif ext == "json":
                                             agent.dataframe = pd.read_json(path)
                                         if agent.dataframe is not None and agent.data_profile is None:
-                                            _chat_status_ctx.update(
-                                                label="Profiling data...",
-                                            )
                                             agent.data_profile = agent.analyzer.profile(agent.dataframe)
                                     except Exception:
                                         pass
                                     break
 
-                        # Progress callback -- updates status during tool calls
-                        def _chat_progress(label):
-                            try:
-                                _chat_status_ctx.update(label=label)
-                            except Exception:
-                                pass
-
                         # Build context and stream response word-by-word
-                        _chat_status_ctx.update(
-                            label="Building context...",
-                        )
                         enriched = agent._build_context_message(prompt)
-
-                        _engine_label = getattr(
-                            agent, "MODEL", "Claude"
-                        ).split("-")[0].capitalize()
-                        _chat_status_ctx.update(
-                            label=f"Analyzing with {_engine_label}...",
-                        )
                         try:
-                            full_text = st.write_stream(
-                                agent.chat_stream(
-                                    enriched,
-                                    progress_callback=_chat_progress,
-                                )
-                            )
+                            full_text = st.write_stream(agent.chat_stream(enriched))
                         except AttributeError:
                             # Fallback: blocking call if streaming unavailable
                             response = agent.respond(
@@ -1454,9 +1419,6 @@ with tab1:
 
                         # Check for any files generated during tool calls
                         chat_downloads = []
-                        _chat_status_ctx.update(
-                            label="Finalizing response...",
-                        )
                         for fpath in agent.generated_files:
                             if os.path.exists(fpath):
                                 fname = os.path.basename(fpath)
@@ -1467,9 +1429,6 @@ with tab1:
                                     "description": "Generated file",
                                 })
                         if chat_downloads:
-                            _chat_status_ctx.update(
-                                label=f"Built {len(chat_downloads)} deliverable(s)",
-                            )
                             # Notify in chat -- downloads go to workspace
                             file_names = [dl["filename"] for dl in chat_downloads]
                             st.markdown(
@@ -1477,13 +1436,6 @@ with tab1:
                                 f"{', '.join(file_names)}. "
                                 f"Check the workspace for downloads."
                             )
-
-                        # Close the status widget -- mark complete
-                        _chat_status_ctx.update(
-                            label="Response complete",
-                            state="complete", expanded=False,
-                        )
-                        _chat_status_ctx.__exit__(None, None, None)
 
                         # Save chat response to history
                         st.session_state.messages.append({

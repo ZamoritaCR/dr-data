@@ -2653,7 +2653,7 @@ with tab2:
                 st.session_state.rules_engine = BusinessRulesEngine()
             _bre = st.session_state.rules_engine
 
-            _bre_rules = _bre.get_rules()
+            _bre_rules = _bre.rules
             st.write(f"**{len(_bre_rules)} rules configured**")
 
             # Add rule manually

@@ -33,7 +33,7 @@ class InteractiveDashboard:
                 numeric_cols.append(col)
             else:
                 try:
-                    pd.to_datetime(df[col], infer_datetime_format=True, errors="raise")
+                    pd.to_datetime(df[col], errors="raise")
                     date_cols.append(col)
                 except Exception:
                     if df[col].nunique() < 15:

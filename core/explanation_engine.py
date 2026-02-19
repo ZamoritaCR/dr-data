@@ -637,7 +637,7 @@ class ExplanationEngine:
         # Render
         env = Environment(
             loader=FileSystemLoader(str(self.template_dir)),
-            autoescape=False,
+            autoescape=True,
         )
         template = env.get_template("report_template.html")
 

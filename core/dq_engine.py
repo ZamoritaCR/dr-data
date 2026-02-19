@@ -395,8 +395,7 @@ class DataQualityEngine:
                 elif df[col].dtype == object:
                     with warnings.catch_warnings():
                         warnings.simplefilter("ignore")
-                        parsed = pd.to_datetime(df[col], errors="coerce",
-                                                infer_datetime_format=True)
+                        parsed = pd.to_datetime(df[col], errors="coerce")
                     if parsed.notna().mean() > 0.5:
                         dt_cols[col] = parsed
 

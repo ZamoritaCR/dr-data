@@ -2376,23 +2376,34 @@ with tab2:
                     st.rerun()
 
             if _lin_stats.get("total_nodes", 0) > 0:
-                # Mermaid diagram
-                _mermaid = _lin.generate_mermaid_diagram()
-                if _mermaid:
-                    st.markdown("##### Lineage Graph")
-                    _mermaid_html = (
-                        '<html><head>'
-                        '<script src="https://cdn.jsdelivr.net/npm/'
-                        'mermaid@10/dist/mermaid.min.js"></script>'
-                        '<script>mermaid.initialize({startOnLoad:true,'
-                        "theme:'default'});</script>"
-                        '</head><body style="background:transparent;'
-                        'margin:0;overflow:auto;">'
-                        f'<div class="mermaid">\n{_mermaid}\n</div>'
-                        '</body></html>'
+                st.markdown("##### Data Lineage Graph")
+
+                _dot = _lin.generate_graphviz()
+                if _dot:
+                    st.graphviz_chart(_dot, use_container_width=True)
+
+                # Table-level focus view
+                _focus_tbl_nodes = [
+                    nid for nid, n in _lin.data.get("nodes", {}).items()
+                    if n.get("type") == "table"
+                ]
+                if _focus_tbl_nodes:
+                    _focus_tbl_names = [
+                        _lin.data["nodes"][n]["name"]
+                        for n in _focus_tbl_nodes
+                    ]
+                    _selected_focus = st.selectbox(
+                        "Focus on table",
+                        ["Full Graph"] + _focus_tbl_names,
+                        key="lin_focus",
                     )
-                    components.html(
-                        _mermaid_html, height=500, scrolling=True)
+                    if _selected_focus != "Full Graph":
+                        _focus_id = f"table_{_selected_focus.lower()}"
+                        _focused_dot = _lin.generate_graphviz(
+                            center_node=_focus_id, depth=2)
+                        if _focused_dot:
+                            st.graphviz_chart(
+                                _focused_dot, use_container_width=True)
 
                 # Impact analysis
                 st.markdown("##### Impact Analysis")

@@ -586,6 +586,10 @@ class MultiFileSession:
         results = []
         try:
             with zipfile.ZipFile(path, "r") as z:
+                for member in z.namelist():
+                    member_path = os.path.realpath(os.path.join(self._temp_dir, member))
+                    if not member_path.startswith(os.path.realpath(self._temp_dir)):
+                        raise ValueError(f"ZipSlip detected: {member}")
                 z.extractall(self._temp_dir)
                 for name in z.namelist():
                     if name.startswith("__") or name.startswith("."):

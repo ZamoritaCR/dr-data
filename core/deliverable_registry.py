@@ -7,7 +7,7 @@ Provides save, search, and retrieval methods.
 import json
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from difflib import SequenceMatcher
 
@@ -27,8 +27,11 @@ def _load():
 
 def _save(records):
     """Write the full registry to disk."""
-    with open(REGISTRY_PATH, "w", encoding="utf-8") as f:
-        json.dump(records, f, indent=2, ensure_ascii=False, default=str)
+    try:
+        with open(REGISTRY_PATH, "w", encoding="utf-8") as f:
+            json.dump(records, f, indent=2, ensure_ascii=False, default=str)
+    except (IOError, OSError) as e:
+        print(f"[REGISTRY] Failed to save: {e}")
 
 
 def save_deliverable(metadata):
@@ -46,7 +49,7 @@ def save_deliverable(metadata):
         "source_file": metadata.get("source_file", ""),
         "columns_used": metadata.get("columns_used", []),
         "row_count": metadata.get("row_count", 0),
-        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "file_path": metadata.get("file_path", ""),
         "description": metadata.get("description", ""),
         "insights_found": metadata.get("insights_found", ""),

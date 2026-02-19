@@ -342,6 +342,108 @@ class DataLineage:
             print(f"[LINEAGE] generate_mermaid_diagram failed: {e}")
             return ""
 
+    # ── Graphviz DOT Diagram ──
+
+    def generate_graphviz(self, center_node=None, depth=2):
+        """Build a Graphviz DOT string for the lineage graph."""
+        try:
+            nodes = self.data.get("nodes", {})
+            edges = self.data.get("edges", [])
+
+            # Determine which nodes to include
+            if center_node:
+                up = self._bfs(center_node, "up", depth)
+                down = self._bfs(center_node, "down", depth)
+                relevant = {center_node}
+                for item in up + down:
+                    relevant.add(item["node_id"])
+            else:
+                relevant = set(nodes.keys())
+
+            if not relevant:
+                return ""
+
+            # Collapse columns if graph is too large
+            collapse_columns = len(relevant) > 80
+            if collapse_columns:
+                # Count columns per table for collapsed labels
+                table_col_counts = {}
+                for nid in list(relevant):
+                    nd = nodes.get(nid, {})
+                    if nd.get("type") == "column":
+                        tbl = nd.get("metadata", {}).get("table", "")
+                        if tbl:
+                            table_col_counts[tbl] = table_col_counts.get(tbl, 0) + 1
+                            relevant.discard(nid)
+
+            def _safe_id(nid):
+                return nid.replace(".", "_").replace(" ", "_").replace("-", "_")
+
+            # Node style maps
+            _node_styles = {
+                "source_system": 'shape=cylinder fillcolor="#7C3AED"',
+                "database":      'shape=cylinder fillcolor="#1E3A5F"',
+                "schema":        'shape=folder fillcolor="#1E3A5F"',
+                "table":         'shape=box style="filled,bold" fillcolor="#00D4FF" color="#00D4FF" fontcolor="#0B1120"',
+                "column":        'shape=box fillcolor="#131B2E" fontsize=8',
+                "dashboard":     'shape=hexagon fillcolor="#FFE600" fontcolor="#000000"',
+                "report":        'shape=hexagon fillcolor="#FFE600" fontcolor="#000000"',
+                "deliverable":   'shape=hexagon fillcolor="#F59E0B" fontcolor="#000000"',
+            }
+
+            # Edge style maps
+            _edge_styles = {
+                "feeds":      'color="#00D4FF"',
+                "references": 'color="#F59E0B" style=dashed label="FK" fontcolor="#F59E0B" fontsize=8',
+                "used_by":    'color="#10B981" style=bold',
+            }
+            _edge_default = 'color="#00D4FF"'
+
+            # Build DOT
+            lines = [
+                "digraph lineage {",
+                '  rankdir=LR;',
+                '  bgcolor="#0B1120";',
+                '  node [style=filled fontname=Arial fontsize=10 fontcolor=white];',
+                '  edge [fontname=Arial];',
+            ]
+
+            # Emit nodes
+            for nid in relevant:
+                nd = nodes.get(nid, {})
+                name = nd.get("name", nid).replace('"', '\\"')
+                nt = nd.get("type", "table")
+                style = _node_styles.get(nt, 'shape=box fillcolor="#131B2E"')
+                sid = _safe_id(nid)
+                lines.append(f'  {sid} [label="{name}" {style}];')
+
+            # Emit collapsed column summary nodes
+            if collapse_columns:
+                for tbl, cnt in table_col_counts.items():
+                    sid = _safe_id(f"cols_{tbl.lower()}")
+                    lines.append(
+                        f'  {sid} [label="{tbl} ({cnt} columns)" '
+                        f'shape=box3d fillcolor="#131B2E" fontsize=8];'
+                    )
+                    # Edge from table to collapsed node
+                    tid = _safe_id(f"table_{tbl.lower()}")
+                    lines.append(f'  {tid} -> {sid} [color="#00D4FF"];')
+
+            # Emit edges
+            for edge in edges:
+                src = edge.get("source", "")
+                tgt = edge.get("target", "")
+                if src in relevant and tgt in relevant:
+                    rel = edge.get("relationship", "feeds")
+                    style = _edge_styles.get(rel, _edge_default)
+                    lines.append(f'  {_safe_id(src)} -> {_safe_id(tgt)} [{style}];')
+
+            lines.append("}")
+            return "\n".join(lines)
+        except Exception as e:
+            print(f"[LINEAGE] generate_graphviz failed: {e}")
+            return ""
+
     # ── Export ──
 
     def export_lineage(self, fmt="json"):

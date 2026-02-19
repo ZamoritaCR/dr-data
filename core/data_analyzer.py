@@ -121,7 +121,7 @@ class DataAnalyzer:
             sample = series.dropna().head(20)
             if len(sample) > 0:
                 try:
-                    pd.to_datetime(sample, infer_datetime_format=True)
+                    pd.to_datetime(sample)
                     return "date"
                 except (ValueError, TypeError):
                     pass

@@ -671,7 +671,7 @@ class BusinessRulesEngine:
         """Match templates against actual DataFrame columns and add rules."""
         added = []
         for t in templates:
-            hints = t.pop("hints", [])
+            hints = t.get("hints", [])
             tpat = t.get("table_pattern")
 
             # If table-specific pattern, check table name matches

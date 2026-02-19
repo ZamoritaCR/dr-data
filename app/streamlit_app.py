@@ -1375,7 +1375,14 @@ with tab1:
                         st.rerun()  # workspace will pick this up
 
                     else:
-                        # ====== CHAT PATH -- streaming, no spinner ======
+                        # ====== CHAT PATH -- streaming with live status ======
+
+                        # Container for the status widget (above the streamed text)
+                        _chat_status_slot = st.empty()
+                        _chat_status_ctx = _chat_status_slot.status(
+                            "Reading your data...", expanded=False,
+                        )
+                        _chat_status_ctx.__enter__()
 
                         # Auto-load data if the agent hasn't ingested it yet
                         if st.session_state.uploaded_files and agent.dataframe is None:
@@ -1385,6 +1392,9 @@ with tab1:
                                     agent.data_file_path = path
                                     agent.data_path = path
                                     ext = info.get("ext", path.rsplit(".", 1)[-1].lower())
+                                    _chat_status_ctx.update(
+                                        label=f"Loading {name}...",
+                                    )
                                     try:
                                         if ext == "csv":
                                             agent.dataframe = pd.read_csv(path)
@@ -1396,15 +1406,40 @@ with tab1:
                                         elif ext == "json":
                                             agent.dataframe = pd.read_json(path)
                                         if agent.dataframe is not None and agent.data_profile is None:
+                                            _chat_status_ctx.update(
+                                                label="Profiling data...",
+                                            )
                                             agent.data_profile = agent.analyzer.profile(agent.dataframe)
                                     except Exception:
                                         pass
                                     break
 
+                        # Progress callback -- updates status during tool calls
+                        def _chat_progress(label):
+                            try:
+                                _chat_status_ctx.update(label=label)
+                            except Exception:
+                                pass
+
                         # Build context and stream response word-by-word
+                        _chat_status_ctx.update(
+                            label="Building context...",
+                        )
                         enriched = agent._build_context_message(prompt)
+
+                        _engine_label = getattr(
+                            agent, "MODEL", "Claude"
+                        ).split("-")[0].capitalize()
+                        _chat_status_ctx.update(
+                            label=f"Analyzing with {_engine_label}...",
+                        )
                         try:
-                            full_text = st.write_stream(agent.chat_stream(enriched))
+                            full_text = st.write_stream(
+                                agent.chat_stream(
+                                    enriched,
+                                    progress_callback=_chat_progress,
+                                )
+                            )
                         except AttributeError:
                             # Fallback: blocking call if streaming unavailable
                             response = agent.respond(
@@ -1419,6 +1454,9 @@ with tab1:
 
                         # Check for any files generated during tool calls
                         chat_downloads = []
+                        _chat_status_ctx.update(
+                            label="Finalizing response...",
+                        )
                         for fpath in agent.generated_files:
                             if os.path.exists(fpath):
                                 fname = os.path.basename(fpath)
@@ -1429,6 +1467,9 @@ with tab1:
                                     "description": "Generated file",
                                 })
                         if chat_downloads:
+                            _chat_status_ctx.update(
+                                label=f"Built {len(chat_downloads)} deliverable(s)",
+                            )
                             # Notify in chat -- downloads go to workspace
                             file_names = [dl["filename"] for dl in chat_downloads]
                             st.markdown(
@@ -1436,6 +1477,13 @@ with tab1:
                                 f"{', '.join(file_names)}. "
                                 f"Check the workspace for downloads."
                             )
+
+                        # Close the status widget -- mark complete
+                        _chat_status_ctx.update(
+                            label="Response complete",
+                            state="complete", expanded=False,
+                        )
+                        _chat_status_ctx.__exit__(None, None, None)
 
                         # Save chat response to history
                         st.session_state.messages.append({
@@ -1563,62 +1611,110 @@ with tab2:
                     if t in _dq_tables
                 }
                 if _dq_to_scan:
+                    _scan_count = len(_dq_to_scan)
+                    if _scan_count > 1:
+                        _scan_bar = st.progress(0, text="Starting scan...")
+                    else:
+                        _scan_bar = None
+
                     with st.status(
-                        "Running DAMA-DMBOK Quality Assessment...",
+                        "Dr. Data is analyzing your data...",
                         expanded=True,
                     ) as _dq_status:
-                        for _tn, _td in _dq_to_scan.items():
+                        for _tbl_idx, (_tn, _td) in enumerate(_dq_to_scan.items()):
+                            if _scan_bar:
+                                _scan_bar.progress(
+                                    _tbl_idx / _scan_count,
+                                    text=f"Scanning {_tn} ({_tbl_idx + 1}/{_scan_count})...")
                             _dq_status.write(
-                                f"Scanning {_tn} ({len(_td):,} rows x "
-                                f"{len(_td.columns)} cols)..."
-                            )
+                                f"Profiling {_tn} - "
+                                f"{len(_td):,} rows x "
+                                f"{len(_td.columns)} columns")
                             try:
                                 _dq.scan_table(_td, _tn)
-                                _dq_status.write(
-                                    f"{_tn}: Score = "
-                                    f"{_dq.scan_results[_tn]['overall_score']:.1f}"
-                                    f"/100"
-                                )
+                                _res = _dq.scan_results[_tn]
+                                _dims = _res.get("dimensions", {})
+                                # Show each dimension score
+                                for _dim_key, _dim_label in [
+                                    ("completeness", "Completeness"),
+                                    ("accuracy", "Accuracy"),
+                                    ("consistency", "Consistency"),
+                                    ("timeliness", "Timeliness"),
+                                    ("uniqueness", "Uniqueness"),
+                                    ("validity", "Validity"),
+                                ]:
+                                    _ds = _dims.get(_dim_key, {}).get("score")
+                                    if _ds is not None:
+                                        _dq_status.write(
+                                            f"{_dim_label}: {_ds:.1f}%")
+                                    else:
+                                        _dq_status.write(
+                                            f"{_dim_label}: N/A")
+
+                                _dq_status.write("Generating recommendations...")
                                 # Record to DQ history
+                                _dq_status.write("Recording history...")
                                 if "dq_history" not in st.session_state:
                                     st.session_state.dq_history = DQHistory()
                                 st.session_state.dq_history.record_scan(
-                                    _tn, _dq.scan_results[_tn])
+                                    _tn, _res)
                                 # Update data catalog
+                                _dq_status.write("Updating catalog...")
                                 if "data_catalog" in st.session_state:
                                     st.session_state.data_catalog.update_table_dq(
                                         _tn,
-                                        _dq.scan_results[_tn]["overall_score"],
-                                        _dq.scan_results[_tn]["scan_timestamp"],
+                                        _res["overall_score"],
+                                        _res["scan_timestamp"],
                                     )
+                                # Auto-create stewardship issues
+                                _dq_status.write(
+                                    "Creating stewardship issues...")
+                                if "stewardship" in st.session_state:
+                                    st.session_state.stewardship.create_issues_from_dq_scan(
+                                        _res, _tn)
                             except Exception as _e:
                                 _dq_status.write(
                                     f"{_tn}: Error - {str(_e)[:200]}")
 
-                        if len(_dq_to_scan) > 1:
-                            _dq_status.write("Running cross-table analysis...")
+                        if _scan_count > 1:
+                            _dq_status.write(
+                                "Running cross-table analysis...")
+                            if _scan_bar:
+                                _scan_bar.progress(
+                                    0.95,
+                                    text="Cross-table analysis...")
                             try:
-                                _dq_cross = _dq.scan_multiple_tables(_dq_to_scan)
-                                st.session_state.dq_cross_results = _dq_cross
+                                _dq_cross = _dq.scan_multiple_tables(
+                                    _dq_to_scan)
+                                st.session_state.dq_cross_results = (
+                                    _dq_cross)
                             except Exception as _e:
                                 _dq_status.write(
-                                    f"Cross-table error: {str(_e)[:200]}")
+                                    f"Cross-table error: "
+                                    f"{str(_e)[:200]}")
 
-                        # Auto-create stewardship issues for critical findings
-                        if "stewardship" in st.session_state:
-                            for _swtn in _dq_to_scan:
-                                if _swtn in _dq.scan_results:
-                                    st.session_state.stewardship.create_issues_from_dq_scan(
-                                        _dq.scan_results[_swtn], _swtn)
+                        if _scan_bar:
+                            _scan_bar.progress(
+                                1.0, text="Scan complete")
 
+                        # Final overall score
+                        _final_scores = [
+                            r["overall_score"]
+                            for r in _dq.scan_results.values()
+                        ]
+                        _avg_score = (
+                            sum(_final_scores) / len(_final_scores)
+                            if _final_scores else 0
+                        )
                         _dq_status.update(
-                            label=f"Scan complete: {len(_dq_to_scan)} table(s) "
-                                  f"assessed",
+                            label=f"Analysis Complete - Overall "
+                                  f"Score: {_avg_score:.1f}%",
                             state="complete",
                         )
 
-                        # Bridge: pass DQ results into Dr. Data agent context
-                        if "agent" in st.session_state and st.session_state.agent:
+                        # Bridge: pass DQ results into Dr. Data agent
+                        if ("agent" in st.session_state
+                                and st.session_state.agent):
                             st.session_state.agent.set_dq_results(
                                 _dq.scan_results)
 
@@ -2125,16 +2221,44 @@ with tab2:
                     "Generate DQ Scorecard Report",
                     key="dq_export_html",
                 ):
-                    _html = _dq.generate_html_scorecard(
-                        catalog=st.session_state.get("data_catalog"),
-                        rules_engine=st.session_state.get("rules_engine"),
-                        history=st.session_state.get("dq_history"),
-                        trust_scorer=st.session_state.get("trust_scorer"),
-                        copdq_result=st.session_state.get("copdq_result"),
-                        compliance=st.session_state.get("compliance"),
-                        stewardship=st.session_state.get("stewardship"),
-                        incidents=st.session_state.get("incidents"),
-                    )
+                    with st.status(
+                        "Generating Enterprise DQ Report...",
+                        expanded=True,
+                    ) as _rpt_status:
+                        _rpt_status.write(
+                            "Building executive summary...")
+                        _rpt_status.write(
+                            "Rendering dimension gauges...")
+                        _rpt_status.write(
+                            "Building trust score cards...")
+                        _rpt_status.write(
+                            "Calculating COPDQ impact...")
+                        _rpt_status.write(
+                            "Mapping compliance frameworks...")
+                        _rpt_status.write(
+                            "Generating heatmaps...")
+                        _html = _dq.generate_html_scorecard(
+                            catalog=st.session_state.get(
+                                "data_catalog"),
+                            rules_engine=st.session_state.get(
+                                "rules_engine"),
+                            history=st.session_state.get(
+                                "dq_history"),
+                            trust_scorer=st.session_state.get(
+                                "trust_scorer"),
+                            copdq_result=st.session_state.get(
+                                "copdq_result"),
+                            compliance=st.session_state.get(
+                                "compliance"),
+                            stewardship=st.session_state.get(
+                                "stewardship"),
+                            incidents=st.session_state.get(
+                                "incidents"),
+                        )
+                        _rpt_status.update(
+                            label="Report ready for download",
+                            state="complete",
+                        )
                     if _html:
                         st.download_button(
                             "Download HTML Scorecard", _html,
@@ -2167,18 +2291,31 @@ with tab2:
             # Auto-catalog button
             if _dq_tables:
                 if st.button("Auto-Catalog All Loaded Tables", type="primary", key="cat_auto"):
-                    with st.status("Cataloging...", expanded=True) as cat_status:
+                    with st.status("Cataloging your data...", expanded=True) as cat_status:
+                        _total_cols = 0
+                        _total_pii = 0
                         for tname, tdf in _dq_tables.items():
-                            cat_status.write(f"Cataloging {tname}...")
+                            cat_status.write(f"Registering {tname}...")
                             _src = "Snowflake" if (
                                 hasattr(st.session_state.get("agent", None), "snowflake_tables")
                                 and tname in getattr(st.session_state.agent, "snowflake_tables", {})
                             ) else "File Upload"
                             catalog.auto_catalog_from_dataframe(tdf, tname, source_system=_src)
-                            cat_status.write(f"Generating glossary for {tname}...")
+                            _total_cols += len(tdf.columns)
+                            cat_status.write("Detecting PII columns...")
+                            cat_status.write("Classifying data types...")
+                            cat_status.write(f"Generating business glossary for {tname}...")
                             catalog.auto_generate_glossary(tdf, tname)
+                            # Count PII
+                            _tinfo = catalog.catalog.get("tables", {}).get(tname, {})
+                            for _ci in _tinfo.get("columns", {}).values():
+                                if _ci.get("pii"):
+                                    _total_pii += 1
                         cat_status.update(
-                            label=f"Cataloged {len(_dq_tables)} tables", state="complete")
+                            label=f"Cataloged {len(_dq_tables)} tables, "
+                                  f"{_total_cols} columns, "
+                                  f"{_total_pii} PII fields detected",
+                            state="complete")
                     st.rerun()
 
             # Search
@@ -2404,16 +2541,27 @@ with tab2:
                     "Build Lineage Graph", type="primary",
                     key="lin_build",
                 ):
-                    _lin_counts = _lin.auto_build_lineage(
-                        _dq_tables,
-                        source_system="Snowflake",
-                        database="SNOWFLAKE_SAMPLE_DATA",
-                        schema="TPCH_SF1",
-                    )
-                    st.success(
-                        f"Built lineage: "
-                        f"{_lin_counts.get('nodes', 0)} nodes, "
-                        f"{_lin_counts.get('edges', 0)} edges")
+                    with st.status(
+                        "Building lineage graph...",
+                        expanded=True,
+                    ) as _lin_status:
+                        _lin_status.write(
+                            "Discovering table relationships...")
+                        _lin_status.write(
+                            "Detecting foreign key references...")
+                        _lin_counts = _lin.auto_build_lineage(
+                            _dq_tables,
+                            source_system="Snowflake",
+                            database="SNOWFLAKE_SAMPLE_DATA",
+                            schema="TPCH_SF1",
+                        )
+                        _ln = _lin_counts.get("nodes", 0)
+                        _le = _lin_counts.get("edges", 0)
+                        _lin_status.update(
+                            label=f"Lineage complete - "
+                                  f"{_ln} nodes, {_le} edges",
+                            state="complete",
+                        )
                     st.rerun()
 
             if _lin_stats.get("total_nodes", 0) > 0:
@@ -2500,7 +2648,98 @@ with tab2:
         # ============================================================
         with dq_subtab3:
             st.markdown("#### Custom Business Rules Engine")
-            st.info("Coming next - custom validation rules for WU-specific data quality requirements.")
+
+            if "rules_engine" not in st.session_state:
+                st.session_state.rules_engine = BusinessRulesEngine()
+            _bre = st.session_state.rules_engine
+
+            _bre_rules = _bre.get_rules()
+            st.write(f"**{len(_bre_rules)} rules configured**")
+
+            # Add rule manually
+            with st.expander("Add Business Rule"):
+                _br_name = st.text_input("Rule Name", key="br_name")
+                _br_col = st.text_input("Column", key="br_col")
+                _br_expr = st.text_input(
+                    "Expression (pandas eval syntax)",
+                    key="br_expr",
+                    placeholder="e.g. Amount > 0")
+                _br_sev = st.selectbox(
+                    "Severity", ["CRITICAL", "HIGH", "MEDIUM", "LOW"],
+                    index=1, key="br_sev")
+                if st.button("Add Rule", key="br_add") and _br_name and _br_expr:
+                    _bre.add_rule(
+                        _br_name, column=_br_col, expression=_br_expr,
+                        severity=_br_sev)
+                    st.success(f"Added: {_br_name}")
+                    st.rerun()
+
+            # Evaluate rules
+            if _dq_tables and _bre_rules:
+                _br_sel = st.selectbox(
+                    "Evaluate against table",
+                    list(_dq_tables.keys()), key="br_table_sel")
+                if st.button("Evaluate Rules", type="primary", key="br_eval"):
+                    _br_df = _dq_tables[_br_sel]
+                    with st.status(
+                        f"Evaluating {len(_bre_rules)} rules "
+                        f"against {_br_sel}...",
+                        expanded=True,
+                    ) as _br_status:
+                        _br_pass = 0
+                        _br_fail = 0
+                        _br_results = _bre.evaluate_all(
+                            _br_df, _br_sel)
+                        for _br_r in _br_results.get("results", []):
+                            _r_name = _br_r.get("rule_name", "")
+                            _r_id = _br_r.get("rule_id", "")
+                            if _br_r.get("passed"):
+                                _br_status.write(
+                                    f"Rule {_r_id}: {_r_name} - "
+                                    f":green[PASS]")
+                                _br_pass += 1
+                            else:
+                                _br_status.write(
+                                    f"Rule {_r_id}: {_r_name} - "
+                                    f":red[FAIL]")
+                                _br_fail += 1
+                        _br_status.update(
+                            label=f"Rules complete - {_br_pass} "
+                                  f"passed, {_br_fail} failed",
+                            state="complete")
+                        # Bridge to agent
+                        if ("agent" in st.session_state
+                                and st.session_state.agent
+                                and hasattr(st.session_state.agent,
+                                            "set_rules_results")):
+                            st.session_state.agent.set_rules_results(
+                                _bre.evaluation_results)
+                    st.rerun()
+
+            # Show evaluation results
+            if _bre.evaluation_results:
+                for _er_tbl, _er_data in _bre.evaluation_results.items():
+                    with st.expander(
+                        f"{_er_tbl}: "
+                        f"{_er_data.get('pass_count', 0)} passed, "
+                        f"{_er_data.get('fail_count', 0)} failed"
+                    ):
+                        for _er_r in _er_data.get("results", []):
+                            _pass_txt = (
+                                ":green[PASS]"
+                                if _er_r.get("passed")
+                                else ":red[FAIL]"
+                            )
+                            st.markdown(
+                                f"**{_er_r.get('rule_name', '')}** "
+                                f"- {_pass_txt} "
+                                f"({_er_r.get('violations', 0)} "
+                                f"violations)")
+            elif not _bre_rules:
+                st.info(
+                    "No rules configured. Add business rules above "
+                    "or load data and run a DQ scan to auto-generate "
+                    "validation rules.")
 
         # ============================================================
         # SUBTAB 4: Trending (placeholder)
@@ -3085,7 +3324,7 @@ with tab2:
             if _dq.scan_results and _dq_tables:
                 if st.button("Assess Compliance", key="comp_assess"):
                     with st.status(
-                        "Assessing regulatory compliance...",
+                        "Mapping columns to regulatory frameworks...",
                         expanded=True,
                     ) as _cs:
                         for _ctn in _dq.scan_results:
@@ -3098,8 +3337,17 @@ with tab2:
                             )
                             _comp.assess_compliance(
                                 _ctn, _dq.scan_results[_ctn], _crr)
+                        # Show per-framework scores
+                        _csumm = _comp.get_compliance_summary()
+                        _by_fw = _csumm.get("by_framework", {})
+                        for _fwn, _fwi in _by_fw.items():
+                            _cs.write(
+                                f"Checking {_fwn}... "
+                                f"{_fwi.get('score', 0):.1f}%")
+                        _overall = _csumm.get("overall_score", 0)
                         _cs.update(
-                            label="Compliance assessment complete",
+                            label=f"Compliance assessment complete "
+                                  f"- Overall: {_overall:.1f}%",
                             state="complete",
                         )
                     # Bridge compliance summary to agent

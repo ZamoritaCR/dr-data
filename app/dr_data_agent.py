@@ -1011,8 +1011,8 @@ class DrDataAgent:
                         parsed = pd.to_datetime(
                             df[col], infer_datetime_format=True, errors="raise"
                         )
+                        # don't mutate original df; use parsed locally
                         date_cols.append(col)
-                        df[col] = parsed  # convert in place for trend calc
                         break
                     except Exception:
                         pass

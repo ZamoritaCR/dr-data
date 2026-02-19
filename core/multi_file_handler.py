@@ -182,7 +182,7 @@ class MultiFileSession:
         }
         # Auto-detect relationships when 2+ tables loaded
         if len(self.data_files) >= 2:
-            self.relationships = self.detector.detect_all(self.data_files)
+            self.relationships = self.detector.detect({f["name"]: f["dataframe"] for f in self.data_files if f.get("dataframe") is not None})
         return self._describe_session()
 
     def get_summary(self):

@@ -24,6 +24,13 @@ except ImportError:
 class SnowflakeConnector:
     """Direct Snowflake warehouse connector for querying and profiling."""
 
+    @staticmethod
+    def _validate_identifier(name):
+        import re
+        if not re.match(r'^[A-Za-z_][A-Za-z0-9_.]*$', name):
+            raise ValueError(f'Invalid SQL identifier: {name}')
+        return name
+
     def __init__(self):
         self.account = os.getenv("SNOWFLAKE_ACCOUNT")
         self.user = os.getenv("SNOWFLAKE_USER")
@@ -81,6 +88,7 @@ class SnowflakeConnector:
         db = database or self.database
         try:
             cur = self.conn.cursor()
+            self._validate_identifier(db)
             cur.execute(f"SHOW SCHEMAS IN DATABASE {db}")
             rows = cur.fetchall()
             return [r[1] for r in rows]
@@ -97,6 +105,8 @@ class SnowflakeConnector:
         sch = schema or self.schema
         try:
             cur = self.conn.cursor()
+            self._validate_identifier(db)
+            self._validate_identifier(sch)
             cur.execute(f"SHOW TABLES IN {db}.{sch}")
             rows = cur.fetchall()
             return [r[1] for r in rows]
@@ -153,6 +163,7 @@ class SnowflakeConnector:
             print("[SNOWFLAKE] Not connected.")
             return None
         try:
+            self._validate_identifier(table_name)
             sql = f"SELECT * FROM {table_name} LIMIT {limit}"
             return self.query_to_df(sql, limit=limit)
         except Exception as e:
@@ -169,6 +180,7 @@ class SnowflakeConnector:
             cur = self.conn.cursor()
 
             # Row count
+            self._validate_identifier(table_name)
             cur.execute(f"SELECT COUNT(*) FROM {table_name}")
             profile["row_count"] = cur.fetchone()[0]
 
@@ -212,6 +224,7 @@ class SnowflakeConnector:
             for tbl in expected:
                 fqn = f"SNOWFLAKE_SAMPLE_DATA.TPCH_SF1.{tbl}"
                 try:
+                    self._validate_identifier(fqn)
                     cur.execute(f"SELECT COUNT(*) FROM {fqn}")
                     result[tbl] = cur.fetchone()[0]
                 except Exception:

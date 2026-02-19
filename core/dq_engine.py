@@ -895,7 +895,7 @@ class DataQualityEngine:
                         f'<span style="width:100px;font-size:12px;color:#aaa">{d.title()}</span>{_bar(ds)}</div>')
                 # Column heatmap
                 comp_cols = dims.get("completeness", {}).get("columns", {})
-                valid_cols = dims.get("validity", {}).get("column_rules", {})
+                valid_cols = dims.get("validity", {}).get("column_validity", {})
                 hm = ""
                 if comp_cols:
                     hm_rows = ""
@@ -1009,7 +1009,7 @@ class DataQualityEngine:
             if history:
                 try:
                     for tn in list(self.scan_results.keys())[:5]:
-                        ht = history.get_trend(tn)
+                        ht = history.get_table_trend(tn)
                         entries = ht.get("entries", [])[-12:]
                         if len(entries) < 2:
                             continue

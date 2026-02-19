@@ -210,7 +210,7 @@ class BusinessRulesEngine:
             elif rtype == "custom_expression":
                 expr = params.get("expression", "True")
                 try:
-                    mask = df.eval(expr)
+                    mask = df.eval(expr, engine='numexpr')
                     failing = df[~mask]
                 except Exception as ex:
                     return {

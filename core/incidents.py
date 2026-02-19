@@ -118,7 +118,7 @@ class IncidentManager:
                 return None
             change = abs(degradation_result.get("overall_change", 0))
             dims = degradation_result.get("degraded_dimensions", [])
-            dim_str = ", ".join(d.get("dimension", "?") for d in dims[:3]) if dims else "multiple"
+            dim_str = ", ".join(dims[:3]) if dims else "multiple"
             return self.create_incident(
                 f"DQ Degradation: {table_name} - score dropped {change:.1f} points",
                 f"DQ degradation in {table_name}. Dimensions: {dim_str}. Change: -{change:.1f}pts.",

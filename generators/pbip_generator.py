@@ -110,9 +110,7 @@ class PBIPGenerator:
         Returns:
             str: path to the clean project directory containing ONLY the PBIP files.
         """
-        title = self._sanitize_content(
-            dashboard_spec.get("dashboard_title", "Dashboard")
-        )
+        title = dashboard_spec.get("dashboard_title", "Dashboard")
         safe = self._safe_name(title)
 
         # Create a clean subdirectory for this project (not mixed with other output)
@@ -221,9 +219,6 @@ class PBIPGenerator:
         # 16. README for the user
         self._write_readme(project_dir, safe, title)
 
-        # Final safety net: re-read and sanitize every text file in the output
-        self._sanitize_all_files(project_dir)
-
         # Summary
         total = sum(1 for _ in project_dir.rglob("*") if _.is_file())
         print(f"[OK] PBIP project generated: {project_dir}")
@@ -271,7 +266,6 @@ class PBIPGenerator:
             '    }\r\n'
             '}\r\n'
         )
-        ps1 = self._sanitize_content(ps1)
         (project_dir / "setup.ps1").write_text(ps1, encoding="utf-8")
 
         # Batch launcher (calls PS1 then opens .pbip)
@@ -285,7 +279,6 @@ class PBIPGenerator:
             f'echo Opening {safe}.pbip in Power BI Desktop...\r\n'
             f'start "" "{safe}.pbip"\r\n'
         )
-        bat = self._sanitize_content(bat)
         (project_dir / "Open_Dashboard.bat").write_text(bat, encoding="utf-8")
         print(f"    [+] Open_Dashboard.bat + setup.ps1")
 
@@ -727,9 +720,7 @@ class PBIPGenerator:
         src = self.project_root / THEME_SOURCE_PATH
         dst = theme_dir / "CY25SU12.json"
         if src.exists():
-            raw = src.read_text(encoding="utf-8", errors="replace")
-            raw = self._sanitize_content(raw)
-            dst.write_text(raw, encoding="utf-8")
+            shutil.copy2(src, dst)
         else:
             # Fallback: write a minimal default theme
             theme = {
@@ -758,7 +749,6 @@ class PBIPGenerator:
 
     def _write_model_tmdl(self, model_def, table_names, relationships=None):
         """Write definition/model.tmdl."""
-        table_names = [self._sanitize_content(t) for t in table_names]
         lines = [
             "model Model",
             "\tculture: en-US",
@@ -949,9 +939,7 @@ class PBIPGenerator:
         profile_col_names = {c["name"] for c in profile_columns}
 
         # The table name comes from the data profile (set from sheet name)
-        profile_table_name = self._sanitize_content(
-            data_profile.get("table_name", "Data")
-        )
+        profile_table_name = data_profile.get("table_name", "Data")
 
         # Collect measures from ALL AI-generated tables
         all_measures = []
@@ -971,7 +959,7 @@ class PBIPGenerator:
 
         # Columns -- from data_profile (always matches the actual data)
         for col_info in profile_columns:
-            col_name = self._sanitize_content(col_info["name"])
+            col_name = col_info["name"]
             sem = col_info.get("semantic_type", "dimension")
             dtype_str = col_info.get("dtype", "object")
             dt = self._pandas_dtype_to_pbi(dtype_str, sem)
@@ -1009,13 +997,9 @@ class PBIPGenerator:
         # Measures -- from AI output, validated against real columns + DAX syntax
         valid_measure_names = set()
         for m in all_measures:
-            m_name = self._sanitize_content(m["name"])
-            dax = self._sanitize_content(
-                m.get("dax", m.get("expression", "BLANK()"))
-            )
-            fmt = self._sanitize_content(
-                m.get("format", m.get("formatString", "#,0"))
-            )
+            m_name = m["name"]
+            dax = m.get("dax", m.get("expression", "BLANK()"))
+            fmt = m.get("format", m.get("formatString", "#,0"))
 
             # Validate DAX syntax (balanced parens, no foreign syntax, etc.)
             syntax_issue = self._validate_dax_syntax(dax)
@@ -1318,45 +1302,6 @@ class PBIPGenerator:
             return f"'{name}'"
         return name
 
-    @staticmethod
-    def _sanitize_content(content):
-        """Strip null bytes and non-printable control chars from content.
-
-        PBI Desktop's XMLA parser crashes on 0x00 and other control chars.
-        LLM outputs and user data can contain these unexpectedly.
-        """
-        if isinstance(content, str):
-            content = content.replace('\x00', '')
-            content = ''.join(c for c in content if ord(c) >= 32 or c in '\n\r\t')
-            return content
-        elif isinstance(content, bytes):
-            return content.replace(b'\x00', b'')
-        return content
-
-    def _sanitize_all_files(self, project_dir):
-        """Final sweep: re-read every text file and strip null bytes.
-
-        This is a safety net in case any content slipped through the
-        per-write sanitization (e.g. from template copies or edge cases).
-        """
-        text_exts = {".tmdl", ".json", ".pbip", ".pbir", ".pbism",
-                     ".platform", ".txt", ".bat", ".ps1"}
-        sanitized = 0
-        for fpath in project_dir.rglob("*"):
-            if not fpath.is_file():
-                continue
-            if fpath.suffix in text_exts or fpath.name == ".platform":
-                try:
-                    raw = fpath.read_bytes()
-                    if b'\x00' in raw:
-                        clean = self._sanitize_content(raw.decode("utf-8", errors="replace"))
-                        fpath.write_text(clean, encoding="utf-8")
-                        sanitized += 1
-                except Exception:
-                    pass
-        if sanitized:
-            print(f"    [SANITIZE] Stripped null bytes from {sanitized} file(s)")
-
     def _safe_remove(self, target):
         """Remove a file or folder, handling OneDrive locks."""
         if target.is_file():
@@ -1384,13 +1329,10 @@ class PBIPGenerator:
                 pass
 
     def _write_json(self, path, data):
-        raw = json.dumps(data, indent=2, ensure_ascii=False)
-        raw = self._sanitize_content(raw)
         with open(path, "w", encoding="utf-8") as f:
-            f.write(raw)
+            json.dump(data, f, indent=2, ensure_ascii=False)
 
     def _write_text(self, path, text):
-        text = self._sanitize_content(text)
         with open(path, "w", encoding="utf-8", newline="\n") as f:
             f.write(text)
 

@@ -47,6 +47,7 @@ from core.trace_logger import TraceLogger
 from core.deliverable_registry import save_deliverable as _save_deliverable
 from core.deliverable_registry import search as _search_deliverables
 from core.audit_engine import AuditEngine as _AuditEngine
+from core.dashboard_rationalization import DashboardRationalizationEngine
 
 # ------------------------------------------------------------------ #
 #  Tool Definitions for Claude                                         #
@@ -234,6 +235,29 @@ TOOLS = [
             },
             "required": ["file_path"]
         }
+    },
+    {
+        "name": "rationalize_dashboards",
+        "description": (
+            "Run a dashboard rationalization analysis on the enterprise BI portfolio. "
+            "Identifies zombie dashboards, duplicates, refresh waste, and hidden costs. "
+            "Can generate sample data or analyze an uploaded inventory. "
+            "Returns executive summary with recommendations."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "description": (
+                        "Action: 'generate_sample' to create 10K sample dashboards, "
+                        "'analyze' to run full analysis, 'report' to generate HTML report"
+                    ),
+                    "enum": ["generate_sample", "analyze", "report"]
+                }
+            },
+            "required": ["action"]
+        }
     }
 ]
 
@@ -290,6 +314,9 @@ class DrDataAgent:
         self.compliance_summary = None
         self.stewardship_stats = None
         self.incident_stats = None
+
+        # Dashboard rationalization engine
+        self.rationalization_engine = DashboardRationalizationEngine()
 
         # Trace logger for audit trail
         self.trace = TraceLogger()
@@ -2068,6 +2095,8 @@ class DrDataAgent:
                 return self._tool_parse_legacy(tool_input)
             elif tool_name == "parse_alteryx_workflow":
                 return self._tool_parse_alteryx(tool_input)
+            elif tool_name == "rationalize_dashboards":
+                return self._tool_rationalize_dashboards(tool_input)
             else:
                 return json.dumps({"error": f"Unknown tool: {tool_name}"})
         except Exception as e:
@@ -2801,6 +2830,65 @@ class DrDataAgent:
             },
             "generated_files": [report_path, json_path],
         }, default=str)
+
+    def _tool_rationalize_dashboards(self, inputs):
+        """Run dashboard rationalization analysis."""
+        action = inputs.get("action", "analyze")
+        eng = self.rationalization_engine
+
+        if action == "generate_sample":
+            df = eng.generate_sample_data(num_dashboards=10000)
+            eng.load_inventory(df)
+            result = eng.analyze()
+            summary = eng.get_executive_summary()
+            return json.dumps({
+                "status": "ok",
+                "action": "generate_sample",
+                "total_dashboards": len(df),
+                "executive_summary": summary,
+            }, default=str)
+
+        elif action == "analyze":
+            if eng.inventory is None:
+                df = eng.generate_sample_data(num_dashboards=10000)
+                eng.load_inventory(df)
+            result = eng.analyze()
+            summary = eng.get_executive_summary()
+            return json.dumps({
+                "status": "ok",
+                "action": "analyze",
+                "executive_summary": summary,
+                "cost_impact": result.get("cost_impact", {}),
+                "zombie_counts": {
+                    "over_90d": result["zombies"]["over_90d"],
+                    "over_180d": result["zombies"]["over_180d"],
+                    "over_365d": result["zombies"]["over_365d"],
+                },
+                "duplicate_groups": result["duplicates"]["total_groups"],
+                "retirement_plan": result["retirement_plan"],
+            }, default=str)
+
+        elif action == "report":
+            if not eng.analysis:
+                if eng.inventory is None:
+                    df = eng.generate_sample_data(num_dashboards=10000)
+                    eng.load_inventory(df)
+                eng.analyze()
+            html = eng.generate_html_report()
+            os.makedirs(self.output_dir, exist_ok=True)
+            report_path = os.path.join(
+                self.output_dir, "dashboard_rationalization_report.html")
+            with open(report_path, "w", encoding="utf-8") as f:
+                f.write(html)
+            self.generated_files.append(report_path)
+            return json.dumps({
+                "status": "ok",
+                "action": "report",
+                "file": report_path,
+                "executive_summary": eng.get_executive_summary(),
+            }, default=str)
+
+        return json.dumps({"error": f"Unknown action: {action}"})
 
     # ------------------------------------------------------------------ #
     #  Documentation generators                                            #

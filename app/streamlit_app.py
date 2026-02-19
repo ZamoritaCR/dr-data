@@ -41,6 +41,7 @@ from core.dq_history import DQHistory
 from core.trust_scoring import TrustScorer
 from core.copdq import COPDQCalculator
 from core.stewardship import StewardshipWorkflow
+from core.dashboard_rationalization import DashboardRationalizationEngine
 
 
 def _safe_html(html_str, fallback_text=""):
@@ -862,7 +863,7 @@ def _render_downloads(downloads, key_prefix, ts):
 # ============================================
 # MAIN LAYOUT: Tabs + Workspace/Chat split
 # ============================================
-tab1, tab2 = st.tabs(["Dr. Data Agent", "Data Quality Engine"])
+tab1, tab2, tab3 = st.tabs(["Dr. Data Agent", "Data Quality Engine", "Dashboard Rationalization"])
 
 with tab1:
     workspace_col, chat_col = st.columns([65, 35])
@@ -1009,11 +1010,11 @@ with tab1:
             _safe_html(
                 '<div style="text-align:center;padding:32px 0 8px 0;">'
                 '<div style="font-size:18px;font-weight:600;color:#FFFFFF;margin-bottom:4px;">'
-                'The Art of the Possible</div>'
+                'This is Creative Engineering!</div>'
                 '<div style="font-size:13px;color:#808080;margin-bottom:24px;">'
                 'Upload data in the sidebar, or click a card to get started</div>'
                 '</div>',
-                "The Art of the Possible -- Upload data or click a card to get started."
+                "This is Creative Engineering! -- Upload data or click a card to get started."
             )
 
             _capabilities = [
@@ -1212,7 +1213,7 @@ with tab1:
     # RIGHT: CHAT PANEL -- Conversation with Dr. Data
     # ============================================
     with chat_col:
-        _safe_html(f'<div style="padding:4px 0 8px 0;border-bottom:1px solid #4a4a4a;margin-bottom:8px;display:flex;align-items:center;gap:8px;">{DR_DATA_AVATAR}<span style="font-size:13px;font-weight:600;color:#FFFFFF;">Chat with Dr. Data</span><span style="font-size:11px;color:#B0B0B0;">|&nbsp; The Art of the Possible</span></div>', "Chat with Dr. Data -- The Art of the Possible")
+        _safe_html(f'<div style="padding:4px 0 8px 0;border-bottom:1px solid #4a4a4a;margin-bottom:8px;display:flex;align-items:center;gap:8px;">{DR_DATA_AVATAR}<span style="font-size:13px;font-weight:600;color:#FFFFFF;">Chat with Dr. Data</span><span style="font-size:11px;color:#B0B0B0;">|&nbsp; This is Creative Engineering!</span></div>', "Chat with Dr. Data -- This is Creative Engineering!")
 
         # Chat container with scroll
         chat_container = st.container()
@@ -1223,7 +1224,7 @@ with tab1:
                 with st.chat_message("assistant"):
                     st.markdown(
                         "Hello! Great to have you here. I am Dr. Data, your personal "
-                        "data intelligence partner. I believe in **The Art of the Possible** "
+                        "data intelligence partner. I believe in **This is Creative Engineering!** "
                         "-- every dataset has a story waiting to be told, and I am here "
                         "to help you tell it.\n\n"
                         "Upload a file in the sidebar (CSV, Excel, Tableau, Alteryx, or "
@@ -3810,3 +3811,247 @@ if not result['all_passed']:
     failed = [t for t, d in result['tables'].items() if not d['passed_gate']]
     raise Exception(f'Quality gates failed for: {failed}')
 ''', language="python")
+
+
+# ============================================================
+# TAB 3: Dashboard Rationalization
+# ============================================================
+with tab3:
+    st.title("Dashboard Rationalization Engine")
+    st.caption(
+        "Identify zombie dashboards, duplicates, refresh waste, and "
+        "millions in hidden costs across your entire BI portfolio."
+    )
+
+    # Session state init
+    if "dr_engine" not in st.session_state:
+        st.session_state.dr_engine = DashboardRationalizationEngine()
+    if "dr_inventory" not in st.session_state:
+        st.session_state.dr_inventory = None
+    if "dr_analysis" not in st.session_state:
+        st.session_state.dr_analysis = None
+    if "dr_report_html" not in st.session_state:
+        st.session_state.dr_report_html = None
+
+    _dr = st.session_state.dr_engine
+
+    # ---- Load Data Section ----
+    st.markdown("### Load Dashboard Inventory")
+    _dr_col1, _dr_col2 = st.columns(2)
+
+    with _dr_col1:
+        _dr_upload = st.file_uploader(
+            "Upload Dashboard Inventory CSV",
+            type=["csv"],
+            key="dr_upload",
+        )
+        if _dr_upload is not None and st.session_state.dr_inventory is None:
+            try:
+                _dr_df = pd.read_csv(_dr_upload)
+                _dr.load_inventory(_dr_df)
+                st.session_state.dr_inventory = _dr.inventory
+                st.session_state.dr_analysis = None
+                st.session_state.dr_report_html = None
+                st.rerun()
+            except Exception as _dr_err:
+                st.error(f"Failed to load CSV: {_dr_err}")
+
+    with _dr_col2:
+        if st.button(
+            "Generate Sample Enterprise Data (10,000 dashboards)",
+            key="dr_generate_sample",
+            type="primary",
+        ):
+            with st.spinner("Generating 10,000 sample dashboards..."):
+                _dr_sample = _dr.generate_sample_data(num_dashboards=10000)
+                _dr.load_inventory(_dr_sample)
+                st.session_state.dr_inventory = _dr.inventory
+                st.session_state.dr_analysis = None
+                st.session_state.dr_report_html = None
+            st.rerun()
+
+    st.info(
+        "CSV should include columns: dashboard_name, workspace, owner_email, "
+        "platform, created_date, last_viewed_date, view_count_30d, "
+        "refresh_schedule, source_tables, dataset_size_mb, num_visuals, is_certified"
+    )
+
+    # ---- Display loaded inventory ----
+    if st.session_state.dr_inventory is not None:
+        _dr_inv = st.session_state.dr_inventory
+        st.markdown("---")
+
+        # Metrics row
+        _dr_m1, _dr_m2, _dr_m3, _dr_m4 = st.columns(4)
+        _dr_m1.metric("Total Dashboards", f"{len(_dr_inv):,}")
+        _dr_m2.metric(
+            "Platforms",
+            _dr_inv["platform"].nunique() if "platform" in _dr_inv.columns else 0,
+        )
+        _dr_m3.metric(
+            "Workspaces",
+            _dr_inv["workspace"].nunique() if "workspace" in _dr_inv.columns else 0,
+        )
+        _dr_m4.metric(
+            "Owners",
+            _dr_inv["owner_email"].nunique() if "owner_email" in _dr_inv.columns else 0,
+        )
+
+        with st.expander("Preview Inventory Data", expanded=False):
+            st.dataframe(_dr_inv.head(200), use_container_width=True)
+
+        # Run analysis button
+        if st.button(
+            "Run Full Rationalization Analysis",
+            key="dr_run_analysis",
+            type="primary",
+        ):
+            with st.status(
+                "Analyzing dashboard portfolio...", expanded=True,
+            ) as _dr_status:
+                _dr_status.write("Detecting zombie dashboards...")
+                _dr_status.write("Finding duplicate dashboard groups...")
+                _dr_status.write("Calculating refresh waste...")
+                _dr_status.write("Computing cost impact...")
+                _dr_result = _dr.analyze()
+                _dr_status.write("Generating recommendations...")
+                _dr_status.write("Building retirement plan...")
+                st.session_state.dr_analysis = _dr_result
+                st.session_state.dr_report_html = None
+                _dr_status.update(
+                    label="Analysis complete", state="complete",
+                )
+
+    # ---- Display analysis results ----
+    if st.session_state.dr_analysis:
+        _dra = st.session_state.dr_analysis
+        _dra_s = _dra["summary"]
+        _dra_z = _dra["zombies"]
+        _dra_d = _dra["duplicates"]
+        _dra_c = _dra["cost_impact"]
+        _dra_rp = _dra["retirement_plan"]
+        _dra_rec = _dra["recommendations"]
+        _dra_rw = _dra["refresh_waste"]
+
+        st.markdown("---")
+        st.markdown("### Analysis Results")
+
+        # Hero metrics
+        _drh1, _drh2, _drh3, _drh4 = st.columns(4)
+        _drh1.metric(
+            "Zombie Dashboards",
+            f"{_dra_z['over_90d']['count']:,}",
+            f"{_dra_z['over_90d']['pct']}% of portfolio",
+        )
+        _drh2.metric(
+            "Annual Waste",
+            f"${_dra_c['total_annual_waste']:,.0f}",
+        )
+        _drh3.metric(
+            "Duplicate Groups",
+            f"{_dra_d['total_groups']}",
+            f"{_dra_d['total_dashboards_in_groups']:,} dashboards",
+        )
+        _drh4.metric(
+            "Recommended Retirements",
+            f"{_dra_rec['retire']['count']:,}",
+        )
+
+        st.divider()
+
+        # Expandable detail sections
+        with st.expander("Zombie Dashboards", expanded=False):
+            _z_df = _dra_z.get("zombie_df")
+            if _z_df is not None and len(_z_df) > 0:
+                _z_show = _z_df[
+                    ["dashboard_name", "workspace", "owner_email",
+                     "platform", "days_since_viewed", "view_count_30d"]
+                ].head(500)
+                st.dataframe(_z_show, use_container_width=True)
+                st.caption(f"Showing top 500 of {len(_z_df):,} zombie dashboards")
+            else:
+                st.write("No zombie dashboards found.")
+
+        with st.expander("Duplicate Groups", expanded=False):
+            if _dra_d["groups"]:
+                for _dg_idx, _dg in enumerate(_dra_d["groups"][:30]):
+                    st.markdown(
+                        f"**Group {_dg_idx + 1}** -- {_dg['count']} dashboards "
+                        f"sharing: `{_dg['source_tables'][:80]}`"
+                    )
+                    _dg_df = pd.DataFrame(_dg["dashboards"][:10])
+                    st.dataframe(_dg_df, use_container_width=True)
+                if _dra_d["total_groups"] > 30:
+                    st.caption(
+                        f"Showing 30 of {_dra_d['total_groups']} groups")
+            else:
+                st.write("No duplicate groups found.")
+
+        with st.expander("Cost Impact Breakdown", expanded=False):
+            _ci_data = {
+                "Category": [
+                    "Zombie Refresh Waste",
+                    "Duplicate Maintenance",
+                    "Analyst Search Time",
+                    "Premium Capacity Waste",
+                ],
+                "Annual Cost": [
+                    f"${_dra_c['zombie_refresh_waste']:,.2f}",
+                    f"${_dra_c['duplicate_maintenance']:,.2f}",
+                    f"${_dra_c['analyst_search_time']:,.2f}",
+                    f"${_dra_c['premium_capacity_waste']:,.2f}",
+                ],
+            }
+            st.table(pd.DataFrame(_ci_data))
+            st.markdown(
+                f"**Total Annual Waste: "
+                f"${_dra_c['total_annual_waste']:,.0f}**"
+            )
+
+        with st.expander("Retirement Plan", expanded=False):
+            for _rp_key in ("phase_1", "phase_2", "phase_3"):
+                _rp = _dra_rp[_rp_key]
+                st.markdown(
+                    f"**{_rp['label']}** -- "
+                    f"{_rp['count']:,} dashboards -- "
+                    f"Timeline: {_rp['timeline']}"
+                )
+
+        st.divider()
+
+        # Generate report button
+        if st.button(
+            "Generate Rationalization Report",
+            key="dr_generate_report",
+            type="primary",
+        ):
+            with st.status(
+                "Generating HTML report...", expanded=True,
+            ) as _dr_rpt_status:
+                _dr_rpt_status.write("Building executive summary...")
+                _dr_rpt_status.write("Rendering gauge charts...")
+                _dr_rpt_status.write("Building workspace health table...")
+                _dr_rpt_status.write("Generating cost breakdown...")
+                _dr_rpt_status.write("Formatting retirement plan...")
+                _dr_html = _dr.generate_html_report()
+                st.session_state.dr_report_html = _dr_html
+                _dr_rpt_status.update(
+                    label="Report generated", state="complete",
+                )
+
+    # ---- Show report download + preview ----
+    if st.session_state.dr_report_html:
+        st.markdown("---")
+        st.download_button(
+            "Download Rationalization Report (HTML)",
+            data=st.session_state.dr_report_html,
+            file_name="dashboard_rationalization_report.html",
+            mime="text/html",
+            key="dr_download_report",
+        )
+        with st.expander("Report Preview", expanded=True):
+            components.html(
+                st.session_state.dr_report_html,
+                height=800,
+                scrolling=True,
+            )

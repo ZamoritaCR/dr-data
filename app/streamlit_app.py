@@ -607,6 +607,47 @@ with st.sidebar:
                         key=f"sb_dl_{idx}_{dl['filename']}",
                     )
 
+    # ---- Generated Files ----
+    _output_dir = None
+    for _candidate in ["/mount/src/dr-data/output", os.path.join(os.path.dirname(__file__), "..", "output")]:
+        if os.path.isdir(_candidate):
+            _output_dir = _candidate
+            break
+    if _output_dir:
+        _gen_files = [f for f in os.listdir(_output_dir) if os.path.isfile(os.path.join(_output_dir, f))]
+        if _gen_files:
+            st.markdown("---")
+            with st.expander("Generated Files", expanded=False):
+                _mime_map = {
+                    ".pdf": "application/pdf",
+                    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    ".csv": "text/csv",
+                    ".json": "application/json",
+                    ".html": "text/html",
+                    ".png": "image/png",
+                    ".jpg": "image/jpeg",
+                    ".svg": "image/svg+xml",
+                    ".txt": "text/plain",
+                    ".pbix": "application/octet-stream",
+                }
+                for _gf in sorted(_gen_files):
+                    _gf_path = os.path.join(_output_dir, _gf)
+                    _ext = os.path.splitext(_gf)[1].lower()
+                    _mime = _mime_map.get(_ext, "application/octet-stream")
+                    try:
+                        with open(_gf_path, "rb") as _fh:
+                            st.download_button(
+                                label=_gf,
+                                data=_fh.read(),
+                                file_name=_gf,
+                                mime=_mime,
+                                key=f"dl_{_gf}",
+                            )
+                    except Exception:
+                        pass
+
     # ---- Snowflake Connection Panel ----
     st.markdown("---")
     st.markdown("**Snowflake Connection**")

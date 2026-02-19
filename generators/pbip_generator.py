@@ -846,9 +846,13 @@ class PBIPGenerator:
         """Normalize different relationship dict formats to (from_table, from_col, to_table, to_col)."""
         # Format 1: explicit from/to keys (our canonical format)
         if "from_table" in rel:
+            fc = rel.get("from_column", "")
+            tt = rel.get("to_table", "")
+            tc = rel.get("to_column", "")
+            if not all([fc, tt, tc]):
+                return (None, None, None, None)
             return (
-                rel["from_table"], rel["from_column"],
-                rel["to_table"], rel["to_column"],
+                rel["from_table"], fc, tt, tc,
             )
 
         # Format 2: RelationshipDetector format (left/right)

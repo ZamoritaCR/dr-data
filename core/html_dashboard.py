@@ -70,7 +70,7 @@ class HTMLDashboardBuilder:
                 df_embed[col] = df_embed[col].dt.strftime("%Y-%m-%d")
 
         # Embed data as JSON
-        data_json = df_embed.to_json(orient="records", date_format="iso")
+        data_json = df_embed.to_json(orient="records", date_format="iso").replace("</script>", "<\\/script>")
 
         # Build chart configs
         charts = self._plan_charts(df, analysis, dashboard_spec)

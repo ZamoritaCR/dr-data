@@ -59,6 +59,18 @@ class MultiFileSession:
         self.unified_df = None
         self.join_log = []
 
+    def cleanup(self):
+        try:
+            if hasattr(self, "_temp_dir") and self._temp_dir and os.path.exists(self._temp_dir):
+                import shutil
+                shutil.rmtree(self._temp_dir, ignore_errors=True)
+                print("[MULTI-FILE] Cleaned up temp directory")
+        except Exception:
+            pass
+
+    def __del__(self):
+        self.cleanup()
+
     def add_file(self, filename, file_bytes_or_path):
         """
         Add a file to the session.

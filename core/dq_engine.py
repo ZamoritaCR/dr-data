@@ -1301,8 +1301,8 @@ body{{background:#0D0D0D;color:#fff;font-family:Inter,system-ui,-apple-system,sa
                             base_mean = base_dist.get("mean", 0)
                             base_std = base_dist.get("std", 1) or 1
                             # Generate synthetic baseline sample
-                            np.random.seed(42)
-                            synth = np.random.normal(
+                            rng = np.random.default_rng(42)
+                            synth = rng.normal(
                                 base_mean, base_std, min(len(s), 1000))
                             curr_sample = s.sample(
                                 n=min(len(s), 1000),

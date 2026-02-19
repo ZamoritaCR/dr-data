@@ -168,7 +168,7 @@ class InteractiveDashboard:
                     tbl_df[c] = tbl_df[c].astype(str)
             tbl_df = tbl_df.fillna("")
             col_headers = "".join(f"<th>{c}</th>" for c in tbl_df.columns)
-            tbl_data_json = json.dumps(tbl_df.values.tolist(), default=str)
+            tbl_data_json = json.dumps(tbl_df.values.tolist(), default=str).replace("</script>", "<\\/script>")
             col_defs_json = json.dumps([{"title": str(c)} for c in tbl_df.columns])
 
             # Stats cards HTML

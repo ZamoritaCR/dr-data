@@ -443,8 +443,8 @@ class DrDataAgent:
                     self.messages.pop()
                 return {
                     "text": (
-                        "Hit a snag reaching my analysis engine. "
-                        "Give me a second and try again."
+                        f"Hit a snag reaching my analysis engine. "
+                        f"Error: {last_err}. Give me a second and try again."
                     ),
                     "files": [],
                     "profile": None,
@@ -589,8 +589,8 @@ class DrDataAgent:
                 if self.messages and self.messages[-1]["role"] == "user":
                     self.messages.pop()
                 yield (
-                    "\n\nHit a snag reaching the analysis engine. "
-                    "Give me a second and try again."
+                    f"\n\nHit a snag reaching the analysis engine. "
+                    f"Error: {last_err}. Give me a second and try again."
                 )
                 return
 

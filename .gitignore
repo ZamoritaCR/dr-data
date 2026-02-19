@@ -22,9 +22,19 @@ _pbix_parts/
 # Temp and patch files
 temp_*
 patch*.py
+*.tmp
 
 # Debug dumps
 debug_*.json
+
+# Runtime JSON state files
+data_catalog.json
+business_rules.json
+dq_history.json
+stewardship.json
+compliance_map.json
+data_lineage.json
+incidents.json
 deliverable_history.json
 
 # IDE

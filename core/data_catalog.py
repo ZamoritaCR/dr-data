@@ -99,7 +99,7 @@ class DataCatalog:
             "version": "1.0",
             "created_at": now,
             "updated_at": now,
-            "organization": "Western Union",
+            "organization": "Organization",
             "tables": {},
             "glossary": {},
             "domains": {},

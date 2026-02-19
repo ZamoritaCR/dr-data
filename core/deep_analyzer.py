@@ -9,7 +9,8 @@ import pandas as pd
 import numpy as np
 from collections import Counter
 import warnings
-warnings.filterwarnings("ignore")
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
 
 
 class DeepAnalyzer:

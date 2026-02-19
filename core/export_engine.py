@@ -11,25 +11,9 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 
-# PowerPoint
-from pptx import Presentation
-from pptx.util import Inches, Pt, Emu
-from pptx.dml.color import RGBColor
-from pptx.enum.text import PP_ALIGN
-
-# PDF
-from reportlab.lib.pagesizes import letter
-from reportlab.lib.colors import HexColor
-from reportlab.lib.units import inch
-from reportlab.platypus import (
-    SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-)
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-
-# Word
-from docx import Document
-from docx.shared import Pt as DocxPt, Inches as DocxInches, RGBColor as DocxRGB
-from docx.enum.text import WD_ALIGN_PARAGRAPH
+# Heavy imports (pptx, reportlab, docx) are lazy-loaded inside each
+# generate_*() method so the module stays importable even if one
+# optional dependency is missing.
 
 
 # ------------------------------------------------------------------ #
@@ -220,6 +204,10 @@ class ExportEngine:
         if output_path is None:
             output_path = os.path.join(tempfile.gettempdir(), f"{title}.pptx")
         try:
+            from pptx import Presentation
+            from pptx.util import Inches, Pt, Emu
+            from pptx.dml.color import RGBColor
+            from pptx.enum.text import PP_ALIGN
             print(f"[ExportEngine] Generating PowerPoint: {title}")
             insights = _compute_insights(df)
 
@@ -469,6 +457,9 @@ class ExportEngine:
         if output_path is None:
             output_path = os.path.join(tempfile.gettempdir(), f"{title}.docx")
         try:
+            from docx import Document
+            from docx.shared import Pt as DocxPt, Inches as DocxInches, RGBColor as DocxRGB
+            from docx.enum.text import WD_ALIGN_PARAGRAPH
             print(f"[ExportEngine] Generating Word doc: {title}")
             insights = _compute_insights(df)
             doc = Document()
@@ -654,6 +645,13 @@ class ExportEngine:
         if output_path is None:
             output_path = os.path.join(tempfile.gettempdir(), f"{title}.pdf")
         try:
+            from reportlab.lib.pagesizes import letter
+            from reportlab.lib.colors import HexColor
+            from reportlab.lib.units import inch
+            from reportlab.platypus import (
+                SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+            )
+            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
             print(f"[ExportEngine] Generating PDF: {title}")
             insights = _compute_insights(df)
 

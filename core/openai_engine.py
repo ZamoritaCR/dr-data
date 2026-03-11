@@ -133,9 +133,15 @@ class OpenAIEngine:
             ],
         )
         elapsed = time.time() - t0
+        if not response.choices:
+            raise ValueError("Empty response from OpenAI")
         text = response.choices[0].message.content
-        tokens_in = response.usage.prompt_tokens
-        tokens_out = response.usage.completion_tokens
+        if response.usage:
+            tokens_in = response.usage.prompt_tokens
+            tokens_out = response.usage.completion_tokens
+        else:
+            tokens_in = 0
+            tokens_out = 0
         print(f"       Response: {tokens_out} tokens out, "
               f"{tokens_in} tokens in, {elapsed:.1f}s")
         return text

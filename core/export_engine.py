@@ -158,6 +158,8 @@ def _compute_insights(df):
         )
     dup_count = df.duplicated().sum()
     if dup_count > 0:
+        if rows == 0:
+            return insights
         insights["quality_notes"].append(
             f"{dup_count:,} duplicate rows detected ({round(dup_count/rows*100, 1)}%)"
         )
@@ -521,7 +523,8 @@ class ExportEngine:
                 ):
                     hdr[i].text = label
                     for p in hdr[i].paragraphs:
-                        p.runs[0].bold = True if p.runs else False
+                        if p.runs:
+                            p.runs[0].bold = True
 
                 for kpi in insights["kpis"]:
                     row = table.add_row().cells

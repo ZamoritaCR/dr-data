@@ -265,6 +265,10 @@ def parse_twbx(file_path):
     with tempfile.TemporaryDirectory() as tmp:
         try:
             with zipfile.ZipFile(file_path, "r") as z:
+                for member in z.namelist():
+                    member_path = os.path.realpath(os.path.join(tmp, member))
+                    if not member_path.startswith(os.path.realpath(tmp)):
+                        raise ValueError(f"ZipSlip detected: {member}")
                 z.extractall(tmp)
 
             for root_dir, dirs, files in os.walk(tmp):
@@ -357,6 +361,10 @@ def ingest_zip(file_path):
     with tempfile.TemporaryDirectory() as tmp:
         try:
             with zipfile.ZipFile(file_path, "r") as z:
+                for member in z.namelist():
+                    member_path = os.path.realpath(os.path.join(tmp, member))
+                    if not member_path.startswith(os.path.realpath(tmp)):
+                        raise ValueError(f"ZipSlip detected: {member}")
                 z.extractall(tmp)
 
             for root_dir, dirs, files in os.walk(tmp):

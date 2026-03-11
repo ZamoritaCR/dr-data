@@ -456,7 +456,7 @@ class PBIPGenerator:
             }
 
         # Validate & fix all field references against real column names
-        valid_cols = list(profile_col_names | measure_names) if profile_col_names else []
+        valid_cols = list((profile_col_names or set()) | measure_names) if measure_names else list(profile_col_names or [])
         doc, fix_stats = self._fix_field_references(doc, valid_cols, table_name)
 
         self._write_json(viz_dir / "visual.json", doc)
@@ -864,10 +864,13 @@ class PBIPGenerator:
 
         # Format 2: RelationshipDetector format (left/right)
         if "left_table" in rel:
-            return (
-                rel["left_table"], rel["left_col"],
-                rel["right_table"], rel["right_col"],
-            )
+            lt = rel.get("left_table", "")
+            lc = rel.get("left_col", "")
+            rt = rel.get("right_table", "")
+            rc = rel.get("right_col", "")
+            if not all([lt, lc, rt, rc]):
+                return (None, None, None, None)
+            return (lt, lc, rt, rc)
 
         # Format 3: Tableau parser format (left/right are "table.column" strings)
         if "left" in rel and "right" in rel:
@@ -991,7 +994,7 @@ class PBIPGenerator:
             else:
                 lines.append("\t\tsummarizeBy: none")
 
-            lines.append(f"\t\tsourceColumn: {col_name}")
+            lines.append(f"\t\tsourceColumn: {self._tmdl_quote(col_name)}")
             lines.append("")
             lines.append("\t\tannotation SummarizationSetBy = Automatic")
 
@@ -1004,7 +1007,9 @@ class PBIPGenerator:
         # Measures -- from AI output, validated against real columns + DAX syntax
         valid_measure_names = set()
         for m in all_measures:
-            m_name = m["name"]
+            m_name = m.get("name", "")
+            if not m_name:
+                continue
             dax = m.get("dax", m.get("expression", "BLANK()"))
             fmt = m.get("format", m.get("formatString", "#,0"))
 
@@ -1082,7 +1087,7 @@ class PBIPGenerator:
         lines.append("\tannotation PBI_ResultType = Table")
         lines.append("")
 
-        self._write_text(tables_dir / f"{tbl_name}.tmdl", "\n".join(lines) + "\n")
+        self._write_text(tables_dir / f"{self._safe_name(tbl_name)}.tmdl", "\n".join(lines) + "\n")
 
         return table_names, valid_measure_names
 
@@ -1107,9 +1112,12 @@ class PBIPGenerator:
             file_path_for_m = self._windows_path_for_m(data_file_path, filename)
             is_excel = filename.lower().endswith((".xlsx", ".xls"))
 
+            # Build date conversion step (locale-safe)
+            date_step_name, date_step_line = self._build_date_conversion_step(table_cfg)
+            final_step = date_step_name if date_step_name else '#"Changed Type"'
+
             if is_excel:
                 if sheet_name:
-                    # Escape double quotes in sheet names for M syntax
                     safe_sheet = str(sheet_name).replace('"', '""')
                     nav_line = (
                         f'    Navigation = Source{{[Item="{safe_sheet}",'
@@ -1117,24 +1125,29 @@ class PBIPGenerator:
                     )
                 else:
                     nav_line = '    Navigation = Source{0}[Data],'
-                return [
+                lines = [
                     "let",
                     f'    Source = Excel.Workbook(File.Contents("{file_path_for_m}"), null, true),',
                     nav_line,
                     f'    #"Promoted Headers" = Table.PromoteHeaders(Navigation, [PromoteAllScalars=true]),',
-                    f'    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{self._build_type_transforms(table_cfg)})',
-                    "in",
-                    '    #"Changed Type"',
                 ]
             else:
-                return [
+                lines = [
                     "let",
                     f'    Source = Csv.Document(File.Contents("{file_path_for_m}"),[Delimiter=",",Columns={len(table_cfg.get("columns", []))},Encoding=65001,QuoteStyle=QuoteStyle.None]),',
                     f'    #"Promoted Headers" = Table.PromoteHeaders(Source, [PromoteAllScalars=true]),',
-                    f'    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{self._build_type_transforms(table_cfg)})',
-                    "in",
-                    '    #"Changed Type"',
                 ]
+
+            # Type transform (dates stay as text here)
+            if date_step_line:
+                lines.append(f'    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{self._build_type_transforms(table_cfg)}),')
+                lines.append(date_step_line)
+            else:
+                lines.append(f'    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{self._build_type_transforms(table_cfg)})')
+
+            lines.append("in")
+            lines.append(f"    {final_step}")
+            return lines
 
         # Last resort: empty table
         return [
@@ -1196,15 +1209,20 @@ class PBIPGenerator:
         return f"C:\\PBI_Data\\{filename}"
 
     def _build_type_transforms(self, table_cfg):
-        """Build the type transform list for Table.TransformColumnTypes."""
+        """Build the type transform list for Table.TransformColumnTypes.
+
+        Date/datetime columns use 'type text' here to avoid locale-dependent
+        parse errors. The actual date conversion is handled by
+        _build_date_conversion_step() which uses explicit culture codes.
+        """
         type_map = {
             "string": "type text",
             "int64": "Int64.Type",
             "double": "type number",
-            "dateTime": "type datetime",
+            "dateTime": "type text",   # keep as text -- convert in next step
             "boolean": "type logical",
-            "date": "type date",
-            "time": "type time",
+            "date": "type text",       # keep as text -- convert in next step
+            "time": "type text",       # keep as text -- convert in next step
             "decimal": "Currency.Type",
         }
         pairs = []
@@ -1214,6 +1232,44 @@ class PBIPGenerator:
             m_type = type_map.get(dt, "type text")
             pairs.append(f'{{"{name}", {m_type}}}')
         return "{" + ", ".join(pairs) + "}"
+
+    def _build_date_conversion_step(self, table_cfg):
+        """Build a locale-safe date conversion step for date/datetime columns.
+
+        Uses Table.TransformColumns with Date.FromText/DateTime.FromText
+        and explicit 'en-US' culture so PBI Desktop doesn't choke on
+        locale-dependent date parsing.
+
+        Returns (step_name, m_line) tuple or (None, None) if no date columns.
+        """
+        date_cols = []
+        for col in table_cfg.get("columns", []):
+            dt = col.get("dataType", "string")
+            if dt in ("dateTime", "date", "time"):
+                date_cols.append((col["name"], dt))
+
+        if not date_cols:
+            return None, None
+
+        transforms = []
+        for col_name, dt in date_cols:
+            if dt == "dateTime":
+                transforms.append(
+                    f'{{"{col_name}", each try DateTime.FromText(_, "en-US") otherwise null}}'
+                )
+            elif dt == "date":
+                transforms.append(
+                    f'{{"{col_name}", each try Date.FromText(_, "en-US") otherwise null}}'
+                )
+            elif dt == "time":
+                transforms.append(
+                    f'{{"{col_name}", each try Time.FromText(_, "en-US") otherwise null}}'
+                )
+
+        step_name = '#"Parsed Dates"'
+        inner = ", ".join(transforms)
+        m_line = f'    {step_name} = Table.TransformColumns(#"Changed Type", {{{inner}}})'
+        return step_name, m_line
 
     # ------------------------------------------------------------------ #
     #  Helpers                                                             #
@@ -1348,7 +1404,7 @@ class PBIPGenerator:
                 print(f"    [TRANSPILE] {name}: {formula[:50]}... -> {result['dax'][:50]}...")
             else:
                 # Low confidence or parse failure: emit as comment
-                safe_formula = formula.replace("*/", "* /")
+                safe_formula = formula.replace("/*", "/ *").replace("*/", "* /")
                 comment_dax = (
                     f"/* Original Tableau: {safe_formula} */\n"
                     f"\t\t/* -- MANUAL REVIEW REQUIRED (confidence: {result['confidence']:.0%}) */\n"

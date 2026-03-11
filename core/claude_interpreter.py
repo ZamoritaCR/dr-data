@@ -79,8 +79,8 @@ class ClaudeInterpreter:
 
         print(f"\n[CALL] Sending request to Claude ({self.MODEL})...")
         print(f"       Request: {user_request[:80]}...")
-        print(f"       Profile: {data_profile['table_name']} "
-              f"({data_profile['row_count']} rows, {data_profile['column_count']} cols)")
+        print(f"       Profile: {data_profile.get('table_name', 'Data')} "
+              f"({data_profile.get('row_count', 0)} rows, {data_profile.get('column_count', 0)} cols)")
 
         # Attempt with retries
         raw_text = None
@@ -185,6 +185,8 @@ class ClaudeInterpreter:
                     messages=[{"role": "user", "content": user_message}],
                 )
                 elapsed = time.time() - t0
+                if not response.content or not hasattr(response.content[0], 'text'):
+                    raise RuntimeError("Empty or malformed response from Claude")
                 text = response.content[0].text
                 tokens_in = response.usage.input_tokens
                 tokens_out = response.usage.output_tokens
@@ -194,8 +196,10 @@ class ClaudeInterpreter:
             except Exception as e:
                 err_str = str(e).lower()
                 if "400" in err_str or "403" in err_str or "limit" in err_str:
+                    # Intentionally disable Claude for the rest of this session
+                    # to avoid repeated failures on persistent errors (auth, rate limit).
                     self._claude_available = False
-                    print(f"       [Claude] Blocked: {e}")
+                    print(f"[WARN] Claude disabled for this session due to error: {str(e)[:100]}")
                     print("       [Claude] Switching to OpenAI fallback.")
                 else:
                     print(f"       [Claude] Error: {e}")
@@ -257,7 +261,7 @@ class ClaudeInterpreter:
 
     def _extract_column_names(self, data_profile):
         """Get the set of all column names from the data profile."""
-        return {col["name"] for col in data_profile.get("columns", [])}
+        return {col.get("name", "") for col in data_profile.get("columns", [])}
 
     def _validate_columns(self, spec, valid_columns):
         """Check that all column references in the spec exist in the dataset.

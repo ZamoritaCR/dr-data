@@ -256,6 +256,8 @@ class DataQualityEngine:
                           else "FAIL")
                 col_scores[col] = {"score": pct, "null_count": nc,
                                    "status": status}
+            if not col_scores:
+                return {"score": 0.0, "status": "FAIL", "columns": {}}
             table_score = round(np.mean([v["score"] for v in col_scores.values()]), 2)
             status = ("PASS" if table_score >= self.thresholds["completeness_warn"]
                       else "WARN" if table_score >= self.thresholds["completeness_fail"]

@@ -7,6 +7,7 @@ via the TableauFieldResolver from Sprint 1.
 import xml.etree.ElementTree as ET
 import zipfile
 import tempfile
+import shutil
 import os
 
 
@@ -32,6 +33,7 @@ def parse_twb(path):
     }
 
     actual_path = path
+    tmpdir = None
     # Handle .twbx
     if str(path).lower().endswith('.twbx'):
         try:
@@ -43,6 +45,8 @@ def parse_twb(path):
                         actual_path = os.path.join(tmpdir, name)
                         break
         except Exception as e:
+            if tmpdir:
+                shutil.rmtree(tmpdir, ignore_errors=True)
             spec["parse_error"] = str(e)
             return spec
 
@@ -159,6 +163,9 @@ def parse_twb(path):
 
     except Exception as e:
         spec["parse_error"] = str(e)
+    finally:
+        if tmpdir:
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
     return spec
 

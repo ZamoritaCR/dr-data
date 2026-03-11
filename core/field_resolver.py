@@ -7,6 +7,7 @@ Uses tableaudocumentapi for structured TWB/TWBX parsing when available.
 """
 import re
 import os
+import shutil
 from rapidfuzz import fuzz, process
 
 
@@ -254,6 +255,7 @@ class TableauFieldResolver:
         import tempfile
 
         actual_path = twb_path
+        tmpdir = None
 
         # Handle .twbx (ZIP containing .twb)
         if str(twb_path).lower().endswith('.twbx'):
@@ -266,6 +268,8 @@ class TableauFieldResolver:
                             actual_path = os.path.join(tmpdir, name)
                             break
             except Exception:
+                if tmpdir:
+                    shutil.rmtree(tmpdir, ignore_errors=True)
                 return []
 
         fields = []
@@ -298,6 +302,9 @@ class TableauFieldResolver:
                     })
         except Exception as e:
             print(f"[FIELD_RESOLVER] XML parse error: {e}")
+        finally:
+            if tmpdir:
+                shutil.rmtree(tmpdir, ignore_errors=True)
 
         return fields
 

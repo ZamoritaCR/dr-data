@@ -65,10 +65,15 @@ def ingest_file(file_path):
         elif category == "report":
             if ext == "twbx":
                 structure, dfs = parse_twbx(file_path)
+                if structure and "error" in structure:
+                    result["errors"].append(structure["error"])
                 result["report_structure"] = structure
                 result["dataframes"].update(dfs)
             elif ext == "twb":
-                result["report_structure"] = parse_twb(file_path)
+                twb_result = parse_twb(file_path)
+                if "error" in twb_result:
+                    result["errors"].append(twb_result["error"])
+                result["report_structure"] = twb_result
             elif ext == "wid":
                 result["report_structure"] = parse_bobj(file_path)
             elif ext in ("yxmd", "yxwz", "yxmc", "yxzp"):
@@ -276,8 +281,8 @@ def parse_twbx(file_path):
                             else:
                                 continue
                             dataframes[f] = df
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            print(f"[WARN] Could not read {f} from .twbx: {e}")
         except Exception as e:
             structure = {"type": "tableau_packaged", "error": str(e)}
 

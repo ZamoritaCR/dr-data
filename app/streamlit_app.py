@@ -52,6 +52,11 @@ def _safe_html(html_str, fallback_text=""):
         st.write(fallback_text or html_str)
 
 
+def _escape_user_text(text):
+    """Escape user-provided text before embedding in HTML to prevent XSS."""
+    return html_module.escape(str(text)) if text else ""
+
+
 # === PAGE CONFIG (must be first Streamlit call) ===
 st.set_page_config(
     page_title="Dr. Data -- Dashboard Intelligence",
@@ -456,16 +461,27 @@ if ("agent" not in st.session_state
         or (st.session_state.agent is not None
             and not hasattr(st.session_state.agent, "chat_stream"))):
     try:
+        from config.settings import require_at_least_one_engine
+        available = require_at_least_one_engine()
         st.session_state.agent = DrDataAgent()
+        st.session_state._engine_status = f"Engines: {', '.join(available)}"
+    except RuntimeError as e:
+        st.error(f"Dr. Data cannot start: {e}")
+        st.session_state.agent = None
+        st.session_state._engine_status = "No engines available"
     except Exception as e:
         st.error(f"Failed to initialize Dr. Data: {e}")
         st.session_state.agent = None
+        st.session_state._engine_status = f"Error: {e}"
 
 if "multi_session" not in st.session_state:
     st.session_state.multi_session = MultiFileSession()
 
 if "file_just_uploaded" not in st.session_state:
     st.session_state.file_just_uploaded = None
+
+if "uploader_key" not in st.session_state:
+    st.session_state.uploader_key = 0
 
 if "audit_engine" not in st.session_state:
     st.session_state.audit_engine = AuditEngine()
@@ -491,10 +507,58 @@ with st.sidebar:
         type=ext_list,
         accept_multiple_files=True,
         label_visibility="collapsed",
+        key=f"file_uploader_{st.session_state.uploader_key}",
     )
 
     # Handle uploads through MultiFileSession
     if uploaded_files_list:
+        # Build a fingerprint of current files: name + size
+        current_fingerprint = {
+            (uf.name, uf.size) for uf in uploaded_files_list
+        }
+        tracked_fingerprint = {
+            (name, info.get("size", 0))
+            for name, info in st.session_state.uploaded_files.items()
+        }
+
+        if current_fingerprint != tracked_fingerprint:
+            # Files changed (added, removed, or replaced with different content)
+            # Full reset to avoid stale data from previous session
+            st.session_state.multi_session = MultiFileSession()
+            st.session_state.uploaded_files = {}
+            st.session_state.messages = []
+            st.session_state.file_just_uploaded = None
+            st.session_state.workspace_content = {
+                "phase": "waiting",
+                "data_preview": None,
+                "charts": [],
+                "kpis": [],
+                "scores": None,
+                "deliverables": [],
+                "progress_messages": [],
+                "audit_html": None,
+                "audit_summary": None,
+                "audit_releasable": None,
+            }
+            # Reset agent so it doesn't hold old dataframes
+            try:
+                st.session_state.agent = DrDataAgent()
+            except Exception:
+                st.session_state.agent = None
+            # Reset any DQ / catalog / trust state
+            for stale_key in [
+                "dq_engine", "dq_cross_results", "dq_history",
+                "data_catalog", "trust_scorer", "copdq",
+                "rules_engine", "stewardship", "compliance",
+                "incidents", "lineage", "dr_engine",
+                "dr_inventory", "dr_analysis", "dr_report_html",
+                "snowflake", "sf_tables", "audit_engine",
+            ]:
+                if stale_key in st.session_state:
+                    del st.session_state[stale_key]
+            # Re-init audit engine
+            st.session_state.audit_engine = AuditEngine()
+
         session = st.session_state.multi_session
         new_files = []
         file_errors = []
@@ -557,6 +621,14 @@ with st.sidebar:
                     pass
 
             st.session_state.file_just_uploaded = {"names": new_files}
+
+    # If uploader is empty but we have tracked files, full session wipe
+    if not uploaded_files_list and st.session_state.uploaded_files:
+        next_key = st.session_state.get("uploader_key", 0) + 1
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        st.session_state.uploader_key = next_key
+        st.rerun()
 
     # Show uploaded files
     if st.session_state.uploaded_files:
@@ -804,15 +876,20 @@ with st.sidebar:
     col_reset, col_new = st.columns(2)
     with col_reset:
         if st.button("Reset Session", width="stretch"):
-            keep = dict(st.session_state.uploaded_files) if st.session_state.get("uploaded_files") else {}
+            # Keep the uploader key the same so the file_uploader widget
+            # retains its files -- they'll be re-ingested into a fresh
+            # MultiFileSession since uploaded_files dict is cleared.
+            cur_key = st.session_state.get("uploader_key", 0)
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
-            st.session_state.uploaded_files = keep
+            st.session_state.uploader_key = cur_key
             st.rerun()
     with col_new:
         if st.button("New Session", width="stretch"):
+            next_key = st.session_state.get("uploader_key", 0) + 1
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
+            st.session_state.uploader_key = next_key
             st.rerun()
 
 

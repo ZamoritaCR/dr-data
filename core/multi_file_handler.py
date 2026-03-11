@@ -109,9 +109,9 @@ class MultiFileSession:
             info["structure"] = twb_spec
             self.tableau_spec = twb_spec
             self.structure_file = info
-            if embedded_dfs:
+            if embedded_dfs and len(embedded_dfs) > 0:
                 # Use largest embedded DataFrame as primary
-                biggest = max(embedded_dfs, key=lambda x: len(x))
+                biggest = max(embedded_dfs, key=lambda x: len(x) if hasattr(x, '__len__') else 0)
                 info["df"] = biggest
                 self.primary_df = biggest
                 self.data_files.append({
@@ -357,7 +357,8 @@ class MultiFileSession:
                             df, _sn = self._load_data(extracted_path, ext)
                             if df is not None:
                                 dfs.append(df)
-                        except Exception:
+                        except Exception as e:
+                            print(f"[WARN] Failed to extract {name} from .twbx: {e}")
                             continue
 
         except Exception as e:

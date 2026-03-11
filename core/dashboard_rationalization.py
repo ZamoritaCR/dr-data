@@ -353,11 +353,15 @@ class DashboardRationalizationEngine:
         }
 
         # 7. Recommendations
-        retire_list = z365[["dashboard_name", "workspace", "owner_email",
-                            "days_since_viewed"]].to_dict("records") if len(z365) > 0 else []
+        def _safe_cols(df, wanted):
+            """Slice only columns that exist in the dataframe."""
+            return df[[c for c in wanted if c in df.columns]]
+
+        retire_list = _safe_cols(z365, ["dashboard_name", "workspace", "owner_email",
+                            "days_since_viewed"]).to_dict("records") if len(z365) > 0 else []
         archive_180 = z180[~z180.index.isin(z365.index)]
-        archive_list = archive_180[["dashboard_name", "workspace", "owner_email",
-                                    "days_since_viewed"]].to_dict("records") if len(archive_180) > 0 else []
+        archive_list = _safe_cols(archive_180, ["dashboard_name", "workspace", "owner_email",
+                                    "days_since_viewed"]).to_dict("records") if len(archive_180) > 0 else []
 
         consolidate_list = []
         for g in dup_groups[:50]:
@@ -367,18 +371,18 @@ class DashboardRationalizationEngine:
                 "action": "CONSOLIDATE",
             })
 
-        reduce_refresh_list = wasted[["dashboard_name", "workspace",
-                                       "refresh_schedule"]].to_dict("records") if len(wasted) > 0 else []
+        reduce_refresh_list = _safe_cols(wasted, ["dashboard_name", "workspace",
+                                       "refresh_schedule"]).to_dict("records") if len(wasted) > 0 else []
 
         certify_candidates = inv[
             (inv["days_since_viewed"] <= 30)
             & (inv["view_count_30d"] >= 20)
             & (~inv.get("is_certified", pd.Series(dtype=bool)).fillna(False))
-        ] if "is_certified" in inv.columns else pd.DataFrame()
+        ] if "is_certified" in inv.columns and "view_count_30d" in inv.columns else pd.DataFrame()
 
-        certify_list = certify_candidates[
-            ["dashboard_name", "workspace", "view_count_30d"]
-        ].to_dict("records") if len(certify_candidates) > 0 else []
+        certify_list = _safe_cols(certify_candidates, [
+            "dashboard_name", "workspace", "view_count_30d"
+        ]).to_dict("records") if len(certify_candidates) > 0 else []
 
         recommendations = {
             "retire": {"count": len(retire_list), "items": retire_list[:100]},

@@ -46,6 +46,10 @@ from generators.pbip_reference import (
     PAGE_JSON_TEMPLATE, VISUAL_JSON_TEMPLATE, PBISM_TEMPLATE,
     DATABASE_TMDL, CULTURE_TMDL, THEME_SOURCE_PATH,
 )
+from generators.powerbi_visual_generator import (
+    TABLEAU_TO_PBI_VISUAL_MAP, _detect_mark_type,
+    _inject_visual_properties, _generate_deneb_visual, map_visual_type,
+)
 
 
 def _parse_tableau_field_ref(ref):
@@ -94,7 +98,8 @@ class PBIPGenerator:
     # ------------------------------------------------------------------ #
 
     def generate(self, config, data_profile, dashboard_spec, data_file_path=None,
-                 sheet_name=None, relationships=None, snowflake_config=None):
+                 sheet_name=None, relationships=None, snowflake_config=None,
+                 tableau_spec=None, field_resolution_map=None):
         """Create the full PBIP project.
 
         Args:
@@ -106,6 +111,8 @@ class PBIPGenerator:
             relationships:    optional list of relationship dicts for TMDL model.
             snowflake_config: optional dict with account/warehouse/database/schema
                               for Snowflake DirectQuery M expression.
+            tableau_spec:     optional parsed Tableau spec for visual type mapping.
+            field_resolution_map: optional field resolution map from Sprint 1 resolver.
 
         Returns:
             str: path to the clean project directory containing ONLY the PBIP files.
@@ -1023,6 +1030,23 @@ class PBIPGenerator:
             lines.append(f"\t\tlineageTag: {uuid.uuid4()}")
             lines.append("")
 
+        # Transpiled Tableau calculated fields as DAX measures (Sprint 3)
+        transpiled_measures = self._transpile_tableau_calcs(
+            tmdl_model, profile_col_names, tbl_name
+        )
+        for tm in transpiled_measures:
+            m_name = tm["name"]
+            if m_name not in valid_measure_names:
+                valid_measure_names.add(m_name)
+                quoted = self._tmdl_quote(m_name)
+                lines.append(f"\tmeasure {quoted} = {tm['dax']}")
+                if tm.get("warnings"):
+                    for w in tm["warnings"]:
+                        lines.append(f"\t\t/// {w}")
+                lines.append(f"\t\tformatString: #,0")
+                lines.append(f"\t\tlineageTag: {uuid.uuid4()}")
+                lines.append("")
+
         # Partition (M expression)
         if snowflake_config:
             m_expr = self._build_snowflake_m_expression(
@@ -1085,8 +1109,10 @@ class PBIPGenerator:
 
             if is_excel:
                 if sheet_name:
+                    # Escape double quotes in sheet names for M syntax
+                    safe_sheet = str(sheet_name).replace('"', '""')
                     nav_line = (
-                        f'    Navigation = Source{{[Item="{sheet_name}",'
+                        f'    Navigation = Source{{[Item="{safe_sheet}",'
                         f'Kind="Sheet"]}}[Data],'
                     )
                 else:
@@ -1175,8 +1201,11 @@ class PBIPGenerator:
             "string": "type text",
             "int64": "Int64.Type",
             "double": "type number",
-            "dateTime": "type date",
+            "dateTime": "type datetime",
             "boolean": "type logical",
+            "date": "type date",
+            "time": "type time",
+            "decimal": "Currency.Type",
         }
         pairs = []
         for col in table_cfg.get("columns", []):
@@ -1283,6 +1312,57 @@ class PBIPGenerator:
             return "formula is just a literal number"
 
         return None  # All checks passed
+
+    def _transpile_tableau_calcs(self, tmdl_model, profile_col_names, table_name):
+        """Transpile Tableau calculated fields to DAX measures using Sprint 3 transpiler.
+
+        Returns list of dicts: [{name, dax, confidence, warnings}]
+        """
+        calc_fields = tmdl_model.get("calculated_fields", [])
+        if not calc_fields:
+            return []
+
+        try:
+            from core.formula_transpiler import TableauFormulaTranspiler
+        except ImportError:
+            print("[WARN] formula_transpiler not available, skipping Tableau calc transpilation")
+            return []
+
+        transpiler = TableauFormulaTranspiler(table_name=table_name)
+        results = []
+
+        for cf in calc_fields:
+            name = cf.get("name", "")
+            formula = cf.get("formula", "")
+            if not name or not formula:
+                continue
+
+            result = transpiler.transpile(formula)
+            if result["parse_success"] and result["confidence"] >= 0.7:
+                results.append({
+                    "name": name,
+                    "dax": result["dax"],
+                    "confidence": result["confidence"],
+                    "warnings": result["warnings"],
+                })
+                print(f"    [TRANSPILE] {name}: {formula[:50]}... -> {result['dax'][:50]}...")
+            else:
+                # Low confidence or parse failure: emit as comment
+                safe_formula = formula.replace("*/", "* /")
+                comment_dax = (
+                    f"/* Original Tableau: {safe_formula} */\n"
+                    f"\t\t/* -- MANUAL REVIEW REQUIRED (confidence: {result['confidence']:.0%}) */\n"
+                    f"\t\tBLANK()"
+                )
+                results.append({
+                    "name": name,
+                    "dax": comment_dax,
+                    "confidence": result["confidence"],
+                    "warnings": result["warnings"] + ["Low confidence -- manual review required"],
+                })
+                print(f"    [TRANSPILE-WARN] {name}: low confidence ({result['confidence']:.0%})")
+
+        return results
 
     def _safe_name(self, name):
         safe = name.replace(" ", "_").replace("/", "_").replace("\\", "_")

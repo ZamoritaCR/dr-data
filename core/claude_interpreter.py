@@ -18,18 +18,47 @@ from config.prompts import INTERPRETER_SYSTEM_PROMPT, EXPLANATION_SYSTEM_PROMPT
 
 
 class ClaudeInterpreter:
-    """Send data profiles to Claude, get back dashboard specifications."""
+    """Send data profiles to an LLM, get back dashboard specifications.
+
+    LLM-agnostic: tries Claude first, falls back to OpenAI if unavailable.
+    """
 
     MODEL = "claude-sonnet-4-20250514"
+    OPENAI_MODEL = "gpt-4o"
     MAX_TOKENS = 8192
     MAX_RETRIES = 3
 
     def __init__(self):
+        self.client = None
+        self._claude_available = False
+        self._openai_client = None
+
         api_key = _get_secret("ANTHROPIC_API_KEY")
-        if not api_key:
-            raise RuntimeError("ANTHROPIC_API_KEY not set.")
-        self.client = anthropic.Anthropic(api_key=api_key)
-        print(f"[OK] Claude interpreter ready (model: {self.MODEL})")
+        if api_key:
+            try:
+                self.client = anthropic.Anthropic(api_key=api_key)
+                self._claude_available = True
+                print(f"[OK] Claude interpreter ready (model: {self.MODEL})")
+            except Exception as e:
+                print(f"[WARN] Claude interpreter init failed: {e}")
+        else:
+            print("[INFO] ANTHROPIC_API_KEY not set -- interpreter using fallback.")
+
+        # OpenAI fallback for interpretation
+        openai_key = _get_secret("OPENAI_API_KEY")
+        if openai_key:
+            try:
+                from openai import OpenAI
+                self._openai_client = OpenAI(api_key=openai_key)
+                print(f"[OK] Interpreter OpenAI fallback ready ({self.OPENAI_MODEL})")
+            except Exception as e:
+                print(f"[WARN] Interpreter OpenAI fallback failed: {e}")
+
+        if not self._claude_available and not self._openai_client:
+            raise RuntimeError(
+                "No LLM available for dashboard interpretation. "
+                "Set ANTHROPIC_API_KEY or OPENAI_API_KEY."
+            )
 
     # ------------------------------------------------------------------ #
     #  Main entry point                                                    #
@@ -142,23 +171,64 @@ class ClaudeInterpreter:
             f"For DAX measures, reference the table as '{table_name}'."
         )
 
+    def _call_llm(self, system_prompt, user_message):
+        """Make an LLM API call, trying Claude first then OpenAI fallback."""
+        # Try Claude
+        if self._claude_available and self.client:
+            try:
+                t0 = time.time()
+                response = self.client.messages.create(
+                    model=self.MODEL,
+                    max_tokens=self.MAX_TOKENS,
+                    temperature=0,
+                    system=system_prompt,
+                    messages=[{"role": "user", "content": user_message}],
+                )
+                elapsed = time.time() - t0
+                text = response.content[0].text
+                tokens_in = response.usage.input_tokens
+                tokens_out = response.usage.output_tokens
+                print(f"       [Claude] {tokens_out} tokens out, "
+                      f"{tokens_in} tokens in, {elapsed:.1f}s")
+                return text
+            except Exception as e:
+                err_str = str(e).lower()
+                if "400" in err_str or "403" in err_str or "limit" in err_str:
+                    self._claude_available = False
+                    print(f"       [Claude] Blocked: {e}")
+                    print("       [Claude] Switching to OpenAI fallback.")
+                else:
+                    print(f"       [Claude] Error: {e}")
+
+        # Fallback to OpenAI
+        if self._openai_client:
+            try:
+                t0 = time.time()
+                response = self._openai_client.chat.completions.create(
+                    model=self.OPENAI_MODEL,
+                    max_tokens=self.MAX_TOKENS,
+                    temperature=0,
+                    response_format={"type": "json_object"},
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_message},
+                    ],
+                )
+                elapsed = time.time() - t0
+                text = response.choices[0].message.content
+                tokens_in = response.usage.prompt_tokens
+                tokens_out = response.usage.completion_tokens
+                print(f"       [OpenAI] {tokens_out} tokens out, "
+                      f"{tokens_in} tokens in, {elapsed:.1f}s")
+                return text
+            except Exception as e:
+                print(f"       [OpenAI] Error: {e}")
+
+        raise RuntimeError("All LLM engines failed for interpretation.")
+
     def _call_claude(self, system_prompt, user_message):
-        """Make a single Claude API call and return the text response."""
-        t0 = time.time()
-        response = self.client.messages.create(
-            model=self.MODEL,
-            max_tokens=self.MAX_TOKENS,
-            temperature=0,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_message}],
-        )
-        elapsed = time.time() - t0
-        text = response.content[0].text
-        tokens_in = response.usage.input_tokens
-        tokens_out = response.usage.output_tokens
-        print(f"       Response: {tokens_out} tokens out, "
-              f"{tokens_in} tokens in, {elapsed:.1f}s")
-        return text
+        """Backward-compatible wrapper."""
+        return self._call_llm(system_prompt, user_message)
 
     def _parse_json(self, raw_text):
         """Extract and parse JSON from Claude's response."""

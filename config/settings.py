@@ -34,3 +34,27 @@ def validate_keys():
     if not GEMINI_API_KEY:
         issues.append("GEMINI_API_KEY not set (optional -- Gemini features disabled)")
     return issues
+
+
+def get_available_engines():
+    """Return list of available engine names based on configured keys."""
+    engines = []
+    if ANTHROPIC_API_KEY:
+        engines.append("Claude")
+    if OPENAI_API_KEY:
+        engines.append("OpenAI")
+    if GEMINI_API_KEY:
+        engines.append("Gemini")
+    return engines
+
+
+def require_at_least_one_engine():
+    """Raise RuntimeError if no AI engine has a key configured."""
+    engines = get_available_engines()
+    if not engines:
+        raise RuntimeError(
+            "No AI engine configured. Set at least one of: "
+            "ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY "
+            "in your .env file or Streamlit secrets."
+        )
+    return engines

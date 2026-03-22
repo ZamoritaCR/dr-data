@@ -42,6 +42,7 @@ from core.trust_scoring import TrustScorer
 from core.copdq import COPDQCalculator
 from core.stewardship import StewardshipWorkflow
 from core.dashboard_rationalization import DashboardRationalizationEngine
+from app.data_modeling import render_data_modeling
 
 
 def _safe_html(html_str, fallback_text=""):
@@ -940,7 +941,7 @@ def _render_downloads(downloads, key_prefix, ts):
 # ============================================
 # MAIN LAYOUT: Tabs + Workspace/Chat split
 # ============================================
-tab1, tab2, tab3 = st.tabs(["Dr. Data Agent", "Data Quality Engine", "Dashboard Rationalization"])
+tab1, tab2, tab3, tab4 = st.tabs(["Dr. Data Agent", "Data Quality Engine", "Dashboard Rationalization", "Data Modeler"])
 
 with tab1:
     workspace_col, chat_col = st.columns([65, 35])
@@ -4132,3 +4133,6 @@ with tab3:
                 height=800,
                 scrolling=True,
             )
+
+with tab4:
+    render_data_modeling()

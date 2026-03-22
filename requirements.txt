@@ -21,3 +21,20 @@ xlsxwriter>=3.1.0
 tableaudocumentapi>=0.1.0
 rapidfuzz>=3.0.0
 lark>=1.1.0
+
+# Data Quality -- frontier additions
+pyjanitor>=0.28.0
+missingno>=0.5.0
+pingouin>=0.5.4
+statsmodels>=0.14.0
+pyarrow>=14.0.0
+
+# Data Modeling -- frontier additions
+networkx>=3.2.0
+sqlglot>=23.0.0
+sqlparse>=0.4.4
+pydot>=1.4.2
+
+# Visualization enhancements
+altair>=5.2.0
+seaborn>=0.13.0

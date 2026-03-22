@@ -43,6 +43,12 @@ from core.copdq import COPDQCalculator
 from core.stewardship import StewardshipWorkflow
 from core.dashboard_rationalization import DashboardRationalizationEngine
 from app.data_modeling import render_data_modeling
+from app.chatbots import (
+    render_tab_chatbot,
+    MIGRATION_EXPERT_PROMPT, DQ_ENGINE_PROMPT,
+    RATIONALIZATION_EXPERT_PROMPT, MODELER_EXPERT_PROMPT,
+)
+from app.ui_constants import GLOBAL_CSS, tab_header, badge
 
 
 def _safe_html(html_str, fallback_text=""):
@@ -433,6 +439,9 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+
+# Art of the Possible -- global design system overlay
+st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
 
 
 # ============================================
@@ -1532,6 +1541,42 @@ with tab1:
                             if ws.get("data_preview") is None:
                                 ws["data_preview"] = agent.dataframe
 
+    # ============================================
+    # TAB 1 -- Migration Intelligence Chatbot
+    # ============================================
+    st.markdown("---")
+    _safe_html(tab_header(
+        "Migration Intelligence Chat",
+        "DAX -- Tableau -- Power BI -- Snowflake -- Formula Transpilation",
+        accent="#00D47E",
+        icon="//",
+    ), "Migration Intelligence Chat")
+
+    def _migration_context():
+        ctx_parts = []
+        agent = st.session_state.get("agent")
+        if agent and hasattr(agent, "tableau_spec") and agent.tableau_spec:
+            spec = agent.tableau_spec
+            ctx_parts.append(f"Tableau workbook loaded")
+            ctx_parts.append(f"Worksheets: {len(spec.get('worksheets', []))}")
+            ctx_parts.append(f"Calculated fields: {len(spec.get('calculated_fields', []))}")
+            calcs = spec.get("calculated_fields", [])[:3]
+            if calcs:
+                ctx_parts.append("Sample calculated fields:")
+                for c in calcs:
+                    ctx_parts.append(f"  [{c.get('name','')}]: {c.get('formula','')[:80]}")
+        return "\n".join(ctx_parts) if ctx_parts else None
+
+    render_tab_chatbot(
+        tab_key="migration",
+        system_prompt=MIGRATION_EXPERT_PROMPT,
+        placeholder="Ask about DAX translations, LOD expressions, Tableau to PBI migration patterns...",
+        accent_color="#00D47E",
+        tab_label="Migration Intelligence",
+        context_injector=_migration_context,
+        height=420,
+    )
+
 
 with tab2:
     # ── DQ Engine session state ──
@@ -1573,7 +1618,7 @@ with tab2:
             "MySQL, SQL Server, SQLite"
         )
     else:
-        dq_subtab1, dq_subtab2, dq_subtab3, dq_subtab4, dq_subtab5, dq_subtab6, dq_subtab7, dq_subtab8 = st.tabs([
+        dq_subtab1, dq_subtab2, dq_subtab3, dq_subtab4, dq_subtab5, dq_subtab6, dq_subtab7, dq_subtab8, dq_subtab9 = st.tabs([
             "Quality Scanner",
             "Data Catalog",
             "Business Rules",
@@ -1582,6 +1627,7 @@ with tab2:
             "Compliance",
             "Incidents",
             "Observability",
+            "Advanced Analytics",
         ])
 
         # ============================================================
@@ -3890,6 +3936,161 @@ if not result['all_passed']:
     raise Exception(f'Quality gates failed for: {failed}')
 ''', language="python")
 
+        # ============================================================
+        # SUBTAB 9: Advanced Analytics (Art of the Possible)
+        # ============================================================
+        with dq_subtab9:
+            from core.advanced_dq import (
+                benford_analysis, spc_analysis, entity_resolution,
+                drift_detection, advanced_profile,
+            )
+
+            _safe_html(tab_header(
+                "Advanced Analytics",
+                "Benford's Law -- SPC Control Charts -- Entity Resolution -- Data Drift -- Deep Profiling",
+                accent="#3B82F6",
+                icon="//",
+            ), "Advanced Analytics")
+
+            _adv_df = None
+            if "multi_session" in st.session_state and st.session_state.multi_session:
+                try:
+                    _adv_df = st.session_state.multi_session.get_primary_dataframe()
+                except Exception:
+                    pass
+
+            if _adv_df is None or len(_adv_df) == 0:
+                st.info("Upload a data file in the sidebar to activate Advanced Analytics.")
+            else:
+                adv_tab1, adv_tab2, adv_tab3, adv_tab4, adv_tab5 = st.tabs([
+                    "Benford's Law", "SPC Charts", "Entity Resolution",
+                    "Drift Detection", "Deep Profile",
+                ])
+
+                with adv_tab1:
+                    st.markdown("### Benford's Law Analysis")
+                    st.info(
+                        "Benford's Law: In naturally occurring data, leading digits follow "
+                        "a predictable distribution. Deviations may indicate data fabrication, "
+                        "rounding errors, or systematic biases."
+                    )
+                    _bf_num_cols = [c for c in _adv_df.columns if pd.api.types.is_numeric_dtype(_adv_df[c])]
+                    _bf_selected = st.multiselect("Select numeric columns", _bf_num_cols, default=_bf_num_cols[:4], key="bf_cols")
+                    if st.button("Run Benford Analysis", type="primary", key="bf_run"):
+                        with st.spinner("Analyzing leading digit distributions..."):
+                            _bf_result = benford_analysis(_adv_df, _bf_selected)
+                        if _bf_result.get("suspicious_columns"):
+                            st.warning(f"{len(_bf_result['suspicious_columns'])} column(s) deviate from Benford's Law: {', '.join(_bf_result['suspicious_columns'])}")
+                        else:
+                            st.success("All analyzed columns conform to Benford's Law")
+                        import plotly.graph_objects as go
+                        for _bf_col, _bf_res in _bf_result["column_results"].items():
+                            _bf_fig = go.Figure()
+                            _bf_digits = list(range(1, 10))
+                            _bf_fig.add_trace(go.Bar(x=_bf_digits, y=_bf_res["observed"], name="Observed", marker_color="#3B82F6", opacity=0.8))
+                            _bf_fig.add_trace(go.Scatter(x=_bf_digits, y=_bf_res["expected"], name="Expected (Benford)", mode="lines+markers", line=dict(color="#00D47E", width=2)))
+                            _bf_fig.update_layout(title=f"{_bf_col} -- {_bf_res['verdict']} (p={_bf_res['p_value']:.4f})", xaxis_title="Leading Digit", yaxis_title="Frequency", template="plotly_dark", height=280)
+                            st.plotly_chart(_bf_fig, use_container_width=True)
+
+                with adv_tab2:
+                    st.markdown("### Statistical Process Control (SPC)")
+                    st.info("SPC detects non-random patterns in time-series data using control limits and Western Electric Rules.")
+                    _spc_date_cols = [c for c in _adv_df.columns if "date" in c.lower() or "time" in c.lower() or pd.api.types.is_datetime64_any_dtype(_adv_df[c])]
+                    _spc_num_cols = [c for c in _adv_df.columns if pd.api.types.is_numeric_dtype(_adv_df[c])]
+                    _spc_c1, _spc_c2 = st.columns(2)
+                    with _spc_c1:
+                        _spc_date = st.selectbox("Date/Time column", _spc_date_cols if _spc_date_cols else _adv_df.columns.tolist(), key="spc_date")
+                    with _spc_c2:
+                        _spc_val = st.selectbox("Metric column", _spc_num_cols, key="spc_val")
+                    if st.button("Generate Control Chart", type="primary", key="spc_run"):
+                        with st.spinner("Computing control limits..."):
+                            _spc_r = spc_analysis(_adv_df, _spc_date, _spc_val)
+                        if "error" not in _spc_r:
+                            import plotly.graph_objects as go
+                            _spc_fig = go.Figure()
+                            _spc_fig.add_trace(go.Scatter(x=list(range(len(_spc_r["values"]))), y=_spc_r["values"], mode="lines+markers", name="Values", line=dict(color="#3B82F6")))
+                            _spc_fig.add_hline(y=_spc_r["ucl"], line_color="#EF4444", line_dash="dash", annotation_text=f"UCL={_spc_r['ucl']:.2f}")
+                            _spc_fig.add_hline(y=_spc_r["lcl"], line_color="#EF4444", line_dash="dash", annotation_text=f"LCL={_spc_r['lcl']:.2f}")
+                            _spc_fig.add_hline(y=_spc_r["mean"], line_color="#00D47E", annotation_text=f"mean={_spc_r['mean']:.2f}")
+                            _spc_fig.add_hline(y=_spc_r["uwl"], line_color="#F59E0B", line_dash="dot")
+                            _spc_fig.add_hline(y=_spc_r["lwl"], line_color="#F59E0B", line_dash="dot")
+                            _spc_fig.update_layout(title=f"X-bar Control Chart: {_spc_val} | Cpk={_spc_r['cpk']:.2f} | {_spc_r['violation_count']} violations", template="plotly_dark", height=350)
+                            st.plotly_chart(_spc_fig, use_container_width=True)
+                            if _spc_r["violations"]:
+                                st.warning(f"{_spc_r['violation_count']} Western Electric rule violations detected")
+                                st.dataframe(pd.DataFrame(_spc_r["violations"][:10]), use_container_width=True)
+                            else:
+                                st.success("Process appears stable -- no control rule violations")
+                        else:
+                            st.warning(_spc_r["error"])
+
+                with adv_tab3:
+                    st.markdown("### Entity Resolution -- Deduplication Intelligence")
+                    st.info("Probabilistic entity matching using blocking + fuzzy similarity scoring (Fellegi-Sunter model).")
+                    _er_cols = st.multiselect("Select key columns for matching", _adv_df.columns.tolist(), default=_adv_df.columns[:2].tolist(), key="er_cols")
+                    _er_thresh = st.slider("Match threshold (%)", 60, 99, 85, key="er_thresh")
+                    if st.button("Run Entity Resolution", type="primary", key="er_run") and _er_cols:
+                        with st.spinner(f"Running probabilistic matching on {len(_adv_df)} records..."):
+                            _er_r = entity_resolution(_adv_df, _er_cols, _er_thresh)
+                        _er_c1, _er_c2, _er_c3 = st.columns(3)
+                        _er_c1.metric("Duplicate Pairs Found", _er_r["duplicate_count"])
+                        _er_c2.metric("Deduplication Rate", f"{_er_r['dedup_rate']}%")
+                        _er_c3.metric("Total Records", _er_r["total_records"])
+                        if _er_r["duplicate_pairs"]:
+                            st.markdown("**Top Duplicate Pairs:**")
+                            st.dataframe(pd.DataFrame(_er_r["duplicate_pairs"][:20]), use_container_width=True)
+                        for _er_rec in _er_r["recommendations"]:
+                            st.info(_er_rec)
+
+                with adv_tab4:
+                    st.markdown("### Data Drift Detection")
+                    st.info("Compare current data distribution against a reference baseline using PSI and KS tests.")
+                    if st.button("Run Drift Analysis (80/20 split)", type="primary", key="drift_run"):
+                        _split_idx = int(len(_adv_df) * 0.8)
+                        _ref_df = _adv_df.iloc[:_split_idx]
+                        _cur_df = _adv_df.iloc[_split_idx:]
+                        with st.spinner("Computing PSI and KS statistics..."):
+                            _drift_r = drift_detection(_ref_df, _cur_df)
+                        st.markdown(f"**Overall Drift: {_drift_r['drift_verdict']}** -- PSI={_drift_r['overall_psi']:.4f} | {_drift_r['drift_pct']}% columns drifted")
+                        _drift_rows = []
+                        for _dc, _dr in _drift_r["column_results"].items():
+                            _drift_rows.append({"Column": _dc, "Type": _dr["type"], "PSI": _dr["psi"], "Severity": _dr["severity"], "Drifted": "YES" if _dr["drifted"] else "No"})
+                        st.dataframe(pd.DataFrame(_drift_rows).sort_values("PSI", ascending=False), use_container_width=True)
+
+                with adv_tab5:
+                    st.markdown("### Deep Statistical Profile")
+                    if st.button("Run Deep Profile", type="primary", key="deep_run"):
+                        with st.spinner("Computing deep statistical profile..."):
+                            _dp_r = advanced_profile(_adv_df)
+                        _dp_c1, _dp_c2, _dp_c3 = st.columns(3)
+                        _dp_c1.metric("Rows", _dp_r["shape"]["rows"])
+                        _dp_c2.metric("Columns", _dp_r["shape"]["cols"])
+                        _dp_c3.metric("Warnings", len(_dp_r["warnings"]))
+                        if _dp_r["warnings"]:
+                            for _dpw in _dp_r["warnings"][:10]:
+                                st.warning(_dpw)
+                        _dp_rows = []
+                        for _dpc, _dpi in _dp_r["columns"].items():
+                            _row = {"Column": _dpc, "Type": _dpi["dtype"], "Nulls %": _dpi["null_pct"], "Unique": _dpi["unique_count"], "Cardinality": _dpi["cardinality_ratio"]}
+                            if "mean" in _dpi:
+                                _row.update({"Mean": _dpi["mean"], "Std": _dpi["std"], "Skew": _dpi["skewness"]})
+                            _dp_rows.append(_row)
+                        st.dataframe(pd.DataFrame(_dp_rows), use_container_width=True)
+                        if _dp_r["correlations"].get("high_correlations"):
+                            st.markdown("**High Correlations Detected:**")
+                            st.dataframe(pd.DataFrame(_dp_r["correlations"]["high_correlations"]), use_container_width=True)
+
+            # DQ Advanced chatbot at bottom of Tab 2
+            st.markdown("---")
+            render_tab_chatbot(
+                tab_key="dq_advanced",
+                system_prompt=DQ_ENGINE_PROMPT,
+                placeholder="Ask about quality scores, DAMA dimensions, Benford's Law, SPC, remediation strategies...",
+                accent_color="#3B82F6",
+                tab_label="Data Quality Intelligence",
+                height=380,
+            )
+
 
 # ============================================================
 # TAB 3: Dashboard Rationalization
@@ -4134,5 +4335,136 @@ with tab3:
                 scrolling=True,
             )
 
+    # Tab 3 -- Rationalization chatbot
+    st.markdown("---")
+    render_tab_chatbot(
+        tab_key="rationalization",
+        system_prompt=RATIONALIZATION_EXPERT_PROMPT,
+        placeholder="Ask about portfolio scoring, keep/consolidate/retire decisions, governance frameworks...",
+        accent_color="#F59E0B",
+        tab_label="Portfolio Rationalization Intelligence",
+        context_injector=lambda: (
+            f"Current portfolio: {len(st.session_state.get('dr_inventory', pd.DataFrame()))} dashboards analyzed"
+            if st.session_state.get("dr_inventory") is not None
+            else None
+        ),
+        height=400,
+    )
+
+
 with tab4:
     render_data_modeling()
+
+    # ============================================
+    # TAB 4 -- Dimensional Modeling Assistant
+    # ============================================
+    st.markdown("---")
+    _safe_html(tab_header(
+        "Dimensional Modeling Assistant",
+        "Kimball -- Data Vault 2.0 -- Star Schema -- SQL Analyzer",
+        accent="#A78BFA",
+        icon="//",
+    ), "Dimensional Modeling Assistant")
+
+    modeling_tab1, modeling_tab2, modeling_tab3 = st.tabs([
+        "Star Schema (Kimball)", "Data Vault 2.0", "SQL Analyzer",
+    ])
+
+    with modeling_tab1:
+        _mod_df = None
+        if "multi_session" in st.session_state and st.session_state.multi_session:
+            try:
+                _mod_df = st.session_state.multi_session.get_primary_dataframe()
+            except Exception:
+                pass
+
+        if _mod_df is not None and len(_mod_df) > 0:
+            _mod_tbl = st.text_input("Fact table name", value="fct_transactions", key="kim_tbl")
+            if st.button("Infer Star Schema", type="primary", key="kim_run"):
+                from core.data_modeling_engine import infer_dimensional_model
+                with st.spinner("Analyzing data structure for dimensional model..."):
+                    _kim_r = infer_dimensional_model(_mod_df, _mod_tbl)
+
+                _km1, _km2, _km3 = st.columns(3)
+                _km1.metric("Measures (Facts)", len(_kim_r["fact_table"]["suggested_measures"]))
+                _km2.metric("Dimension Tables", len(_kim_r["dimension_tables"]))
+                _km3.metric("Model Type", _kim_r["model_type"].replace("_", " ").title())
+
+                for _kr in _kim_r["kimball_recommendations"]:
+                    st.warning(_kr)
+
+                with st.expander("Generated DDL -- Star Schema"):
+                    st.code(_kim_r["star_schema_ddl"], language="sql")
+        else:
+            st.info("Upload a data file to auto-infer a Kimball dimensional model.")
+
+    with modeling_tab2:
+        _dv_df = None
+        if "multi_session" in st.session_state and st.session_state.multi_session:
+            try:
+                _dv_df = st.session_state.multi_session.get_primary_dataframe()
+            except Exception:
+                pass
+
+        if _dv_df is not None and len(_dv_df) > 0:
+            _bk_candidates = [c for c in _dv_df.columns if any(kw in c.lower() for kw in ["id", "_key", "code", "number", "no"])]
+            _bk_cols = st.multiselect("Select business key columns for Hubs", _dv_df.columns.tolist(), default=_bk_candidates[:2], key="dv_bk")
+            if st.button("Generate Data Vault 2.0 Model", type="primary", key="dv_run") and _bk_cols:
+                from core.data_modeling_engine import generate_data_vault_model
+                with st.spinner("Generating Data Vault 2.0 skeleton..."):
+                    _dv_r = generate_data_vault_model(_dv_df, _bk_cols)
+
+                _dv1, _dv2 = st.columns(2)
+                _dv1.metric("Hubs", len(_dv_r["hubs"]))
+                _dv2.metric("Satellites", len(_dv_r["satellites"]))
+
+                for _hub in _dv_r["hubs"]:
+                    with st.expander(f"Hub: {_hub['hub_name']}"):
+                        st.code(_hub["ddl"], language="sql")
+                for _sat in _dv_r["satellites"]:
+                    with st.expander(f"Satellite: {_sat['sat_name']}"):
+                        st.code(_sat["ddl"], language="sql")
+
+                st.markdown("**Data Vault Best Practices:**")
+                for _dvr in _dv_r["recommendations"]:
+                    st.info(_dvr)
+        else:
+            st.info("Upload a data file to generate a Data Vault model.")
+
+    with modeling_tab3:
+        _sql_input = st.text_area("Paste SQL to analyze", height=200, placeholder="SELECT * FROM sales JOIN customers ON ...", key="sql_in")
+        if st.button("Analyze SQL", type="primary", key="sql_run") and _sql_input:
+            from core.data_modeling_engine import analyze_sql
+            _sql_r = analyze_sql(_sql_input)
+
+            if _sql_r.get("issues"):
+                for _si in _sql_r["issues"]:
+                    _sev = _si.get("severity", "info")
+                    if _sev == "error":
+                        st.error(f"[ERROR] {_si['issue']}")
+                    elif _sev == "warning":
+                        st.warning(f"[WARN] {_si['issue']}")
+                    else:
+                        st.info(f"[INFO] {_si['issue']}")
+            else:
+                st.success("No SQL anti-patterns detected")
+
+            if _sql_r.get("suggestions"):
+                st.markdown("**Optimization suggestions:**")
+                for _ss in _sql_r["suggestions"]:
+                    st.info(_ss)
+
+            _sq1, _sq2 = st.columns(2)
+            _sq1.metric("Complexity Score", f"{_sql_r.get('complexity_score', 0):.1f}/10")
+            _sq2.metric("JOIN Count", _sql_r.get("join_count", 0))
+
+    # Data Modeler Chatbot
+    st.markdown("---")
+    render_tab_chatbot(
+        tab_key="modeler",
+        system_prompt=MODELER_EXPERT_PROMPT,
+        placeholder="Ask about Kimball vs Data Vault, star schema design, DAX semantic models, SCD types...",
+        accent_color="#A78BFA",
+        tab_label="Data Architecture Intelligence",
+        height=450,
+    )

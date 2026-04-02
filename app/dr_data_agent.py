@@ -2025,9 +2025,14 @@ class DrDataAgent:
         if self.tableau_spec:
             ws_count = len(self.tableau_spec.get("worksheets", []))
             db_count = len(self.tableau_spec.get("dashboards", []))
+            cf_count = len(self.tableau_spec.get("calculated_fields", []))
             context_parts.append(
                 f"[SYSTEM: Tableau workbook parsed: {ws_count} worksheets, "
-                f"{db_count} dashboards. Structure available for migration.]"
+                f"{db_count} dashboards, {cf_count} calculated fields. "
+                f"You CAN build dashboards and Power BI projects from this. "
+                f"Synthetic data will be generated automatically if needed. "
+                f"Do NOT ask the user to upload data -- just call the tools directly. "
+                f"Do NOT say you need data or that data is missing.]"
             )
 
         if self.snowflake_tables:

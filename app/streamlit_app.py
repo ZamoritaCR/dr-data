@@ -1393,20 +1393,24 @@ with tab1:
             _has_context = _data_ctx or _tableau_ctx
             try:
                 if _agent and _agent.client and _has_context:
+                    _has_data = ws.get("data_preview") is not None
                     _react_prompt = (
                         f"The user just uploaded: {name_str}\n\n"
-                        f"{_data_ctx or '(No tabular data extracted yet -- Tableau .hyper format)'}"
+                        f"{_data_ctx or '(No tabular data extracted -- Tableau .hyper format. I will generate synthetic data automatically when building.)'}"
                         f"{_tableau_ctx}\n\n"
-                        f"React as Dr. Data in 2-4 sentences:\n"
-                        f"1. Tell them what you see in THIS specific file -- "
-                        f"reference worksheet names, dashboard names, column names, anything specific\n"
-                        f"2. Tell them what you would build with it and why -- "
-                        f"be opinionated about the best approach\n"
-                        f"3. If this is a Tableau file, mention you can convert it to Power BI "
-                        f"or build a fresh interactive dashboard from it\n"
-                        f"Do NOT give a generic menu. Do NOT say 'What would you like me to build?' "
-                        f"Do NOT list capabilities. Show you already understand their data. "
-                        f"Be direct and confident."
+                        f"React as Dr. Data in 2-3 SHORT sentences:\n"
+                        f"1. One sentence about what you see in THIS specific file -- "
+                        f"reference actual worksheet or dashboard names\n"
+                        f"2. One sentence telling them to just say what they want -- "
+                        f"'say the word and I will build it' or 'just tell me what you want to see'\n\n"
+                        f"CRITICAL RULES:\n"
+                        f"- Do NOT say you need data or ask them to upload anything else. "
+                        f"{'You have the data.' if _has_data else 'You will generate synthetic data automatically.'}\n"
+                        f"- Do NOT say 'I am going to' or 'Let me' -- you are not doing anything yet. "
+                        f"Wait for their instruction.\n"
+                        f"- Do NOT promise specific charts or views -- wait for them to ask.\n"
+                        f"- Do NOT list capabilities or say 'I can create X, Y, Z'.\n"
+                        f"- Keep it to 2-3 sentences MAX. Be punchy, not verbose."
                     )
                     from config.prompts import DR_DATA_SYSTEM_PROMPT
                     _react_parts = []

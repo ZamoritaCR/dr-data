@@ -88,17 +88,23 @@ Output ONLY the JSON. Nothing else."""
             model="claude-haiku-4-5-20251001",
             max_tokens=50,
             temperature=0,
+            system="You are a JSON classifier. Output ONLY a JSON object. No text. No explanation.",
             messages=[{"role": "user", "content": prompt}],
         )
         raw = response.content[0].text.strip()
-        # Parse JSON
-        if raw.startswith("{"):
-            result = json.loads(raw)
-            return {
-                "intent": result.get("intent", CHAT),
-                "confidence": 0.95,
-                "details": "",
-            }
+        # Extract JSON from response (may be wrapped in text)
+        import re as _re
+        json_match = _re.search(r'\{[^}]+\}', raw)
+        if json_match:
+            result = json.loads(json_match.group())
+            intent = result.get("intent", CHAT)
+            if intent in (BUILD_DASHBOARD, BUILD_POWERBI, BUILD_PDF,
+                          BUILD_PPTX, BUILD_WORD, BUILD_ALL, CHAT, ANALYZE):
+                return {
+                    "intent": intent,
+                    "confidence": 0.95,
+                    "details": "haiku",
+                }
     except Exception as e:
         print(f"[INTENT] Classification failed: {e}")
 
@@ -106,13 +112,30 @@ Output ONLY the JSON. Nothing else."""
 
 
 def _keyword_fallback(msg: str) -> dict:
-    """Ultra-fast keyword fallback if LLM is unavailable."""
+    """Keyword fallback with fuzzy typo tolerance."""
     lower = msg.lower()
+
+    # Split into words for fuzzy matching
+    words = set(lower.split())
+
+    def _fuzzy_match(target, threshold=0.75):
+        """Check if any word in the message is close to target."""
+        if target in lower:
+            return True
+        for w in words:
+            if len(w) >= 3 and len(target) >= 3:
+                # Simple character overlap ratio
+                common = sum(1 for c in w if c in target)
+                ratio = common / max(len(w), len(target))
+                if ratio >= threshold and abs(len(w) - len(target)) <= 2:
+                    return True
+        return False
+
     if any(k in lower for k in ("power bi", "powerbi", "pbi", "pbip", "pbix")):
         return {"intent": BUILD_POWERBI, "confidence": 0.9, "details": "keyword"}
-    if any(k in lower for k in ("dashboard", "html", "interactive", "visual", "chart")):
+    if _fuzzy_match("dashboard") or any(k in lower for k in ("html", "interactive", "visual", "chart")):
         return {"intent": BUILD_DASHBOARD, "confidence": 0.8, "details": "keyword"}
-    if any(k in lower for k in ("pdf",)):
+    if "pdf" in lower:
         return {"intent": BUILD_PDF, "confidence": 0.8, "details": "keyword"}
     if any(k in lower for k in ("powerpoint", "pptx", "slides", "presentation", "deck")):
         return {"intent": BUILD_PPTX, "confidence": 0.8, "details": "keyword"}
@@ -125,6 +148,7 @@ def _keyword_fallback(msg: str) -> dict:
         "do it", "build it", "make it", "go ahead", "yes", "ok do",
         "another", "again", "redo", "different", "better", "surprise",
         "blow my mind", "out of this world", "something else",
+        "show me", "create", "generate", "produce", "make me",
     )):
         return {"intent": BUILD_DASHBOARD, "confidence": 0.6, "details": "followup_keyword"}
     return {"intent": CHAT, "confidence": 0.5, "details": "default"}

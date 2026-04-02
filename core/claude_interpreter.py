@@ -14,51 +14,26 @@ import anthropic
 # Allow imports from project root
 sys.path.insert(0, str(Path(__file__).parent.parent.resolve()))
 from config.settings import _get_secret
-from config.prompts import INTERPRETER_SYSTEM_PROMPT, EXPLANATION_SYSTEM_PROMPT
+from config.prompts import (
+    INTERPRETER_SYSTEM_PROMPT,
+    EXPLANATION_SYSTEM_PROMPT,
+    TABLEAU_MIGRATION_SYSTEM_PROMPT,
+)
 
 
 class ClaudeInterpreter:
-    """Send data profiles to an LLM, get back dashboard specifications.
+    """Send data profiles to Claude, get back dashboard specifications."""
 
-    LLM-agnostic: tries Claude first, falls back to OpenAI if unavailable.
-    """
-
-    MODEL = "claude-sonnet-4-20250514"
-    OPENAI_MODEL = "gpt-4o"
-    MAX_TOKENS = 8192
+    MODEL = "claude-opus-4-20250514"
+    MAX_TOKENS = 16384
     MAX_RETRIES = 3
 
     def __init__(self):
-        self.client = None
-        self._claude_available = False
-        self._openai_client = None
-
         api_key = _get_secret("ANTHROPIC_API_KEY")
-        if api_key:
-            try:
-                self.client = anthropic.Anthropic(api_key=api_key)
-                self._claude_available = True
-                print(f"[OK] Claude interpreter ready (model: {self.MODEL})")
-            except Exception as e:
-                print(f"[WARN] Claude interpreter init failed: {e}")
-        else:
-            print("[INFO] ANTHROPIC_API_KEY not set -- interpreter using fallback.")
-
-        # OpenAI fallback for interpretation
-        openai_key = _get_secret("OPENAI_API_KEY")
-        if openai_key:
-            try:
-                from openai import OpenAI
-                self._openai_client = OpenAI(api_key=openai_key)
-                print(f"[OK] Interpreter OpenAI fallback ready ({self.OPENAI_MODEL})")
-            except Exception as e:
-                print(f"[WARN] Interpreter OpenAI fallback failed: {e}")
-
-        if not self._claude_available and not self._openai_client:
-            raise RuntimeError(
-                "No LLM available for dashboard interpretation. "
-                "Set ANTHROPIC_API_KEY or OPENAI_API_KEY."
-            )
+        if not api_key:
+            raise RuntimeError("ANTHROPIC_API_KEY not set.")
+        self.client = anthropic.Anthropic(api_key=api_key)
+        print(f"[OK] Claude interpreter ready (model: {self.MODEL})")
 
     # ------------------------------------------------------------------ #
     #  Main entry point                                                    #
@@ -79,8 +54,8 @@ class ClaudeInterpreter:
 
         print(f"\n[CALL] Sending request to Claude ({self.MODEL})...")
         print(f"       Request: {user_request[:80]}...")
-        print(f"       Profile: {data_profile.get('table_name', 'Data')} "
-              f"({data_profile.get('row_count', 0)} rows, {data_profile.get('column_count', 0)} cols)")
+        print(f"       Profile: {data_profile['table_name']} "
+              f"({data_profile['row_count']} rows, {data_profile['column_count']} cols)")
 
         # Attempt with retries
         raw_text = None
@@ -131,6 +106,87 @@ class ClaudeInterpreter:
         )
 
     # ------------------------------------------------------------------ #
+    #  Tableau migration entry point                                       #
+    # ------------------------------------------------------------------ #
+
+    def interpret_migration(self, migration_prompt, data_profile):
+        """Generate a dashboard spec for a Tableau-to-PBI migration.
+
+        Uses a migration-specific system prompt that enforces 1:1 visual
+        mapping, page count fidelity, and layout preservation.
+
+        Args:
+            migration_prompt: Structured migration intent string from
+                              visual_intent.format_intent_for_prompt().
+            data_profile: dict from DataAnalyzer.analyze().
+
+        Returns:
+            dict: Parsed and validated dashboard specification.
+        """
+        profile_json = json.dumps(data_profile, indent=2, default=str)
+        table_name = data_profile.get("table_name", "Data")
+
+        user_message = (
+            f"{migration_prompt}\n\n"
+            f"DATASET PROFILE:\n{profile_json}\n\n"
+            f"Generate the complete dashboard specification JSON. "
+            f"Use ONLY columns that exist in the dataset profile above. "
+            f"For DAX measures, reference the table as '{table_name}'."
+        )
+
+        column_names = self._extract_column_names(data_profile)
+
+        print(f"\n[CALL] Sending migration request to Claude ({self.MODEL})...")
+        print(f"       Profile: {data_profile['table_name']} "
+              f"({data_profile['row_count']} rows, {data_profile['column_count']} cols)")
+
+        raw_text = None
+        for attempt in range(1, self.MAX_RETRIES + 1):
+            try:
+                raw_text = self._call_claude(
+                    TABLEAU_MIGRATION_SYSTEM_PROMPT, user_message
+                )
+                spec = self._parse_json(raw_text)
+                warnings = self._validate_columns(spec, column_names)
+                if warnings:
+                    for w in warnings:
+                        print(f"       [WARN] {w}")
+                print(f"[OK] Migration spec received on attempt {attempt}")
+                return spec
+
+            except json.JSONDecodeError as e:
+                print(f"       [RETRY {attempt}/{self.MAX_RETRIES}] "
+                      f"JSON parse failed: {e}")
+                if attempt < self.MAX_RETRIES and raw_text:
+                    raw_text = self._self_heal(raw_text, str(e))
+                    try:
+                        spec = self._parse_json(raw_text)
+                        warnings = self._validate_columns(spec, column_names)
+                        if warnings:
+                            for w in warnings:
+                                print(f"       [WARN] {w}")
+                        print(f"[OK] Migration spec received (self-healed)")
+                        return spec
+                    except json.JSONDecodeError:
+                        pass
+                if attempt < self.MAX_RETRIES:
+                    wait = 2 ** attempt
+                    print(f"       Waiting {wait}s before retry...")
+                    time.sleep(wait)
+
+            except anthropic.APIError as e:
+                print(f"       [RETRY {attempt}/{self.MAX_RETRIES}] "
+                      f"API error: {e}")
+                if attempt < self.MAX_RETRIES:
+                    wait = 2 ** attempt
+                    print(f"       Waiting {wait}s before retry...")
+                    time.sleep(wait)
+
+        raise RuntimeError(
+            f"Failed to get valid migration spec after {self.MAX_RETRIES} attempts"
+        )
+
+    # ------------------------------------------------------------------ #
     #  Explanation generation                                              #
     # ------------------------------------------------------------------ #
 
@@ -171,68 +227,34 @@ class ClaudeInterpreter:
             f"For DAX measures, reference the table as '{table_name}'."
         )
 
-    def _call_llm(self, system_prompt, user_message):
-        """Make an LLM API call, trying Claude first then OpenAI fallback."""
-        # Try Claude
-        if self._claude_available and self.client:
-            try:
-                t0 = time.time()
-                response = self.client.messages.create(
-                    model=self.MODEL,
-                    max_tokens=self.MAX_TOKENS,
-                    temperature=0,
-                    system=system_prompt,
-                    messages=[{"role": "user", "content": user_message}],
-                )
-                elapsed = time.time() - t0
-                if not response.content or not hasattr(response.content[0], 'text'):
-                    raise RuntimeError("Empty or malformed response from Claude")
-                text = response.content[0].text
-                tokens_in = response.usage.input_tokens
-                tokens_out = response.usage.output_tokens
-                print(f"       [Claude] {tokens_out} tokens out, "
-                      f"{tokens_in} tokens in, {elapsed:.1f}s")
-                return text
-            except Exception as e:
-                err_str = str(e).lower()
-                if "400" in err_str or "403" in err_str or "limit" in err_str:
-                    # Intentionally disable Claude for the rest of this session
-                    # to avoid repeated failures on persistent errors (auth, rate limit).
-                    self._claude_available = False
-                    print(f"[WARN] Claude disabled for this session due to error: {str(e)[:100]}")
-                    print("       [Claude] Switching to OpenAI fallback.")
-                else:
-                    print(f"       [Claude] Error: {e}")
-
-        # Fallback to OpenAI
-        if self._openai_client:
-            try:
-                t0 = time.time()
-                response = self._openai_client.chat.completions.create(
-                    model=self.OPENAI_MODEL,
-                    max_tokens=self.MAX_TOKENS,
-                    temperature=0,
-                    response_format={"type": "json_object"},
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_message},
-                    ],
-                )
-                elapsed = time.time() - t0
-                text = response.choices[0].message.content
-                tokens_in = response.usage.prompt_tokens
-                tokens_out = response.usage.completion_tokens
-                print(f"       [OpenAI] {tokens_out} tokens out, "
-                      f"{tokens_in} tokens in, {elapsed:.1f}s")
-                return text
-            except Exception as e:
-                print(f"       [OpenAI] Error: {e}")
-
-        raise RuntimeError("All LLM engines failed for interpretation.")
-
     def _call_claude(self, system_prompt, user_message):
-        """Backward-compatible wrapper."""
-        return self._call_llm(system_prompt, user_message)
+        """Make a single Claude API call using streaming and return the text response.
+
+        Uses streaming to avoid the Anthropic API timeout for large Opus requests.
+        """
+        t0 = time.time()
+        collected_text = []
+        tokens_in = 0
+        tokens_out = 0
+
+        with self.client.messages.stream(
+            model=self.MODEL,
+            max_tokens=self.MAX_TOKENS,
+            temperature=0,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_message}],
+        ) as stream:
+            for text_chunk in stream.text_stream:
+                collected_text.append(text_chunk)
+            response = stream.get_final_message()
+            tokens_in = response.usage.input_tokens
+            tokens_out = response.usage.output_tokens
+
+        elapsed = time.time() - t0
+        text = "".join(collected_text)
+        print(f"       Response: {tokens_out} tokens out, "
+              f"{tokens_in} tokens in, {elapsed:.1f}s")
+        return text
 
     def _parse_json(self, raw_text):
         """Extract and parse JSON from Claude's response."""
@@ -261,7 +283,7 @@ class ClaudeInterpreter:
 
     def _extract_column_names(self, data_profile):
         """Get the set of all column names from the data profile."""
-        return {col.get("name", "") for col in data_profile.get("columns", [])}
+        return {col["name"] for col in data_profile.get("columns", [])}
 
     def _validate_columns(self, spec, valid_columns):
         """Check that all column references in the spec exist in the dataset.

@@ -267,31 +267,19 @@ TOOLS = [
 # ------------------------------------------------------------------ #
 
 class DrDataAgent:
-    """LLM-agnostic conversational agent with tool-calling for data analysis.
+    """Conversational Claude agent with tool-calling for data analysis."""
 
-    Engine priority: Claude -> OpenAI -> Gemini.
-    If one engine is unavailable or returns an error, the next is tried.
-    """
-
-    MODEL = "claude-sonnet-4-20250514"
-    OPENAI_CHAT_MODEL = "gpt-4o"
+    MODEL = "claude-opus-4-20250514"
     MAX_TOKENS = 8192
 
     def __init__(self):
-        # Claude (primary) -- optional, graceful if missing/blocked
-        self.client = None
-        self._claude_available = False
         api_key = _get_secret("ANTHROPIC_API_KEY")
-        if api_key:
-            try:
-                self.client = anthropic.Anthropic(api_key=api_key)
-                self._claude_available = True
-                print(f"[OK] Claude engine ready (model: {self.MODEL})")
-            except Exception as e:
-                print(f"[WARN] Claude init failed: {e}")
-        else:
-            print("[INFO] ANTHROPIC_API_KEY not set -- Claude disabled.")
-
+        if not api_key:
+            raise RuntimeError(
+                "ANTHROPIC_API_KEY not set. "
+                "Add it in Streamlit Cloud Secrets or your local .env file."
+            )
+        self.client = anthropic.Anthropic(api_key=api_key)
         self.messages = []
         self.analyzer = DeepAnalyzer()
         self.html_builder = HTMLDashboardBuilder()
@@ -335,14 +323,11 @@ class DrDataAgent:
 
         # OpenAI secondary engine (for large-context / data-heavy tasks)
         self.openai_client = None
-        self._openai_available = False
         openai_key = os.getenv("OPENAI_API_KEY") or _get_secret("OPENAI_API_KEY")
         if openai_key and _HAS_OPENAI:
             self.openai_client = _OpenAIClient(api_key=openai_key)
-            self._openai_available = True
-            print(f"[OK] OpenAI engine ready (model: {self.OPENAI_CHAT_MODEL})")
         elif not openai_key:
-            print("[INFO] OPENAI_API_KEY not set.")
+            print("[INFO] OPENAI_API_KEY not set -- using Claude for all requests.")
 
         # Gemini tertiary engine (large-context analysis, vision, failover)
         self.gemini_engine = None
@@ -351,21 +336,6 @@ class DrDataAgent:
             self.gemini_engine = GeminiEngine()
         except Exception as e:
             print(f"[INFO] Gemini engine not loaded: {e}")
-
-        # Validate at least one engine is available
-        engines = []
-        if self._claude_available:
-            engines.append("Claude")
-        if self._openai_available:
-            engines.append("OpenAI")
-        if self.gemini_engine and self.gemini_engine.is_available():
-            engines.append("Gemini")
-        if not engines:
-            raise RuntimeError(
-                "No AI engine available. Set at least one of: "
-                "ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY"
-            )
-        print(f"[OK] Dr. Data initialized -- engines: {', '.join(engines)}")
 
     def _fix_orphaned_tool_calls(self):
         """Ensure every assistant tool_use block has a matching tool_result.
@@ -436,132 +406,8 @@ class DrDataAgent:
 
             i += 1
 
-    def _call_claude_api(self, stream=False):
-        """Try calling Claude API. Returns response or None on failure.
-        Sets self._claude_available = False if the key is blocked (400/403).
-        """
-        if not self._claude_available or not self.client:
-            return None
-        try:
-            if stream:
-                return self.client.messages.stream(
-                    model=self.MODEL,
-                    max_tokens=self.MAX_TOKENS,
-                    temperature=0,
-                    system=DR_DATA_SYSTEM_PROMPT,
-                    tools=TOOLS,
-                    messages=self.messages,
-                    timeout=120.0,
-                )
-            else:
-                return self.client.messages.create(
-                    model=self.MODEL,
-                    max_tokens=self.MAX_TOKENS,
-                    temperature=0,
-                    system=DR_DATA_SYSTEM_PROMPT,
-                    tools=TOOLS,
-                    messages=self.messages,
-                    timeout=120.0,
-                )
-        except anthropic.APIStatusError as e:
-            # 400 = spending limit, 403 = forbidden -- disable Claude for session
-            if e.status_code in (400, 403):
-                self._claude_available = False
-                print(f"[WARN] Claude blocked ({e.status_code}): {e.message}")
-                print("[INFO] Falling back to OpenAI/Gemini for this session.")
-            return None
-        except anthropic.RateLimitError:
-            return None
-        except Exception as e:
-            print(f"[WARN] Claude API error: {e}")
-            return None
-
-    def _call_openai_chat_api(self, user_message):
-        """Fallback: send conversation to OpenAI for a simple chat response.
-        No tool-calling -- returns a text-only response dict matching chat() format.
-        """
-        if not self._openai_available or not self.openai_client:
-            return None
-
-        # Build messages for OpenAI from conversation history
-        oai_messages = [{"role": "system", "content": DR_DATA_SYSTEM_PROMPT}]
-        for msg in self.messages:
-            role = msg["role"]
-            content = msg.get("content", "")
-            if isinstance(content, str):
-                oai_messages.append({"role": role, "content": content})
-            elif isinstance(content, list):
-                # Flatten tool_use/tool_result blocks into text
-                text_parts = []
-                for block in content:
-                    if isinstance(block, dict):
-                        if block.get("type") == "text":
-                            text_parts.append(block.get("text", ""))
-                        elif block.get("type") == "tool_result":
-                            text_parts.append(
-                                f"[Tool result]: {block.get('content', '')[:500]}"
-                            )
-                        elif block.get("type") == "tool_use":
-                            text_parts.append(
-                                f"[Called tool: {block.get('name', '?')}]"
-                            )
-                if text_parts:
-                    oai_messages.append({
-                        "role": role if role != "assistant" else "assistant",
-                        "content": "\n".join(text_parts),
-                    })
-
-        try:
-            resp = self.openai_client.chat.completions.create(
-                model=self.OPENAI_CHAT_MODEL,
-                max_tokens=self.MAX_TOKENS,
-                temperature=0,
-                messages=oai_messages,
-                timeout=120.0,
-            )
-            text = resp.choices[0].message.content or ""
-            self.trace.log_llm_call(
-                "openai", self.OPENAI_CHAT_MODEL,
-                user_message[:200], text[:200],
-            )
-            print(f"[OK] OpenAI responded ({resp.usage.completion_tokens} tokens)")
-            return text
-        except Exception as e:
-            print(f"[WARN] OpenAI chat fallback failed: {e}")
-            return None
-
-    def _call_gemini_chat_fallback(self, user_message):
-        """Last resort: send to Gemini chat."""
-        if not self.gemini_engine or not self.gemini_engine.is_available():
-            return None
-
-        # Build a simple text history
-        history = []
-        for msg in self.messages[:-1]:  # exclude last (current) message
-            content = msg.get("content", "")
-            if isinstance(content, str) and content:
-                history.append({
-                    "role": msg["role"],
-                    "content": content,
-                })
-
-        result = self.gemini_engine.chat(
-            DR_DATA_SYSTEM_PROMPT, user_message,
-            conversation_history=history,
-        )
-        if result:
-            self.trace.log_llm_call(
-                "gemini", "gemini-2.0-flash",
-                user_message[:200], result[:200],
-            )
-            print(f"[OK] Gemini responded ({len(result)} chars)")
-        return result
-
     def chat(self, user_message, progress_callback=None):
         """Send a message and get Dr. Data's response.
-
-        LLM-agnostic: tries Claude (with tool-calling), falls back to
-        OpenAI, then Gemini if Claude is unavailable or blocked.
 
         Args:
             user_message: The user's text message.
@@ -585,70 +431,51 @@ class DrDataAgent:
             if progress_callback:
                 progress_callback(msg)
 
-        # If Claude is not available, go straight to fallback
-        if not self._claude_available:
-            _progress("Dr. Data is thinking (OpenAI)...")
-            text = self._call_openai_chat_api(user_message)
-            if text is None:
-                _progress("Dr. Data is thinking (Gemini)...")
-                text = self._call_gemini_chat_fallback(user_message)
-            if text is None:
-                if self.messages and self.messages[-1]["role"] == "user":
-                    self.messages.pop()
-                return {
-                    "text": "All AI engines are currently unavailable. "
-                            "Check your API keys (ANTHROPIC, OPENAI, or GEMINI).",
-                    "files": [], "profile": None, "spec": None,
-                }
-            self.messages.append({"role": "assistant", "content": [
-                {"type": "text", "text": text}
-            ]})
-            return {
-                "text": text,
-                "files": self.generated_files,
-                "profile": self.data_profile,
-                "spec": self.dashboard_spec,
-            }
-
-        # Claude available -- use tool-calling loop
+        # Loop for tool-calling conversation
         max_iterations = 10
         for iteration in range(max_iterations):
             _progress(f"Dr. Data is thinking... (step {iteration + 1})")
 
-            # Try Claude with retry
+            # Retry loop for API resilience
             response = None
             last_err = None
             for attempt in range(3):
-                response = self._call_claude_api(stream=False)
-                if response is not None:
+                try:
+                    response = self.client.messages.create(
+                        model=self.MODEL,
+                        max_tokens=self.MAX_TOKENS,
+                        temperature=0,
+                        system=DR_DATA_SYSTEM_PROMPT,
+                        tools=TOOLS,
+                        messages=self.messages,
+                        timeout=120.0,
+                    )
                     break
-                # If Claude got disabled (400/403), break immediately
-                if not self._claude_available:
-                    break
-                if attempt < 2:
-                    time.sleep(2)
+                except anthropic.RateLimitError as e:
+                    last_err = e
+                    if attempt < 2:
+                        time.sleep(2)
+                except anthropic.APIError as e:
+                    last_err = e
+                    if attempt < 2:
+                        time.sleep(2)
+                except Exception as e:
+                    last_err = e
+                    if attempt < 2:
+                        time.sleep(2)
 
-            # Claude failed -- try fallback engines
             if response is None:
-                _progress("Switching to backup engine...")
-                text = self._call_openai_chat_api(user_message)
-                if text is None:
-                    text = self._call_gemini_chat_fallback(user_message)
-                if text is None:
-                    if self.messages and self.messages[-1]["role"] == "user":
-                        self.messages.pop()
-                    return {
-                        "text": "All AI engines failed. Check API keys and limits.",
-                        "files": [], "profile": None, "spec": None,
-                    }
-                self.messages.append({"role": "assistant", "content": [
-                    {"type": "text", "text": text}
-                ]})
+                # All retries failed -- clean up and return friendly error
+                if self.messages and self.messages[-1]["role"] == "user":
+                    self.messages.pop()
                 return {
-                    "text": text,
-                    "files": self.generated_files,
-                    "profile": self.data_profile,
-                    "spec": self.dashboard_spec,
+                    "text": (
+                        f"Hit a snag reaching my analysis engine. "
+                        f"Error: {last_err}. Give me a second and try again."
+                    ),
+                    "files": [],
+                    "profile": None,
+                    "spec": None,
                 }
 
             # Process response blocks -- convert to plain dicts for re-serialization
@@ -730,36 +557,15 @@ class DrDataAgent:
         }
 
     def chat_stream(self, user_message, progress_callback=None):
-        """Streaming version of chat() -- yields text chunks.
+        """Streaming version of chat() -- yields text chunks as Claude generates.
 
-        LLM-agnostic: tries Claude streaming, falls back to OpenAI/Gemini
-        (non-streaming, yielded as a single chunk).
+        Use with st.write_stream() in Streamlit for a live typing effect.
         Tool-calling rounds run synchronously; the final text response streams.
         """
         self.messages.append({"role": "user", "content": user_message})
         self.generated_files = []
         self._progress_callback = progress_callback
         self._fix_orphaned_tool_calls()
-
-        # If Claude not available, use fallback immediately
-        if not self._claude_available:
-            if progress_callback:
-                progress_callback("Dr. Data is thinking (OpenAI)...")
-            text = self._call_openai_chat_api(user_message)
-            if text is None:
-                if progress_callback:
-                    progress_callback("Dr. Data is thinking (Gemini)...")
-                text = self._call_gemini_chat_fallback(user_message)
-            if text is None:
-                if self.messages and self.messages[-1]["role"] == "user":
-                    self.messages.pop()
-                yield "All AI engines are currently unavailable. Check your API keys."
-                return
-            self.messages.append({"role": "assistant", "content": [
-                {"type": "text", "text": text}
-            ]})
-            yield text
-            return
 
         tool_labels = {
             "analyze_data": "Analyzing your data...",
@@ -775,8 +581,9 @@ class DrDataAgent:
         max_iterations = 10
         for iteration in range(max_iterations):
 
-            # Try Claude streaming
+            # Retry loop
             response = None
+            last_err = None
             for attempt in range(3):
                 try:
                     with self.client.messages.stream(
@@ -792,37 +599,26 @@ class DrDataAgent:
                             yield text
                         response = stream.get_final_message()
                     break
-                except anthropic.APIStatusError as e:
-                    if e.status_code in (400, 403):
-                        self._claude_available = False
-                        print(f"[WARN] Claude blocked ({e.status_code}), switching engines.")
-                        break
+                except anthropic.RateLimitError as e:
+                    last_err = e
                     if attempt < 2:
                         time.sleep(2)
-                except anthropic.RateLimitError:
+                except anthropic.APIError as e:
+                    last_err = e
                     if attempt < 2:
                         time.sleep(2)
                 except Exception as e:
-                    print(f"[WARN] Claude stream error: {e}")
+                    last_err = e
                     if attempt < 2:
                         time.sleep(2)
 
-            # Claude failed or got blocked -- fallback
             if response is None:
-                if progress_callback:
-                    progress_callback("Switching to backup engine...")
-                text = self._call_openai_chat_api(user_message)
-                if text is None:
-                    text = self._call_gemini_chat_fallback(user_message)
-                if text is None:
-                    if self.messages and self.messages[-1]["role"] == "user":
-                        self.messages.pop()
-                    yield "\n\nAll AI engines failed. Check API keys and limits."
-                    return
-                self.messages.append({"role": "assistant", "content": [
-                    {"type": "text", "text": text}
-                ]})
-                yield text
+                if self.messages and self.messages[-1]["role"] == "user":
+                    self.messages.pop()
+                yield (
+                    f"\n\nHit a snag reaching the analysis engine. "
+                    f"Error: {last_err}. Give me a second and try again."
+                )
                 return
 
             # Store assistant message
@@ -1366,29 +1162,36 @@ class DrDataAgent:
         Returns:
             dict with "content", "downloads", "scores"
         """
+        self._progress_callback = progress_callback
+
         # Auto-detect uploaded files the agent doesn't know about yet
         if uploaded_files and self.dataframe is None:
             for name, info in uploaded_files.items():
                 path = info.get("path", "")
-                if path and os.path.exists(path):
-                    self.data_file_path = path
-                    self.data_path = path
-                    ext = info.get("ext", path.rsplit(".", 1)[-1].lower())
-                    try:
-                        if ext == "csv":
-                            self.dataframe = pd.read_csv(path)
-                        elif ext in ("xlsx", "xls"):
-                            from app.file_handler import load_excel_smart
-                            self.dataframe, self.sheet_name = load_excel_smart(path)
-                        elif ext == "parquet":
-                            self.dataframe = pd.read_parquet(path)
-                        elif ext == "json":
-                            self.dataframe = pd.read_json(path)
-                        if self.dataframe is not None and self.data_profile is None:
+                if not path or not os.path.exists(path):
+                    continue
+                ext = info.get("ext", path.rsplit(".", 1)[-1].lower())
+                # Skip structure-only files -- look for actual data files
+                if ext in ("twb", "twbx", "wid", "yxmd", "yxwz", "yxmc", "yxzp"):
+                    continue
+                try:
+                    if ext == "csv":
+                        self.dataframe = pd.read_csv(path)
+                    elif ext in ("xlsx", "xls"):
+                        from app.file_handler import load_excel_smart
+                        self.dataframe, self.sheet_name = load_excel_smart(path)
+                    elif ext == "parquet":
+                        self.dataframe = pd.read_parquet(path)
+                    elif ext == "json":
+                        self.dataframe = pd.read_json(path)
+                    if self.dataframe is not None:
+                        self.data_file_path = path
+                        self.data_path = path
+                        if self.data_profile is None:
                             self.data_profile = self.analyzer.profile(self.dataframe)
-                    except Exception:
-                        pass
-                    break
+                        break
+                except Exception:
+                    pass
 
         # --- Export interception: handle deliverables before LLM ---
         msg_lower = user_message.lower()
@@ -1450,7 +1253,46 @@ class DrDataAgent:
             pass
 
         if is_export:
-            # Guard: need data first
+            print(f"[EXPORT] is_export=True. dataframe={self.dataframe is not None}, "
+                  f"tableau_spec={bool(self.tableau_spec)}, "
+                  f"session={bool(self.session)}")
+            # Guard: need data first -- but auto-generate if we have Tableau structure
+            if self.dataframe is None and self.tableau_spec:
+                self._report_progress(
+                    "No extractable data found in the Tableau file "
+                    "(uses .hyper format). Generating synthetic data "
+                    "from the workbook structure..."
+                )
+                try:
+                    from core.synthetic_data import generate_from_tableau_spec
+                    ws_count = len(self.tableau_spec.get("worksheets", []))
+                    cf_count = len(self.tableau_spec.get("calculated_fields", []))
+                    self._report_progress(
+                        f"Reading Tableau structure: {ws_count} worksheets, "
+                        f"{cf_count} calculated fields"
+                    )
+
+                    output_dir = str(PROJECT_ROOT / "output")
+                    df, csv_path, schema = generate_from_tableau_spec(
+                        self.tableau_spec,
+                        num_rows=2000,
+                        output_dir=output_dir,
+                    )
+                    self.dataframe = df
+                    self.data_file_path = csv_path
+                    self.data_path = csv_path
+
+                    self._report_progress(
+                        f"Synthetic data generated: {len(df)} rows x "
+                        f"{len(df.columns)} columns ({len(schema)} fields "
+                        f"inferred from Tableau structure). "
+                        f"Saved to {os.path.basename(csv_path)}"
+                    )
+                except Exception as synth_err:
+                    print(f"[SYNTH] Failed to generate synthetic data: {synth_err}")
+                    import traceback
+                    traceback.print_exc()
+
             if self.dataframe is None:
                 return {
                     "type": "chat",
@@ -2458,7 +2300,12 @@ class DrDataAgent:
         if self.dataframe is None:
             return json.dumps({"error": "No data available. Upload a data file first."})
 
-        self._report_progress("Step 1/5: Profiling data for Power BI...")
+        row_count = len(self.dataframe)
+        col_count = len(self.dataframe.columns)
+        self._report_progress(
+            f"Profiling data: {row_count:,} rows x {col_count} columns -- "
+            f"detecting column types, distributions, and relationships"
+        )
 
         # Use DataAnalyzer (not DeepAnalyzer) for the PBI pipeline --
         # ClaudeInterpreter expects table_name, column semantic types, etc.
@@ -2479,23 +2326,120 @@ class DrDataAgent:
 
         pbi_profile = pbi_analyzer.analyze(self.dataframe, table_name=table_name)
 
+        n_measures = sum(
+            1 for c in pbi_profile.get("columns", [])
+            if c.get("semantic_type") == "measure"
+        )
+        n_dims = col_count - n_measures
+        self._report_progress(
+            f"Data profiled: {n_dims} dimensions, {n_measures} measures, "
+            f"quality score {pbi_profile.get('data_quality_score', '?')}/100"
+        )
+
         try:
+            # -- REQUIREMENTS CONTRACT (runs before any LLM calls) --
+            from core.requirements_contract import (
+                build_contract, validate_contract, enforce_contract,
+                format_contract_for_prompt,
+            )
+
+            tableau_wb_for_contract = None
+            if self.tableau_spec:
+                try:
+                    from core.tableau_extractor import extract_workbook
+                    # Try to extract rich spec; fall back to None
+                    # (the multi_file_handler may have stored a simpler dict)
+                    tableau_wb_for_contract = extract_workbook(
+                        self.tableau_spec
+                    ) if isinstance(self.tableau_spec, (str, bytes)) else None
+                except Exception:
+                    pass
+
+            contract = build_contract(
+                user_request=request,
+                tableau_wb=tableau_wb_for_contract,
+                source_file=os.path.basename(self.data_file_path or ""),
+                data_columns=list(self.dataframe.columns) if self.dataframe is not None else [],
+            )
+
+            contract_errors = validate_contract(contract)
+            if contract_errors:
+                print(f"[CONTRACT] Validation warnings: {contract_errors}")
+
+            contract_prompt = format_contract_for_prompt(contract)
+
+            self._report_progress(
+                f"Requirements contract built: {contract.page_count} page(s), "
+                f"{len(contract.visuals)} visuals, "
+                f"{len(contract.top_filters)} slicers, "
+                f"{len(contract.manual_review_items)} items for review"
+            )
+
             # Step 2: Claude interprets request -> dashboard spec
             from core.claude_interpreter import ClaudeInterpreter
             interpreter = ClaudeInterpreter()
 
             if self.tableau_spec:
                 # --- TABLEAU MIGRATION PATH ---
+                ws_count = len(self.tableau_spec.get("worksheets", []))
+                db_count = len(self.tableau_spec.get("dashboards", []))
+                cf_count = len(self.tableau_spec.get("calculated_fields", []))
                 self._report_progress(
-                    "Step 2/5: Claude is translating your Tableau "
-                    "workbook to Power BI..."
+                    f"Mapping Tableau structure: {ws_count} worksheets, "
+                    f"{db_count} dashboards, {cf_count} calculated fields "
+                    f"-- building migration intent"
                 )
-                translate_request = self._build_tableau_translate_request(
-                    request, table_name
+
+                # Build structured migration intent
+                from core.visual_intent import (
+                    extract_migration_intent, format_intent_for_prompt,
                 )
-                dashboard_spec = interpreter.interpret(
+                migration_intent = extract_migration_intent(
+                    self.tableau_spec, request
+                )
+
+                n_pages = len(migration_intent.pages)
+                n_visuals = sum(len(p.visuals) for p in migration_intent.pages)
+                n_warnings = len(migration_intent.warnings)
+                self._report_progress(
+                    f"Migration plan ready: {n_pages} pages, "
+                    f"{n_visuals} visuals mapped to Power BI equivalents"
+                    + (f", {n_warnings} compatibility warnings" if n_warnings else "")
+                )
+
+                self._report_progress(
+                    "Claude Opus 4 is translating Tableau visuals, "
+                    "DAX measures, and layout to Power BI format -- "
+                    "this takes 15-30 seconds"
+                )
+
+                translate_request = format_intent_for_prompt(
+                    migration_intent, table_name
+                )
+
+                # Append DAX mapping reference + contract
+                translate_request += (
+                    "\n\n" + self._TABLEAU_DAX_MAP.replace(
+                        "TableName", table_name
+                    )
+                    + "\n\n" + contract_prompt
+                )
+
+                dashboard_spec = interpreter.interpret_migration(
                     translate_request, pbi_profile
                 )
+
+                # Enforce contract on LLM output
+                dashboard_spec, contract_violations = enforce_contract(
+                    contract, dashboard_spec
+                )
+                if contract_violations:
+                    self._report_progress(
+                        f"Contract enforcement: {len(contract_violations)} "
+                        f"correction(s) applied to LLM output"
+                    )
+                    for cv in contract_violations:
+                        print(f"[CONTRACT FIX] {cv}")
 
                 # Enrich spec with Tableau metadata for downstream stages
                 dashboard_spec["source"] = "tableau_migration"
@@ -2508,13 +2452,31 @@ class DrDataAgent:
                 dashboard_spec["tableau_calcs"] = (
                     self.tableau_spec.get("calculated_fields", [])
                 )
+                dashboard_spec["migration_warnings"] = (
+                    dashboard_spec.get("migration_warnings", [])
+                    + migration_intent.warnings
+                )
             else:
                 # --- FRESH DESIGN PATH (CSV / Excel) ---
                 self._report_progress(
-                    "Step 2/5: Claude is designing your dashboard "
+                    "Claude Opus 4 is designing your dashboard "
                     "(pages, visuals, DAX measures)..."
                 )
-                dashboard_spec = interpreter.interpret(request, pbi_profile)
+                # Inject contract into the request
+                enriched_request = request + "\n\n" + contract_prompt
+                dashboard_spec = interpreter.interpret(enriched_request, pbi_profile)
+
+                # Enforce contract on LLM output
+                dashboard_spec, contract_violations = enforce_contract(
+                    contract, dashboard_spec
+                )
+                if contract_violations:
+                    self._report_progress(
+                        f"Contract enforcement: {len(contract_violations)} "
+                        f"correction(s) applied to LLM output"
+                    )
+                    for cv in contract_violations:
+                        print(f"[CONTRACT FIX] {cv}")
 
             self.dashboard_spec = dashboard_spec
 
@@ -2525,18 +2487,29 @@ class DrDataAgent:
             )
 
             # Step 3: OpenAI generates PBIP config (report layout + data model)
+            measure_count = len(dashboard_spec.get("measures", []))
             self._report_progress(
-                f"Step 3/5: GPT-4 is generating Power BI layout "
-                f"({page_count} pages, {visual_count} visuals)..."
+                f"GPT-4 is generating Power BI visual containers "
+                f"and TMDL data model -- {page_count} pages, "
+                f"{visual_count} visuals, {measure_count} DAX measures"
             )
             from core.openai_engine import OpenAIEngine
             engine = OpenAIEngine()
             config = engine.generate_pbip_config(dashboard_spec, pbi_profile)
 
+            sections = config.get("report_layout", {}).get("sections", [])
+            total_vc = sum(
+                len(s.get("visualContainers", [])) for s in sections
+            )
+            self._report_progress(
+                f"Layout generated: {len(sections)} pages with "
+                f"{total_vc} visual containers positioned on 1280x720 canvas"
+            )
+
             # Step 4: PBIPGenerator creates the actual project files
             self._report_progress(
-                "Step 4/5: Building Power BI project files "
-                "(visuals, TMDL model, themes)..."
+                "Writing Power BI project files: page layouts, "
+                "visual.json, TMDL model, DAX measures, theme..."
             )
             from generators.pbip_generator import PBIPGenerator
             output_dir = str(PROJECT_ROOT / "output")
@@ -2562,8 +2535,14 @@ class DrDataAgent:
             valid_measures = gen_result.get("valid_measures", [])
 
             # Step 5: Bundle data file + ZIP for download
+            valid_count = field_audit.get("valid", 0)
+            fixed_count = field_audit.get("fixed", 0)
+            removed_count = field_audit.get("removed", 0)
             self._report_progress(
-                "Step 5/5: Packaging Power BI project for download..."
+                f"PBIP project built: {gen_result.get('file_count', '?')} files, "
+                f"{len(valid_measures)} DAX measures validated. "
+                f"Field audit: {valid_count} valid, {fixed_count} auto-fixed, "
+                f"{removed_count} removed. Packaging ZIP..."
             )
 
             # Copy the data file into the project so the user has it
@@ -2656,6 +2635,38 @@ class DrDataAgent:
             # Log the full build context to trace logger
             self.trace.log("powerbi_build_summary", build_context)
 
+            # -- QA MANIFEST (mandatory) --
+            self._report_progress("Generating QA audit manifest...")
+            try:
+                from core.qa_manifest import build_manifest, save_manifest
+                qa_manifest = build_manifest(
+                    contract=locals().get("contract"),
+                    equivalency_results=None,  # TODO: wire equivalency engine
+                    build_context=build_context,
+                    dashboard_spec=dashboard_spec,
+                    field_audit=field_audit,
+                    contract_violations=locals().get("contract_violations", []),
+                    output_path=zip_path,
+                )
+                qa_paths = save_manifest(qa_manifest, self.output_dir)
+                self.generated_files.append(qa_paths["json"])
+                self.generated_files.append(qa_paths["markdown"])
+
+                must_verify = sum(
+                    1 for c in qa_manifest.qa_checklist
+                    if c.severity == "must_verify"
+                )
+                auto_fail = sum(
+                    1 for c in qa_manifest.qa_checklist
+                    if c.auto_result == "fail"
+                )
+                self._report_progress(
+                    f"QA manifest generated: {len(qa_manifest.qa_checklist)} checks "
+                    f"({must_verify} must-verify, {auto_fail} auto-fail)"
+                )
+            except Exception as qa_err:
+                print(f"[QA] Manifest generation failed: {qa_err}")
+
             return json.dumps({
                 "status": "success",
                 "file_path": zip_path,
@@ -2664,6 +2675,7 @@ class DrDataAgent:
                 "visuals": visual_count,
                 "measures": len(valid_measures),
                 "build_context": build_context,
+                "qa_manifest": qa_paths.get("markdown", "") if 'qa_paths' in dir() else "",
                 "instructions": (
                     f"Extract the ZIP to a folder, then double-click "
                     f"Open_Dashboard.bat -- it will set up the data "

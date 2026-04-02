@@ -1,0 +1,1118 @@
+{
+  "version": "18.1",
+  "worksheets": [
+    {
+      "name": "Sheet 1",
+      "mark_type": "automatic",
+      "mark_type_pbi": "clusteredBarChart",
+      "confidence": "exact",
+      "encoding": {
+        "shelf_rows": [
+          {
+            "name": "Category",
+            "raw_ref": "none:Category:nk",
+            "datatype": "string",
+            "role": "dimension",
+            "aggregation": "None",
+            "tableau_type": "nominal"
+          },
+          {
+            "name": "Sub-Category",
+            "raw_ref": "none:Sub-Category:nk",
+            "datatype": "string",
+            "role": "dimension",
+            "aggregation": "None",
+            "tableau_type": "nominal"
+          }
+        ],
+        "shelf_cols": [
+          {
+            "name": "Segment",
+            "raw_ref": "none:Segment:nk",
+            "datatype": "string",
+            "role": "dimension",
+            "aggregation": "None",
+            "tableau_type": "nominal"
+          },
+          {
+            "name": "Sales",
+            "raw_ref": "sum:Sales:qk",
+            "datatype": "string",
+            "role": "measure",
+            "aggregation": "Sum",
+            "tableau_type": "quantitative"
+          }
+        ],
+        "color": {
+          "name": "Profit",
+          "raw_ref": "sum:Profit:qk",
+          "datatype": "string",
+          "role": "measure",
+          "aggregation": "Sum",
+          "tableau_type": "quantitative"
+        },
+        "size": null,
+        "label": null,
+        "detail": [],
+        "tooltip": [],
+        "path": null,
+        "rows_expression": "([Sample - Superstore].[none:Category:nk] / [Sample - Superstore].[none:Sub-Category:nk])",
+        "cols_expression": "([Sample - Superstore].[none:Segment:nk] * [Sample - Superstore].[sum:Sales:qk])"
+      },
+      "filters": [],
+      "slices": [
+        "[Sample - Superstore].[none:Region:nk]",
+        "[Sample - Superstore].[yr:Order Date:ok]",
+        "[Sample - Superstore].[none:Ship Mode:nk]"
+      ],
+      "sorts": [
+        {
+          "dimension": "none:Sub-Category:nk",
+          "measure": "sum:Sales:qk",
+          "direction": "DESC",
+          "shelf": "rows"
+        }
+      ],
+      "datasource": "Sample - Superstore",
+      "columns_used": [
+        {
+          "name": "Category",
+          "raw_ref": "[Category]",
+          "datatype": "string",
+          "role": "dimension",
+          "aggregation": "",
+          "tableau_type": "nominal"
+        },
+        {
+          "name": "Order Date",
+          "raw_ref": "[Order Date]",
+          "datatype": "date",
+          "role": "dimension",
+          "aggregation": "",
+          "tableau_type": "ordinal"
+        },
+        {
+          "name": "Profit",
+          "raw_ref": "[Profit]",
+          "datatype": "real",
+          "role": "measure",
+          "aggregation": "",
+          "tableau_type": "quantitative"
+        },
+        {
+          "name": "Region",
+          "raw_ref": "[Region]",
+          "datatype": "string",
+          "role": "dimension",
+          "aggregation": "",
+          "tableau_type": "nominal"
+        },
+        {
+          "name": "Sales",
+          "raw_ref": "[Sales]",
+          "datatype": "real",
+          "role": "measure",
+          "aggregation": "",
+          "tableau_type": "quantitative"
+        },
+        {
+          "name": "Segment",
+          "raw_ref": "[Segment]",
+          "datatype": "string",
+          "role": "dimension",
+          "aggregation": "",
+          "tableau_type": "nominal"
+        },
+        {
+          "name": "Ship Mode",
+          "raw_ref": "[Ship Mode]",
+          "datatype": "string",
+          "role": "dimension",
+          "aggregation": "",
+          "tableau_type": "nominal"
+        },
+        {
+          "name": "Sub-Category",
+          "raw_ref": "[Sub-Category]",
+          "datatype": "string",
+          "role": "dimension",
+          "aggregation": "",
+          "tableau_type": "nominal"
+        }
+      ],
+      "title": "",
+      "title_visible": true,
+      "legend_title": "Profit",
+      "legend_field": "Profit",
+      "is_kpi_card": false,
+      "is_text_table": false,
+      "is_map": false,
+      "is_breadcrumb": false,
+      "notes": []
+    },
+    {
+      "name": "Ship Mode",
+      "mark_type": "polygon",
+      "mark_type_pbi": "map",
+      "confidence": "high_confidence",
+      "encoding": {
+        "shelf_rows": [],
+        "shelf_cols": [],
+        "color": null,
+        "size": null,
+        "label": null,
+        "detail": [
+          {
+            "name": "Calculation_3638908511589994496",
+            "raw_ref": "attr:Calculation_3638908511589994496:nk",
+            "datatype": "string",
+            "role": "dimension",
+            "aggregation": "Attribute",
+            "tableau_type": "nominal"
+          },
+          {
+            "name": "Region Bread Crumb (copy)_3638908511591419906",
+            "raw_ref": "attr:Region Bread Crumb (copy)_3638908511591419906:nk",
+            "datatype": "string",
+            "role": "dimension",
+            "aggregation": "Attribute",
+            "tableau_type": "nominal"
+          },
+          {
+            "name": "Ship Mode Bread Crumb (copy)_3638908511590936577",
+            "raw_ref": "attr:Ship Mode Bread Crumb (copy)_3638908511590936577:nk",
+            "datatype": "string",
+            "role": "dimension",
+            "aggregation": "Attribute",
+            "tableau_type": "nominal"
+          }
+        ],
+        "tooltip": [
+          {
+            "name": "Region",
+            "raw_ref": "ctd:Region:qk",
+            "datatype": "string",
+            "role": "measure",
+            "aggregation": "CountD",
+            "tableau_type": "quantitative"
+          },
+          {
+            "name": "Order Date (Years)",
+            "raw_ref": "ctd:Order Date (Years):qk",
+            "datatype": "string",
+            "role": "measure",
+            "aggregation": "CountD",
+            "tableau_type": "quantitative"
+          },
+          {
+            "name": "Ship Mode",
+            "raw_ref": "ctd:Ship Mode:qk",
+            "datatype": "string",
+            "role": "measure",
+            "aggregation": "CountD",
+            "tableau_type": "quantitative"
+          }
+        ],
+        "path": null,
+        "rows_expression": "",
+        "cols_expression": ""
+      },
+      "filters": [],
+      "slices": [
+        "[Sample - Superstore].[none:Region:nk]",
+        "[Sample - Superstore].[none:Ship Mode:nk]",
+        "[Sample - Superstore].[yr:Order Date:ok]"
+      ],
+      "sorts": [],
+      "datasource": "Sample - Superstore",
+      "columns_used": [
+        {
+          "name": "Ship Mode Bread Crumb",
+          "raw_ref": "[Calculation_3638908511589994496]",
+          "datatype": "string",
+          "role": "measure",
+          "aggregation": "",
+          "tableau_type": "nominal"
+        },
+        {
+          "name": "Order Date (Years)",
+          "raw_ref": "[Order Date (Years)]",
+          "datatype": "integer",
+          "role": "dimension",
+          "aggregation": "",
+          "tableau_type": "ordinal"
+        },
+        {
+          "name": "Order Date",
+          "raw_ref": "[Order Date]",
+          "datatype": "date",
+          "role": "dimension",
+          "aggregation": "",
+          "tableau_type": "ordinal"
+        },
+        {
+          "name": "Region Bread Crumb",
+          "raw_ref": "[Region Bread Crumb (copy)_3638908511591419906]",
+          "datatype": "string",
+          "role": "measure",
+          "aggregation": "",
+          "tableau_type": "nominal"
+        },
+        {
+          "name": "Region",
+          "raw_ref": "[Region]",
+          "datatype": "string",
+          "role": "dimension",
+          "aggregation": "",
+          "tableau_type": "nominal"
+        },
+        {
+          "name": "Year Bread Crumb",
+          "raw_ref": "[Ship Mode Bread Crumb (copy)_3638908511590936577]",
+          "datatype": "string",
+          "role": "measure",
+          "aggregation": "",
+          "tableau_type": "nominal"
+        },
+        {
+          "name": "Ship Mode",
+          "raw_ref": "[Ship Mode]",
+          "datatype": "string",
+          "role": "dimension",
+          "aggregation": "",
+          "tableau_type": "nominal"
+        },
+        {
+          "name": "Calculation_3638908511589994496",
+          "raw_ref": "[attr:Calculation_3638908511589994496:nk]",
+          "datatype": "string",
+          "role": "dimension",
+          "aggregation": "Attribute",
+          "tableau_type": "nominal"
+        },
+        {
+          "name": "Region Bread Crumb (copy)_3638908511591419906",
+          "raw_ref": "[attr:Region Bread Crumb (copy)_3638908511591419906:nk]",
+          "datatype": "string",
+          "role": "dimension",
+          "aggregation": "Attribute",
+          "tableau_type": "nominal"
+        },
+        {
+          "name": "Ship Mode Bread Crumb (copy)_3638908511590936577",
+          "raw_ref": "[attr:Ship Mode Bread Crumb (copy)_3638908511590936577:nk]",
+          "datatype": "string",
+          "role": "dimension",
+          "aggregation": "Attribute",
+          "tableau_type": "nominal"
+        }
+      ],
+      "title": "",
+      "title_visible": true,
+      "legend_title": "",
+      "legend_field": "",
+      "is_kpi_card": false,
+      "is_text_table": false,
+      "is_map": true,
+      "is_breadcrumb": false,
+      "notes": []
+    }
+  ],
+  "dashboards": [
+    {
+      "name": "#WOW2025 W49",
+      "width": 800,
+      "height": 800,
+      "sizing_mode": "fixed",
+      "root_zone": {
+        "zone_id": "4",
+        "zone_type": "layout-basic",
+        "name": "",
+        "param": "",
+        "x": 0,
+        "y": 0,
+        "w": 100000,
+        "h": 100000,
+        "pbi_x": 0,
+        "pbi_y": 0,
+        "pbi_w": 1280,
+        "pbi_h": 720,
+        "is_fixed": false,
+        "fixed_size": 0,
+        "is_hidden": false,
+        "show_title": true,
+        "layout_strategy": "",
+        "flow_direction": "",
+        "children": [
+          {
+            "zone_id": "13",
+            "zone_type": "layout-flow",
+            "name": "",
+            "param": "vert",
+            "x": 1000,
+            "y": 1000,
+            "w": 98000,
+            "h": 98000,
+            "pbi_x": 13,
+            "pbi_y": 7,
+            "pbi_w": 1254,
+            "pbi_h": 706,
+            "is_fixed": false,
+            "fixed_size": 0,
+            "is_hidden": false,
+            "show_title": true,
+            "layout_strategy": "",
+            "flow_direction": "vert",
+            "children": [
+              {
+                "zone_id": "14",
+                "zone_type": "title",
+                "name": "",
+                "param": "",
+                "x": 1000,
+                "y": 1000,
+                "w": 98000,
+                "h": 5250,
+                "pbi_x": 13,
+                "pbi_y": 7,
+                "pbi_w": 1254,
+                "pbi_h": 38,
+                "is_fixed": false,
+                "fixed_size": 0,
+                "is_hidden": false,
+                "show_title": true,
+                "layout_strategy": "",
+                "flow_direction": "",
+                "children": [],
+                "filter_mode": ""
+              },
+              {
+                "zone_id": "19",
+                "zone_type": "ws",
+                "name": "Ship Mode",
+                "param": "",
+                "x": 1000,
+                "y": 6250,
+                "w": 98000,
+                "h": 3750,
+                "pbi_x": 13,
+                "pbi_y": 45,
+                "pbi_w": 1254,
+                "pbi_h": 27,
+                "is_fixed": true,
+                "fixed_size": 22,
+                "is_hidden": false,
+                "show_title": true,
+                "layout_strategy": "",
+                "flow_direction": "",
+                "children": [],
+                "filter_mode": ""
+              },
+              {
+                "zone_id": "17",
+                "zone_type": "layout-flow",
+                "name": "",
+                "param": "horz",
+                "x": 1000,
+                "y": 10000,
+                "w": 98000,
+                "h": 8125,
+                "pbi_x": 13,
+                "pbi_y": 72,
+                "pbi_w": 1254,
+                "pbi_h": 58,
+                "is_fixed": false,
+                "fixed_size": 0,
+                "is_hidden": true,
+                "show_title": true,
+                "layout_strategy": "distribute-evenly",
+                "flow_direction": "horz",
+                "children": [
+                  {
+                    "zone_id": "16",
+                    "zone_type": "text",
+                    "name": "",
+                    "param": "",
+                    "x": 1000,
+                    "y": 10000,
+                    "w": 19625,
+                    "h": 8125,
+                    "pbi_x": 13,
+                    "pbi_y": 72,
+                    "pbi_w": 251,
+                    "pbi_h": 58,
+                    "is_fixed": false,
+                    "fixed_size": 0,
+                    "is_hidden": true,
+                    "show_title": true,
+                    "layout_strategy": "",
+                    "flow_direction": "",
+                    "children": [],
+                    "filter_mode": ""
+                  },
+                  {
+                    "zone_id": "8",
+                    "zone_type": "filter",
+                    "name": "Sheet 1",
+                    "param": "[Sample - Superstore].[none:Ship Mode:nk]",
+                    "x": 20625,
+                    "y": 10000,
+                    "w": 19625,
+                    "h": 8125,
+                    "pbi_x": 264,
+                    "pbi_y": 72,
+                    "pbi_w": 251,
+                    "pbi_h": 58,
+                    "is_fixed": false,
+                    "fixed_size": 0,
+                    "is_hidden": true,
+                    "show_title": true,
+                    "layout_strategy": "",
+                    "flow_direction": "",
+                    "children": [],
+                    "filter_mode": "checkdropdown"
+                  },
+                  {
+                    "zone_id": "10",
+                    "zone_type": "filter",
+                    "name": "Sheet 1",
+                    "param": "[Sample - Superstore].[none:Region:nk]",
+                    "x": 40250,
+                    "y": 10000,
+                    "w": 19625,
+                    "h": 8125,
+                    "pbi_x": 515,
+                    "pbi_y": 72,
+                    "pbi_w": 251,
+                    "pbi_h": 58,
+                    "is_fixed": false,
+                    "fixed_size": 0,
+                    "is_hidden": true,
+                    "show_title": true,
+                    "layout_strategy": "",
+                    "flow_direction": "",
+                    "children": [],
+                    "filter_mode": "checkdropdown"
+                  },
+                  {
+                    "zone_id": "9",
+                    "zone_type": "filter",
+                    "name": "Sheet 1",
+                    "param": "[Sample - Superstore].[yr:Order Date:ok]",
+                    "x": 59875,
+                    "y": 10000,
+                    "w": 19625,
+                    "h": 8125,
+                    "pbi_x": 766,
+                    "pbi_y": 72,
+                    "pbi_w": 251,
+                    "pbi_h": 58,
+                    "is_fixed": false,
+                    "fixed_size": 0,
+                    "is_hidden": true,
+                    "show_title": true,
+                    "layout_strategy": "",
+                    "flow_direction": "",
+                    "children": [],
+                    "filter_mode": "checkdropdown"
+                  },
+                  {
+                    "zone_id": "11",
+                    "zone_type": "color",
+                    "name": "Sheet 1",
+                    "param": "[Sample - Superstore].[sum:Profit:qk]",
+                    "x": 79500,
+                    "y": 10000,
+                    "w": 19500,
+                    "h": 8125,
+                    "pbi_x": 1018,
+                    "pbi_y": 72,
+                    "pbi_w": 250,
+                    "pbi_h": 58,
+                    "is_fixed": false,
+                    "fixed_size": 0,
+                    "is_hidden": true,
+                    "show_title": true,
+                    "layout_strategy": "",
+                    "flow_direction": "",
+                    "children": [],
+                    "filter_mode": ""
+                  }
+                ],
+                "filter_mode": ""
+              },
+              {
+                "zone_id": "3",
+                "zone_type": "ws",
+                "name": "Sheet 1",
+                "param": "",
+                "x": 1000,
+                "y": 10000,
+                "w": 98000,
+                "h": 85859,
+                "pbi_x": 13,
+                "pbi_y": 72,
+                "pbi_w": 1254,
+                "pbi_h": 618,
+                "is_fixed": false,
+                "fixed_size": 0,
+                "is_hidden": false,
+                "show_title": false,
+                "layout_strategy": "",
+                "flow_direction": "",
+                "children": [],
+                "filter_mode": ""
+              },
+              {
+                "zone_id": "20",
+                "zone_type": "text",
+                "name": "",
+                "param": "",
+                "x": 1000,
+                "y": 95859,
+                "w": 98000,
+                "h": 3125,
+                "pbi_x": 13,
+                "pbi_y": 690,
+                "pbi_w": 1254,
+                "pbi_h": 22,
+                "is_fixed": false,
+                "fixed_size": 0,
+                "is_hidden": false,
+                "show_title": true,
+                "layout_strategy": "",
+                "flow_direction": "",
+                "children": [],
+                "filter_mode": ""
+              }
+            ],
+            "filter_mode": ""
+          }
+        ],
+        "filter_mode": ""
+      },
+      "worksheet_zones": [
+        {
+          "zone_id": "19",
+          "zone_type": "ws",
+          "name": "Ship Mode",
+          "param": "",
+          "x": 1000,
+          "y": 6250,
+          "w": 98000,
+          "h": 3750,
+          "pbi_x": 13,
+          "pbi_y": 45,
+          "pbi_w": 1254,
+          "pbi_h": 27,
+          "is_fixed": true,
+          "fixed_size": 22,
+          "is_hidden": false,
+          "show_title": true,
+          "layout_strategy": "",
+          "flow_direction": "",
+          "children": [],
+          "filter_mode": ""
+        },
+        {
+          "zone_id": "3",
+          "zone_type": "ws",
+          "name": "Sheet 1",
+          "param": "",
+          "x": 1000,
+          "y": 10000,
+          "w": 98000,
+          "h": 85859,
+          "pbi_x": 13,
+          "pbi_y": 72,
+          "pbi_w": 1254,
+          "pbi_h": 618,
+          "is_fixed": false,
+          "fixed_size": 0,
+          "is_hidden": false,
+          "show_title": false,
+          "layout_strategy": "",
+          "flow_direction": "",
+          "children": [],
+          "filter_mode": ""
+        }
+      ],
+      "filter_zones": [
+        {
+          "zone_id": "8",
+          "zone_type": "filter",
+          "name": "Sheet 1",
+          "param": "[Sample - Superstore].[none:Ship Mode:nk]",
+          "x": 20625,
+          "y": 10000,
+          "w": 19625,
+          "h": 8125,
+          "pbi_x": 264,
+          "pbi_y": 72,
+          "pbi_w": 251,
+          "pbi_h": 58,
+          "is_fixed": false,
+          "fixed_size": 0,
+          "is_hidden": true,
+          "show_title": true,
+          "layout_strategy": "",
+          "flow_direction": "",
+          "children": [],
+          "filter_mode": "checkdropdown"
+        },
+        {
+          "zone_id": "10",
+          "zone_type": "filter",
+          "name": "Sheet 1",
+          "param": "[Sample - Superstore].[none:Region:nk]",
+          "x": 40250,
+          "y": 10000,
+          "w": 19625,
+          "h": 8125,
+          "pbi_x": 515,
+          "pbi_y": 72,
+          "pbi_w": 251,
+          "pbi_h": 58,
+          "is_fixed": false,
+          "fixed_size": 0,
+          "is_hidden": true,
+          "show_title": true,
+          "layout_strategy": "",
+          "flow_direction": "",
+          "children": [],
+          "filter_mode": "checkdropdown"
+        },
+        {
+          "zone_id": "9",
+          "zone_type": "filter",
+          "name": "Sheet 1",
+          "param": "[Sample - Superstore].[yr:Order Date:ok]",
+          "x": 59875,
+          "y": 10000,
+          "w": 19625,
+          "h": 8125,
+          "pbi_x": 766,
+          "pbi_y": 72,
+          "pbi_w": 251,
+          "pbi_h": 58,
+          "is_fixed": false,
+          "fixed_size": 0,
+          "is_hidden": true,
+          "show_title": true,
+          "layout_strategy": "",
+          "flow_direction": "",
+          "children": [],
+          "filter_mode": "checkdropdown"
+        }
+      ],
+      "param_zones": [],
+      "text_zones": [
+        {
+          "zone_id": "16",
+          "zone_type": "text",
+          "name": "",
+          "param": "",
+          "x": 1000,
+          "y": 10000,
+          "w": 19625,
+          "h": 8125,
+          "pbi_x": 13,
+          "pbi_y": 72,
+          "pbi_w": 251,
+          "pbi_h": 58,
+          "is_fixed": false,
+          "fixed_size": 0,
+          "is_hidden": true,
+          "show_title": true,
+          "layout_strategy": "",
+          "flow_direction": "",
+          "children": [],
+          "filter_mode": ""
+        },
+        {
+          "zone_id": "20",
+          "zone_type": "text",
+          "name": "",
+          "param": "",
+          "x": 1000,
+          "y": 95859,
+          "w": 98000,
+          "h": 3125,
+          "pbi_x": 13,
+          "pbi_y": 690,
+          "pbi_w": 1254,
+          "pbi_h": 22,
+          "is_fixed": false,
+          "fixed_size": 0,
+          "is_hidden": false,
+          "show_title": true,
+          "layout_strategy": "",
+          "flow_direction": "",
+          "children": [],
+          "filter_mode": ""
+        }
+      ],
+      "title_zone": {
+        "zone_id": "14",
+        "zone_type": "title",
+        "name": "",
+        "param": "",
+        "x": 1000,
+        "y": 1000,
+        "w": 98000,
+        "h": 5250,
+        "pbi_x": 13,
+        "pbi_y": 7,
+        "pbi_w": 1254,
+        "pbi_h": 38,
+        "is_fixed": false,
+        "fixed_size": 0,
+        "is_hidden": false,
+        "show_title": true,
+        "layout_strategy": "",
+        "flow_direction": "",
+        "children": [],
+        "filter_mode": ""
+      },
+      "has_vertical_stack": true,
+      "has_horizontal_split": true,
+      "has_tab_selector": true,
+      "has_kpi_row": false,
+      "layout_pattern": "grid",
+      "notes": [
+        "6 hidden zone(s) detected -- likely tab-like selector pattern"
+      ]
+    }
+  ],
+  "datasources": [
+    {
+      "name": "Sample - Superstore",
+      "caption": "Sample - Superstore",
+      "connection_type": "federated",
+      "tables": [
+        "[Orders$]",
+        "[People$]",
+        "[Returns$]"
+      ],
+      "columns": [
+        {
+          "name": "Profit Ratio",
+          "raw_ref": "[Calculation_1368249927221915648]",
+          "datatype": "real",
+          "role": "measure",
+          "aggregation": "",
+          "tableau_type": "quantitative"
+        },
+        {
+          "name": "Ship Mode Bread Crumb",
+          "raw_ref": "[Calculation_3638908511589994496]",
+          "datatype": "string",
+          "role": "measure",
+          "aggregation": "",
+          "tableau_type": "nominal"
+        },
+        {
+          "name": "City",
+          "raw_ref": "[City]",
+          "datatype": "string",
+          "role": "dimension",
+          "aggregation": "",
+          "tableau_type": "nominal"
+        },
+        {
+          "name": "Country/Region",
+          "raw_ref": "[Country/Region]",
+          "datatype": "string",
+          "role": "dimension",
+          "aggregation": "",
+          "tableau_type": "nominal"
+        },
+        {
+          "name": "Customer ID",
+          "raw_ref": "[Customer ID]",
+          "datatype": "string",
+          "role": "dimension",
+          "aggregation": "",
+          "tableau_type": "nominal"
+        },
+        {
+          "name": "Customer Name",
+          "raw_ref": "[Customer Name]",
+          "datatype": "string",
+          "role": "dimension",
+          "aggregation": "",
+          "tableau_type": "nominal"
+        },
+        {
+          "name": "Order Date (Years)",
+          "raw_ref": "[Order Date (Years)]",
+          "datatype": "integer",
+          "role": "dimension",
+          "aggregation": "",
+          "tableau_type": "ordinal"
+        },
+        {
+          "name": "Order ID (Returns)",
+          "raw_ref": "[Order ID (Returns)]",
+          "datatype": "string",
+          "role": "dimension",
+          "aggregation": "",
+          "tableau_type": "nominal"
+        },
+        {
+          "name": "Postal Code",
+          "raw_ref": "[Postal Code]",
+          "datatype": "string",
+          "role": "dimension",
+          "aggregation": "",
+          "tableau_type": "nominal"
+        },
+        {
+          "name": "Product ID",
+          "raw_ref": "[Product ID]",
+          "datatype": "string",
+          "role": "dimension",
+          "aggregation": "",
+          "tableau_type": "nominal"
+        },
+        {
+          "name": "Manufacturer",
+          "raw_ref": "[Product Name (group)]",
+          "datatype": "string",
+          "role": "dimension",
+          "aggregation": "",
+          "tableau_type": "nominal"
+        },
+        {
+          "name": "Product Name",
+          "raw_ref": "[Product Name]",
+          "datatype": "string",
+          "role": "dimension",
+          "aggregation": "",
+          "tableau_type": "nominal"
+        },
+        {
+          "name": "Profit (bin)",
+          "raw_ref": "[Profit (bin)]",
+          "datatype": "integer",
+          "role": "dimension",
+          "aggregation": "",
+          "tableau_type": "ordinal"
+        },
+        {
+          "name": "Profit",
+          "raw_ref": "[Profit]",
+          "datatype": "real",
+          "role": "measure",
+          "aggregation": "",
+          "tableau_type": "quantitative"
+        },
+        {
+          "name": "Region (People)",
+          "raw_ref": "[Region (People)]",
+          "datatype": "string",
+          "role": "dimension",
+          "aggregation": "",
+          "tableau_type": "nominal"
+        },
+        {
+          "name": "Region Bread Crumb",
+          "raw_ref": "[Region Bread Crumb (copy)_3638908511591419906]",
+          "datatype": "string",
+          "role": "measure",
+          "aggregation": "",
+          "tableau_type": "nominal"
+        },
+        {
+          "name": "Region",
+          "raw_ref": "[Region]",
+          "datatype": "string",
+          "role": "dimension",
+          "aggregation": "",
+          "tableau_type": "nominal"
+        },
+        {
+          "name": "Row ID",
+          "raw_ref": "[Row ID]",
+          "datatype": "integer",
+          "role": "dimension",
+          "aggregation": "",
+          "tableau_type": "ordinal"
+        },
+        {
+          "name": "Year Bread Crumb",
+          "raw_ref": "[Ship Mode Bread Crumb (copy)_3638908511590936577]",
+          "datatype": "string",
+          "role": "measure",
+          "aggregation": "",
+          "tableau_type": "nominal"
+        },
+        {
+          "name": "State/Province",
+          "raw_ref": "[State/Province]",
+          "datatype": "string",
+          "role": "dimension",
+          "aggregation": "",
+          "tableau_type": "nominal"
+        },
+        {
+          "name": "Orders",
+          "raw_ref": "[__tableau_internal_object_id__].[Orders_ECFCA1FB690A41FE803BC071773BA862]",
+          "datatype": "table",
+          "role": "measure",
+          "aggregation": "",
+          "tableau_type": "quantitative"
+        },
+        {
+          "name": "People",
+          "raw_ref": "[__tableau_internal_object_id__].[People_D73023733B004CC1B3CB1ACF62F4A965]",
+          "datatype": "table",
+          "role": "measure",
+          "aggregation": "",
+          "tableau_type": "quantitative"
+        },
+        {
+          "name": "Returns",
+          "raw_ref": "[__tableau_internal_object_id__].[Returns_2AA0FE4D737A4F63970131D0E7480A03]",
+          "datatype": "table",
+          "role": "measure",
+          "aggregation": "",
+          "tableau_type": "quantitative"
+        }
+      ],
+      "server": "",
+      "database": "",
+      "filename": ""
+    }
+  ],
+  "calculated_fields": [
+    {
+      "name": "Profit Ratio",
+      "formula": "SUM([Profit])/SUM([Sales])",
+      "datasource": "Sample - Superstore",
+      "return_type": "real",
+      "is_table_calc": false,
+      "is_lod": false,
+      "referenced_fields": [
+        "Profit",
+        "Sales"
+      ]
+    },
+    {
+      "name": "Ship Mode Bread Crumb",
+      "formula": "IF \n{EXCLUDE [Ship Mode] :COUNTD([Ship Mode])} = {FIXED :COUNTD([Ship Mode])}\n\nTHEN \"All Ship Modes\"\n\nELSEIF {EXCLUDE [Ship Mode]:COUNTD([Ship Mode])} = 1 THEN [Ship Mode]\nELSE \"Multiple Ship Modes\"\nEND",
+      "datasource": "Sample - Superstore",
+      "return_type": "string",
+      "is_table_calc": false,
+      "is_lod": true,
+      "referenced_fields": [
+        "Ship Mode",
+        "Ship Mode",
+        "Ship Mode",
+        "Ship Mode",
+        "Ship Mode",
+        "Ship Mode"
+      ]
+    },
+    {
+      "name": "[Order Date (Years)]",
+      "formula": "DATEPART('year', [Order Date])",
+      "datasource": "Sample - Superstore",
+      "return_type": "integer",
+      "is_table_calc": false,
+      "is_lod": false,
+      "referenced_fields": [
+        "Order Date"
+      ]
+    },
+    {
+      "name": "Profit (bin)",
+      "formula": "[Profit]",
+      "datasource": "Sample - Superstore",
+      "return_type": "integer",
+      "is_table_calc": false,
+      "is_lod": false,
+      "referenced_fields": [
+        "Profit"
+      ]
+    },
+    {
+      "name": "Region Bread Crumb",
+      "formula": "IF \n{EXCLUDE [Region] :COUNTD([Region])} = {FIXED :COUNTD([Region])}\n\nTHEN \"All Regions\"\n\nELSEIF {EXCLUDE [Region]:COUNTD([Region])} = 1 THEN [Region]\nELSE \"Multiple Regions\"\nEND",
+      "datasource": "Sample - Superstore",
+      "return_type": "string",
+      "is_table_calc": false,
+      "is_lod": true,
+      "referenced_fields": [
+        "Region",
+        "Region",
+        "Region",
+        "Region",
+        "Region",
+        "Region"
+      ]
+    },
+    {
+      "name": "Year Bread Crumb",
+      "formula": "IF \n{EXCLUDE [Order Date (Years)] :COUNTD([Order Date (Years)])} = {FIXED :COUNTD([Order Date (Years)])}\n\nTHEN \"All Years\"\n\nELSEIF {EXCLUDE [Order Date (Years)]:COUNTD([Order Date (Years)])} = 1 THEN STR([Order Date (Years)])\nELSE \"Multiple Years\"\nEND",
+      "datasource": "Sample - Superstore",
+      "return_type": "string",
+      "is_table_calc": false,
+      "is_lod": true,
+      "referenced_fields": [
+        "Order Date (Years)",
+        "Order Date (Years)",
+        "Order Date (Years)",
+        "Order Date (Years)",
+        "Order Date (Years)",
+        "Order Date (Years)"
+      ]
+    },
+    {
+      "name": "Top Customers",
+      "formula": "5",
+      "datasource": "Sample - Superstore",
+      "return_type": "integer",
+      "is_table_calc": false,
+      "is_lod": false,
+      "referenced_fields": []
+    },
+    {
+      "name": "Profit Bin Size",
+      "formula": "200",
+      "datasource": "Sample - Superstore",
+      "return_type": "integer",
+      "is_table_calc": false,
+      "is_lod": false,
+      "referenced_fields": []
+    }
+  ],
+  "parameters": [
+    {
+      "name": "Top Customers",
+      "datatype": "integer",
+      "domain_type": "range",
+      "current_value": "5",
+      "min_value": "5",
+      "max_value": "20",
+      "step": "5",
+      "allowable_values": []
+    },
+    {
+      "name": "Profit Bin Size",
+      "datatype": "integer",
+      "domain_type": "range",
+      "current_value": "200",
+      "min_value": "50",
+      "max_value": "200",
+      "step": "50",
+      "allowable_values": []
+    }
+  ],
+  "relationships": [],
+  "total_visuals": 2,
+  "total_filters": 0,
+  "total_measures": 8,
+  "total_dimensions": 15,
+  "extraction_notes": []
+}

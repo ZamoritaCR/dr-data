@@ -22,6 +22,38 @@ SUPPORTED_ARCHIVES = {"zip"}
 ALL_SUPPORTED = SUPPORTED_DATA | SUPPORTED_REPORTS | SUPPORTED_ARCHIVES
 
 
+def sanitize_columns(df):
+    """Clean up DataFrame column names for Power BI compatibility.
+
+    Fixes:
+    - Pandas duplicate suffixes (e.g. 'Event.1' -> 'Event_2')
+    - Bracket expressions that conflict with M/DAX syntax
+    - Leading/trailing whitespace
+    """
+    import re
+    seen = {}
+    new_cols = []
+    for col in df.columns:
+        c = str(col).strip()
+        # Remove brackets that conflict with M/DAX bracket notation
+        # e.g. '[Event] = [Parameter 1]' -> 'Event = Parameter 1'
+        c = c.replace("[", "").replace("]", "")
+        # Replace pandas duplicate suffix (.1, .2) with underscore version
+        m = re.match(r'^(.+)\.(\d+)$', c)
+        if m:
+            base, num = m.group(1), int(m.group(2))
+            c = f"{base}_{num + 1}"
+        # Ensure uniqueness
+        if c in seen:
+            seen[c] += 1
+            c = f"{c}_{seen[c]}"
+        else:
+            seen[c] = 1
+        new_cols.append(c)
+    df.columns = new_cols
+    return df
+
+
 def identify_file(file_path):
     """Identify file type and return category."""
     ext = file_path.rsplit(".", 1)[-1].lower() if "." in file_path else ""
@@ -65,15 +97,10 @@ def ingest_file(file_path):
         elif category == "report":
             if ext == "twbx":
                 structure, dfs = parse_twbx(file_path)
-                if structure and "error" in structure:
-                    result["errors"].append(structure["error"])
                 result["report_structure"] = structure
                 result["dataframes"].update(dfs)
             elif ext == "twb":
-                twb_result = parse_twb(file_path)
-                if "error" in twb_result:
-                    result["errors"].append(twb_result["error"])
-                result["report_structure"] = twb_result
+                result["report_structure"] = parse_twb(file_path)
             elif ext == "wid":
                 result["report_structure"] = parse_bobj(file_path)
             elif ext in ("yxmd", "yxwz", "yxmc", "yxzp"):
@@ -106,6 +133,11 @@ def ingest_file(file_path):
 
     except Exception as e:
         result["errors"].append(str(e))
+
+    # Sanitize column names in all loaded DataFrames
+    for key, df in result["dataframes"].items():
+        if isinstance(df, pd.DataFrame):
+            result["dataframes"][key] = sanitize_columns(df)
 
     return result
 
@@ -173,8 +205,81 @@ def load_rpt(file_path):
                 return None
 
 
+def _extract_mark_type(ws_element):
+    """Extract the primary mark/chart type from a Tableau worksheet element.
+
+    Tableau stores the mark type in several places depending on version:
+    - <table><pane><mark class="..."> (common)
+    - <mark class="..."> directly under worksheet
+    - Inferred from <style-rule element="mark"> type attribute
+    Returns the most specific mark class found, or "automatic".
+    """
+    # Check <table><pane><mark> first (most specific)
+    for pane in ws_element.iter("pane"):
+        for mark in pane.iter("mark"):
+            mc = mark.get("class", "")
+            if mc and mc != "Automatic":
+                return mc.lower().replace(" ", "-")
+
+    # Check direct <mark> children
+    for mark in ws_element.iter("mark"):
+        mc = mark.get("class", "")
+        if mc and mc != "Automatic":
+            return mc.lower().replace(" ", "-")
+
+    return "automatic"
+
+
+def _extract_shelf_fields(ws_element):
+    """Extract field references from <rows> and <cols> text elements.
+
+    Tableau stores shelf expressions as text content:
+      <rows>[Category]</rows>
+      <cols>SUM([Sales])</cols>
+    These can also contain multiple fields separated by newlines or spaces.
+    """
+    import re
+    rows_fields = []
+    cols_fields = []
+
+    for rows_el in ws_element.iter("rows"):
+        text = rows_el.text or ""
+        rows_fields.extend(re.findall(r'\[([^\]]+)\]', text))
+
+    for cols_el in ws_element.iter("cols"):
+        text = cols_el.text or ""
+        cols_fields.extend(re.findall(r'\[([^\]]+)\]', text))
+
+    return rows_fields, cols_fields
+
+
+def _extract_ws_filters(ws_element):
+    """Extract worksheet-level filters from <filter> elements."""
+    filters = []
+    for filt in ws_element.iter("filter"):
+        col = filt.get("column", "")
+        fclass = filt.get("class", "")
+        if col:
+            # Strip bracket notation: [datasource].[field] -> field
+            import re
+            field = col
+            m = re.search(r'\[([^\]]+)\]$', col)
+            if m:
+                field = m.group(1)
+            filters.append({
+                "field": field,
+                "column_ref": col,
+                "type": fclass or "categorical",
+            })
+    return filters
+
+
 def parse_twb(file_path):
-    """Parse Tableau .twb XML file."""
+    """Parse Tableau .twb XML file.
+
+    Extracts worksheets with chart types, shelf fields, and filters;
+    dashboards with zone spatial layout; calculated fields; parameters.
+    """
     try:
         tree = ET.parse(file_path)
         root = tree.getroot()
@@ -186,7 +291,8 @@ def parse_twb(file_path):
             "dashboards": [],
             "datasources": [],
             "calculated_fields": [],
-            "parameters": []
+            "parameters": [],
+            "relationships": [],
         }
 
         for ds in root.iter("datasource"):
@@ -215,16 +321,25 @@ def parse_twb(file_path):
                     })
 
         for ws in root.iter("worksheet"):
+            chart_type = _extract_mark_type(ws)
+            rows_fields, cols_fields = _extract_shelf_fields(ws)
+            ws_filters = _extract_ws_filters(ws)
+
             ws_info = {
                 "name": ws.get("name", ""),
+                "chart_type": chart_type,
                 "marks": [],
+                "rows_fields": rows_fields,
+                "cols_fields": cols_fields,
                 "dimensions": [],
                 "measures": [],
-                "filters": []
+                "filters": ws_filters,
             }
 
             for mark in ws.iter("mark"):
-                ws_info["marks"].append(mark.get("class", ""))
+                mc = mark.get("class", "")
+                if mc:
+                    ws_info["marks"].append(mc)
 
             for enc in ws.iter("encoding"):
                 shelf = enc.get("attr", "")
@@ -239,12 +354,34 @@ def parse_twb(file_path):
         for db in root.iter("dashboard"):
             db_info = {
                 "name": db.get("name", ""),
-                "zones": []
+                "size": {},
+                "zones": [],
             }
+
+            # Extract dashboard size
+            size_el = db.find("size")
+            if size_el is not None:
+                db_info["size"] = {
+                    "width": size_el.get("maxwidth", size_el.get("width", "")),
+                    "height": size_el.get("maxheight", size_el.get("height", "")),
+                }
+
             for zone in db.iter("zone"):
                 zone_name = zone.get("name", "")
+                zone_type = zone.get("type-v2", zone.get("type", ""))
+                zone_data = {
+                    "name": zone_name,
+                    "type": zone_type,
+                }
+                # Extract spatial coordinates if present
+                for attr in ("x", "y", "w", "h"):
+                    val = zone.get(attr, "")
+                    if val:
+                        zone_data[attr] = val
+                # Only include zones that have a name (worksheet ref or object)
                 if zone_name:
-                    db_info["zones"].append(zone_name)
+                    db_info["zones"].append(zone_data)
+
             structure["dashboards"].append(db_info)
 
         return structure
@@ -265,10 +402,6 @@ def parse_twbx(file_path):
     with tempfile.TemporaryDirectory() as tmp:
         try:
             with zipfile.ZipFile(file_path, "r") as z:
-                for member in z.namelist():
-                    member_path = os.path.realpath(os.path.join(tmp, member))
-                    if not member_path.startswith(os.path.realpath(tmp)):
-                        raise ValueError(f"ZipSlip detected: {member}")
                 z.extractall(tmp)
 
             for root_dir, dirs, files in os.walk(tmp):
@@ -285,8 +418,8 @@ def parse_twbx(file_path):
                             else:
                                 continue
                             dataframes[f] = df
-                        except Exception as e:
-                            print(f"[WARN] Could not read {f} from .twbx: {e}")
+                        except Exception:
+                            pass
         except Exception as e:
             structure = {"type": "tableau_packaged", "error": str(e)}
 
@@ -361,10 +494,6 @@ def ingest_zip(file_path):
     with tempfile.TemporaryDirectory() as tmp:
         try:
             with zipfile.ZipFile(file_path, "r") as z:
-                for member in z.namelist():
-                    member_path = os.path.realpath(os.path.join(tmp, member))
-                    if not member_path.startswith(os.path.realpath(tmp)):
-                        raise ValueError(f"ZipSlip detected: {member}")
                 z.extractall(tmp)
 
             for root_dir, dirs, files in os.walk(tmp):

@@ -1461,44 +1461,23 @@ with tab1:
 
                 with st.chat_message("assistant"):
 
-                    msg_lower = prompt.lower() if isinstance(prompt, str) else ""
+                    # -- LLM-powered intent classification --
+                    from core.intent_classifier import classify, BUILD_INTENTS
 
-                    # Explicit export keywords
-                    _explicit_export = any(kw in msg_lower for kw in [
-                        "power bi", "powerbi", "pbi", "pbip", "pbix",
-                        "dashboard", "html", "interactive",
-                        "powerpoint", "pptx", "slides", "presentation", "deck",
-                        "pdf", "report", "word", "docx", "document",
-                        "all formats", "all three", "everything",
-                    ])
+                    # Build conversation context for the classifier
+                    _recent = st.session_state.messages[-4:] if st.session_state.messages else []
+                    _ctx_lines = []
+                    for _rm in _recent:
+                        role = _rm.get("role", "?")
+                        content = str(_rm.get("content", ""))[:150]
+                        has_dl = " [BUILT FILES]" if _rm.get("downloads") else ""
+                        _ctx_lines.append(f"{role}: {content}{has_dl}")
+                    _conv_ctx = "\n".join(_ctx_lines) if _ctx_lines else "(first message)"
 
-                    # Follow-up intent: user wants another build or a redo
-                    _followup_build = any(kw in msg_lower for kw in [
-                        "do it", "build it", "make it", "generate it",
-                        "another one", "another version", "new version",
-                        "different version", "better version", "redo",
-                        "again", "one more", "try again", "make another",
-                        "do something different", "something different",
-                        "something else", "give me another",
-                        "surprise me", "out of this world",
-                        "make something", "create something",
-                        "build something", "generate something",
-                        "ok do it", "yes do it", "go ahead",
-                        "do that", "yes build", "yes create",
-                        "make me", "build me", "create me",
-                    ])
-
-                    # Check if last deliverable was an export (for follow-up context)
-                    _last_was_export = False
-                    if st.session_state.messages:
-                        for _prev in reversed(st.session_state.messages[-5:]):
-                            if _prev.get("downloads"):
-                                _last_was_export = True
-                                break
-
-                    is_export = _explicit_export or (
-                        _followup_build and _last_was_export
-                    )
+                    _intent = classify(prompt, _conv_ctx)
+                    is_export = _intent["intent"] in BUILD_INTENTS
+                    print(f"[INTENT] '{prompt[:60]}...' -> {_intent['intent']} "
+                          f"(confidence={_intent['confidence']})")
 
                     if is_export:
                         # ====== EXPORT PATH -- hand off to workspace ======

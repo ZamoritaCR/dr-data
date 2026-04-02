@@ -1194,54 +1194,42 @@ class DrDataAgent:
                 except Exception:
                     pass
 
-        # --- Export interception: handle deliverables before LLM ---
-        msg_lower = user_message.lower()
-
-        # Power BI checked FIRST — highest priority
-        want_pbi = any(k in msg_lower for k in (
-            "power bi", "powerbi", "pbi", "pbip", "pbix", "power_bi",
-        ))
-        # Dashboard only when NOT a PBI request (avoid "powerbi dashboard" -> HTML)
-        want_dash = (
-            any(k in msg_lower for k in (
-                "dashboard", "html", "interactive", "explore",
-                "drill down", "filter",
-            ))
-            and not want_pbi
+        # --- LLM-powered intent classification ---
+        from core.intent_classifier import (
+            classify as _classify_intent,
+            BUILD_DASHBOARD, BUILD_POWERBI, BUILD_PDF, BUILD_PPTX,
+            BUILD_WORD, BUILD_ALL, BUILD_INTENTS,
         )
-        want_pptx = any(k in msg_lower for k in (
-            "powerpoint", "pptx", "presentation", "slides", "deck",
-        ))
-        want_pdf = any(k in msg_lower for k in ("pdf", "report"))
-        want_docx = any(k in msg_lower for k in ("word", "docx", "document"))
-        want_all = any(k in msg_lower for k in (
-            "all formats", "all three", "everything",
-        ))
 
-        # Follow-up intent: user wants a rebuild
-        _followup_build = any(k in msg_lower for k in (
-            "do it", "build it", "make it", "generate it",
-            "another one", "another version", "new version",
-            "different version", "better version", "redo",
-            "again", "one more", "try again", "make another",
-            "do something different", "something different",
-            "something else", "give me another",
-            "surprise me", "out of this world",
-            "make something", "create something",
-            "build something", "generate something",
-            "ok do it", "yes do it", "go ahead",
-            "do that", "yes build", "yes create",
-            "make me", "build me", "create me",
-        ))
+        # Build conversation context from recent messages
+        _recent_ctx = ""
+        if self.messages:
+            _ctx_msgs = self.messages[-4:]
+            _ctx_lines = []
+            for _m in _ctx_msgs:
+                role = _m.get("role", "?")
+                content = ""
+                if isinstance(_m.get("content"), str):
+                    content = _m["content"][:150]
+                elif isinstance(_m.get("content"), list):
+                    for _b in _m["content"]:
+                        if isinstance(_b, dict) and _b.get("type") == "text":
+                            content = _b.get("text", "")[:150]
+                            break
+                _ctx_lines.append(f"{role}: {content}")
+            _recent_ctx = "\n".join(_ctx_lines)
 
-        if _followup_build and not (want_pbi or want_dash or want_pptx or want_pdf or want_docx):
-            # Default follow-up to dashboard (most common rebuild)
-            want_dash = True
+        _intent = _classify_intent(user_message, _recent_ctx)
+        _intent_type = _intent["intent"]
 
-        is_export = (
-            want_pptx or want_pdf or want_docx
-            or want_dash or want_pbi or want_all
-        )
+        want_pbi = _intent_type == BUILD_POWERBI
+        want_dash = _intent_type == BUILD_DASHBOARD
+        want_pptx = _intent_type == BUILD_PPTX
+        want_pdf = _intent_type == BUILD_PDF
+        want_docx = _intent_type == BUILD_WORD
+        want_all = _intent_type == BUILD_ALL
+
+        is_export = _intent_type in BUILD_INTENTS
 
         print(f"[EXPORT CHECK] Message: {user_message[:80]}")
         print(f"[EXPORT CHECK] wants_pbi={want_pbi}, wants_dashboard={want_dash}, "

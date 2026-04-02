@@ -1390,40 +1390,50 @@ with tab1:
 
             # Let Claude react naturally
             _upload_msg = ""
+            _has_context = _data_ctx or _tableau_ctx
             try:
-                if _agent and _agent.client and _data_ctx:
+                if _agent and _agent.client and _has_context:
                     _react_prompt = (
-                        f"The user just uploaded data. React as Dr. Data.\n\n"
-                        f"{_data_ctx}{_tableau_ctx}\n\n"
-                        f"In 2-3 sentences:\n"
-                        f"1. Tell them what you see that is interesting in THIS specific data\n"
-                        f"2. Tell them what you would build with it and why\n"
-                        f"3. Be specific to the data -- reference actual column names and patterns\n"
-                        f"Do NOT give a generic menu of capabilities. "
-                        f"Do NOT say 'I can create dashboards, reports...' -- that is boring. "
-                        f"Instead show them you already understand their data."
+                        f"The user just uploaded: {name_str}\n\n"
+                        f"{_data_ctx or '(No tabular data extracted yet -- Tableau .hyper format)'}"
+                        f"{_tableau_ctx}\n\n"
+                        f"React as Dr. Data in 2-4 sentences:\n"
+                        f"1. Tell them what you see in THIS specific file -- "
+                        f"reference worksheet names, dashboard names, column names, anything specific\n"
+                        f"2. Tell them what you would build with it and why -- "
+                        f"be opinionated about the best approach\n"
+                        f"3. If this is a Tableau file, mention you can convert it to Power BI "
+                        f"or build a fresh interactive dashboard from it\n"
+                        f"Do NOT give a generic menu. Do NOT say 'What would you like me to build?' "
+                        f"Do NOT list capabilities. Show you already understand their data. "
+                        f"Be direct and confident."
                     )
                     from config.prompts import DR_DATA_SYSTEM_PROMPT
-                    _react_resp = _agent.client.messages.create(
+                    _react_parts = []
+                    with _agent.client.messages.stream(
                         model=_agent.MODEL,
                         max_tokens=300,
                         temperature=0.5,
                         system=DR_DATA_SYSTEM_PROMPT,
                         messages=[{"role": "user", "content": _react_prompt}],
-                        timeout=20.0,
-                    )
-                    for _blk in _react_resp.content:
-                        if hasattr(_blk, "text"):
-                            _upload_msg = _blk.text
-                            break
+                    ) as _react_stream:
+                        for _chunk in _react_stream.text_stream:
+                            _react_parts.append(_chunk)
+                    _upload_msg = "".join(_react_parts)
             except Exception as _react_err:
                 print(f"[UPLOAD REACT] Failed: {_react_err}")
 
             if not _upload_msg:
-                # Fallback if Claude fails
+                # Fallback if Claude fails -- still be specific
                 _upload_msg = f"Loaded {name_str}."
-                if _data_ctx:
-                    _upload_msg += f" {len(ws.get('data_preview', []))} rows ready to analyze."
+                if ws.get("data_preview") is not None:
+                    _fdf = ws["data_preview"]
+                    _upload_msg += (
+                        f" {len(_fdf):,} rows, {len(_fdf.columns)} columns. "
+                        f"Ready to analyze and build."
+                    )
+                elif _tableau_ctx:
+                    _upload_msg += f"{_tableau_ctx}. Ready to convert or build from this."
 
             st.session_state.messages.append({
                 "role": "assistant",

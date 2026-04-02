@@ -72,14 +72,21 @@ class HTMLDashboardBuilder:
         # Embed data as JSON
         data_json = df_embed.to_json(orient="records", date_format="iso").replace("</script>", "<\\/script>")
 
-        # Build chart configs
+        # Build chart configs (AI-designed if spec provided, else auto-detect)
         charts = self._plan_charts(df, analysis, dashboard_spec)
 
         # Build filter configs
-        filters = self._plan_filters(df, analysis)
+        filters = self._plan_filters(df, analysis, dashboard_spec)
 
         # KPI configs
-        kpis = self._plan_kpis(df, analysis)
+        kpis = self._plan_kpis(df, analysis, dashboard_spec)
+
+        # Use AI title/subtitle if provided
+        if dashboard_spec:
+            if dashboard_spec.get("title") and not title:
+                title = dashboard_spec["title"]
+            if dashboard_spec.get("subtitle"):
+                subtitle = dashboard_spec["subtitle"]
 
         # Assemble HTML
         html = self._render(
@@ -138,8 +145,23 @@ class HTMLDashboardBuilder:
 
         return result
 
-    def _plan_kpis(self, df, analysis):
-        """Plan KPI cards."""
+    def _plan_kpis(self, df, analysis, spec=None):
+        """Plan KPI cards. Uses spec if provided."""
+        if spec and spec.get("kpis"):
+            kpis = []
+            valid_cols = set(df.columns)
+            for sk in spec["kpis"]:
+                col = sk.get("column", "")
+                if col and col in valid_cols:
+                    kpis.append({
+                        "column": col,
+                        "label": sk.get("label", col.replace("_", " ").title()),
+                        "agg": sk.get("agg", "sum"),
+                    })
+            if kpis:
+                return kpis
+
+        # Fallback
         kpis = []
         for col in analysis["numeric"][:4]:
             s = pd.to_numeric(df[col], errors="coerce").dropna()
@@ -152,8 +174,19 @@ class HTMLDashboardBuilder:
             })
         return kpis
 
-    def _plan_filters(self, df, analysis):
+    def _plan_filters(self, df, analysis, spec=None):
         """Plan interactive filters."""
+        if spec and spec.get("filters"):
+            filters = []
+            valid_cols = set(df.columns)
+            for sf in spec["filters"]:
+                col = sf.get("column", "")
+                if col and col in valid_cols:
+                    vals = sorted(df[col].dropna().unique().tolist())[:100]
+                    filters.append({"column": col, "values": [str(v) for v in vals]})
+            if filters:
+                return filters
+
         filters = []
         for col in analysis["categorical"][:5]:
             vals = sorted(df[col].dropna().unique().tolist())[:100]
@@ -161,7 +194,41 @@ class HTMLDashboardBuilder:
         return filters
 
     def _plan_charts(self, df, analysis, spec=None):
-        """Plan which charts to build."""
+        """Plan which charts to build.
+
+        If spec is provided (from Claude design), use it directly.
+        Otherwise fall back to the auto-detection heuristic.
+        """
+        # If we have an AI-designed spec, use its charts
+        if spec and spec.get("charts"):
+            charts = []
+            valid_cols = set(df.columns)
+            for sc in spec["charts"]:
+                x = sc.get("x", "")
+                y = sc.get("y", "")
+                # Validate columns exist
+                if x and x not in valid_cols:
+                    continue
+                if y and y not in valid_cols:
+                    continue
+                chart = {
+                    "type": sc.get("type", "bar"),
+                    "x": x,
+                    "y": y,
+                    "title": sc.get("title", f"{y} by {x}"),
+                    "width": sc.get("width", "half"),
+                    "agg": sc.get("agg", "sum"),
+                    "sort": sc.get("sort", ""),
+                    "top_n": sc.get("top_n"),
+                    "insight_text": sc.get("insight", ""),
+                }
+                if sc.get("color"):
+                    chart["color"] = sc["color"]
+                charts.append(chart)
+            if charts:
+                return charts
+
+        # Fallback: auto-detection
         charts = []
         num = analysis["numeric"]
         cat = analysis["categorical"]
@@ -688,10 +755,67 @@ function renderCharts(data) {{
         xaxis:{{title:{{text:xCol.replace(/_/g,' '),font:{{color:'#94A3B8',size:12}}}}}},
         yaxis:{{title:{{text:yCol.replace(/_/g,' '),font:{{color:'#94A3B8',size:12}}}}}}
       }}), PC);
+
+    }} else if (type === 'stacked_bar' || type === 'stacked') {{
+      // Stacked bar: group by x, split by color field
+      var colorCol = chart.color || '';
+      if (colorCol && data.length > 0 && data[0].hasOwnProperty(colorCol)) {{
+        var cats = [...new Set(data.map(function(r){{return String(r[colorCol]);}}))].slice(0,12);
+        var xKeys = [...new Set(data.map(function(r){{return String(r[xCol]);}}))].slice(0,20);
+        var traces = cats.map(function(cat, ci) {{
+          var ys = xKeys.map(function(xk) {{
+            var vals = data.filter(function(r){{return String(r[xCol])===xk && String(r[colorCol])===cat;}})
+                          .map(function(r){{return parseFloat(r[yCol]);}}).filter(function(v){{return !isNaN(v);}});
+            return vals.reduce(function(a,b){{return a+b;}},0);
+          }});
+          return {{x:xKeys,y:ys,name:cat,type:'bar',marker:{{color:COLORS[ci%COLORS.length]}}}};
+        }});
+        Plotly.newPlot(divId, traces, ML({{title:{{text:title,font:{{size:14,color:'#E5E7EB'}}}},barmode:'stack'}}), PC);
+      }} else {{
+        // Fallback to regular bar if no color column
+        var ag = aggregate(data, xCol, yCol, agg, chart.sort, chart.top_n || 15);
+        var bCols = ag.map(function(_,idx){{ return COLORS[idx % COLORS.length]; }});
+        Plotly.newPlot(divId, [{{
+          x:ag.map(function(r){{return r.x;}}),y:ag.map(function(r){{return r.y;}}),
+          type:'bar',marker:{{color:bCols,opacity:0.9}}
+        }}], ML({{title:{{text:title,font:{{size:14,color:'#E5E7EB'}}}}}}), PC);
+      }}
+
+    }} else if (type === 'treemap') {{
+      var ag = aggregate(data, xCol, yCol, agg, 'desc', 20);
+      Plotly.newPlot(divId, [{{
+        type:'treemap',
+        labels:ag.map(function(r){{return r.x;}}),
+        parents:ag.map(function(){{return '';}}),
+        values:ag.map(function(r){{return r.y;}}),
+        textinfo:'label+value+percent root',
+        marker:{{colors:ag.map(function(_,idx){{return COLORS[idx%COLORS.length];}}),
+          line:{{color:'#0F172A',width:2}}}},
+        hovertemplate:'<b>%{{label}}</b><br>%{{value:,.0f}}<extra></extra>'
+      }}], ML({{title:{{text:title,font:{{size:14,color:'#E5E7EB'}}}}}}), PC);
+
+    }} else if (type === 'heatmap') {{
+      // Heatmap: pivot x vs color, values = y
+      var colorCol = chart.color || xCol;
+      var xKeys = [...new Set(data.map(function(r){{return String(r[xCol]);}}))].slice(0,20);
+      var yKeys = [...new Set(data.map(function(r){{return String(r[colorCol]);}}))].slice(0,15);
+      var z = yKeys.map(function(yk) {{
+        return xKeys.map(function(xk) {{
+          var vals = data.filter(function(r){{return String(r[xCol])===xk && String(r[colorCol])===yk;}})
+                        .map(function(r){{return parseFloat(r[yCol]);}}).filter(function(v){{return !isNaN(v);}});
+          return vals.length > 0 ? vals.reduce(function(a,b){{return a+b;}},0) : 0;
+        }});
+      }});
+      Plotly.newPlot(divId, [{{type:'heatmap',x:xKeys,y:yKeys,z:z,
+        colorscale:[[0,'#0F172A'],[0.5,'#6366F1'],[1,'#22D3EE']],
+        hovertemplate:'%{{x}} / %{{y}}: <b>%{{z:,.0f}}</b><extra></extra>'
+      }}], ML({{title:{{text:title,font:{{size:14,color:'#E5E7EB'}}}}}}), PC);
     }}
 
-    // Talking point below each chart
-    var ins = chartInsight(chart, data);
+    // Talking point below each chart -- prefer AI insight if available
+    var ins = chart.insight_text
+      ? '<strong>Insight:</strong> ' + chart.insight_text
+      : chartInsight(chart, data);
     if (ins) document.getElementById(insId).innerHTML = ins;
   }});
 }}

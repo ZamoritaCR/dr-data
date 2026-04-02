@@ -298,6 +298,7 @@ class DrDataAgent:
         self.sheet_name = None
         self.tableau_spec = None
         self.generated_files = []
+        self._dashboard_iteration = 0     # Increments each build for variation
 
         # Multi-file session support
         self.session = None
@@ -1371,22 +1372,32 @@ class DrDataAgent:
             # -- Interactive HTML Dashboard --
             if want_dash:
                 print('[BUILD] Starting dashboard generation...')
-                _progress("Generating interactive dashboard...")
+                self._dashboard_iteration += 1
+                _progress(
+                    f"Designing dashboard (iteration {self._dashboard_iteration})..."
+                )
                 try:
-                    p = self.dashboard_builder.generate(
-                        self.dataframe, title,
-                        os.path.join(
-                            self.output_dir, f"{safe}_dashboard.html"
-                        ),
+                    # Use Claude to design the dashboard before building
+                    dash_spec = self._design_html_dashboard(
+                        user_message, title, _progress
+                    )
+
+                    _progress("Rendering HTML dashboard with designed layout...")
+                    p = self.html_builder.build(
+                        self.dataframe,
+                        output_dir=self.output_dir,
+                        title=title,
+                        subtitle=f"Version {self._dashboard_iteration}",
+                        dashboard_spec=dash_spec,
                     )
                     if p:
                         downloads.append({
                             "name": "Interactive Dashboard",
-                            "filename": f"{safe}_dashboard.html",
+                            "filename": os.path.basename(p),
                             "path": p,
                             "description": (
-                                "Filterable charts and data table with "
-                                "search, sort, copy, and CSV export"
+                                "AI-designed interactive dashboard with "
+                                "filterable charts, KPIs, and insights"
                             ),
                         })
                         self.trace.log_deliverable(
@@ -2309,6 +2320,110 @@ class DrDataAgent:
 
         self.generated_files.append(filepath)
         return json.dumps({"status": "success", "file_path": filepath})
+
+    def _design_html_dashboard(self, user_request, title, progress_fn=None):
+        """Use Claude to design a dashboard spec for HTML rendering.
+
+        Analyzes the actual data and user request to decide what charts,
+        KPIs, and layout to produce. Each call produces different output
+        based on the iteration counter and user request.
+        """
+        if progress_fn:
+            progress_fn("Claude is analyzing your data and designing the dashboard...")
+
+        # Build a compact data summary for Claude
+        df = self.dataframe
+        col_info = []
+        for col in df.columns[:30]:
+            dtype = str(df[col].dtype)
+            nunique = df[col].nunique()
+            sample = df[col].dropna().head(3).tolist()
+            if pd.api.types.is_numeric_dtype(df[col]):
+                stats = f"min={df[col].min()}, max={df[col].max()}, mean={df[col].mean():.1f}"
+                col_info.append(f"  {col} (numeric, {nunique} unique): {stats}")
+            elif pd.api.types.is_datetime64_any_dtype(df[col]):
+                col_info.append(f"  {col} (date): {df[col].min()} to {df[col].max()}")
+            else:
+                col_info.append(f"  {col} (text, {nunique} unique): {sample[:3]}")
+
+        data_summary = (
+            f"Dataset: {len(df)} rows x {len(df.columns)} columns\n"
+            f"Columns:\n" + "\n".join(col_info)
+        )
+
+        prompt = f"""Design an interactive HTML dashboard for this data.
+
+USER REQUEST: {user_request}
+ITERATION: {self._dashboard_iteration} (make this version DIFFERENT from previous versions)
+
+{data_summary}
+
+Return a JSON object with this exact structure:
+{{
+  "title": "Dashboard Title",
+  "subtitle": "One-line insight",
+  "kpis": [
+    {{"column": "col_name", "label": "Display Label", "agg": "sum|avg|count|max|min"}}
+  ],
+  "charts": [
+    {{
+      "type": "line|bar|hbar|donut|scatter|area|stacked_bar|heatmap|treemap",
+      "title": "Chart Title",
+      "x": "column_name",
+      "y": "column_name",
+      "color": "column_name_or_null",
+      "agg": "sum|avg|count|max|min",
+      "sort": "desc|asc|none",
+      "top_n": null,
+      "width": "full|half",
+      "insight": "One sentence explaining what this chart reveals"
+    }}
+  ],
+  "filters": [
+    {{"column": "col_name"}}
+  ]
+}}
+
+RULES:
+- Use ONLY columns that exist in the dataset above
+- Design 4-8 charts that tell a compelling DATA STORY
+- Lead with the most important insight, not alphabetical columns
+- For iteration {self._dashboard_iteration}: {"Focus on TRENDS and TIME PATTERNS" if self._dashboard_iteration % 3 == 1 else "Focus on COMPARISONS and RANKINGS" if self._dashboard_iteration % 3 == 2 else "Focus on DISTRIBUTIONS and OUTLIERS"}
+- Include at least one donut or treemap for composition
+- Include at least one time series if date columns exist
+- KPIs should be the 3-4 most important numbers a decision-maker needs
+- Every chart must have a specific insight explaining what it shows
+- Do NOT just list all columns -- be SELECTIVE and ANALYTICAL
+- Use descriptive chart titles that state the finding, not just "X by Y"
+
+Output ONLY valid JSON. No markdown. No commentary."""
+
+        try:
+            response = self.client.messages.create(
+                model=self.MODEL,
+                max_tokens=4096,
+                temperature=0.7,  # Some creativity
+                messages=[{"role": "user", "content": prompt}],
+            )
+            raw = response.content[0].text.strip()
+            # Strip markdown fences
+            import re as _re
+            raw = _re.sub(r'^```(?:json)?\s*\n?', '', raw)
+            raw = _re.sub(r'\n?```\s*$', '', raw)
+            spec = json.loads(raw)
+            if progress_fn:
+                n_charts = len(spec.get("charts", []))
+                n_kpis = len(spec.get("kpis", []))
+                progress_fn(
+                    f"Dashboard designed: {n_charts} charts, {n_kpis} KPIs, "
+                    f"{len(spec.get('filters', []))} filters"
+                )
+            return spec
+        except Exception as e:
+            print(f"[DESIGN] Claude dashboard design failed: {e}")
+            if progress_fn:
+                progress_fn("Design failed, using auto-detected layout...")
+            return None
 
     def _report_progress(self, msg):
         """Send a progress update to the UI if a callback is set."""

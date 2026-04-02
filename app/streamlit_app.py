@@ -1462,13 +1462,43 @@ with tab1:
                 with st.chat_message("assistant"):
 
                     msg_lower = prompt.lower() if isinstance(prompt, str) else ""
-                    is_export = any(kw in msg_lower for kw in [
+
+                    # Explicit export keywords
+                    _explicit_export = any(kw in msg_lower for kw in [
                         "power bi", "powerbi", "pbi", "pbip", "pbix",
                         "dashboard", "html", "interactive",
                         "powerpoint", "pptx", "slides", "presentation", "deck",
                         "pdf", "report", "word", "docx", "document",
                         "all formats", "all three", "everything",
                     ])
+
+                    # Follow-up intent: user wants another build or a redo
+                    _followup_build = any(kw in msg_lower for kw in [
+                        "do it", "build it", "make it", "generate it",
+                        "another one", "another version", "new version",
+                        "different version", "better version", "redo",
+                        "again", "one more", "try again", "make another",
+                        "do something different", "something different",
+                        "something else", "give me another",
+                        "surprise me", "out of this world",
+                        "make something", "create something",
+                        "build something", "generate something",
+                        "ok do it", "yes do it", "go ahead",
+                        "do that", "yes build", "yes create",
+                        "make me", "build me", "create me",
+                    ])
+
+                    # Check if last deliverable was an export (for follow-up context)
+                    _last_was_export = False
+                    if st.session_state.messages:
+                        for _prev in reversed(st.session_state.messages[-5:]):
+                            if _prev.get("downloads"):
+                                _last_was_export = True
+                                break
+
+                    is_export = _explicit_export or (
+                        _followup_build and _last_was_export
+                    )
 
                     if is_export:
                         # ====== EXPORT PATH -- hand off to workspace ======

@@ -1218,6 +1218,26 @@ class DrDataAgent:
             "all formats", "all three", "everything",
         ))
 
+        # Follow-up intent: user wants a rebuild
+        _followup_build = any(k in msg_lower for k in (
+            "do it", "build it", "make it", "generate it",
+            "another one", "another version", "new version",
+            "different version", "better version", "redo",
+            "again", "one more", "try again", "make another",
+            "do something different", "something different",
+            "something else", "give me another",
+            "surprise me", "out of this world",
+            "make something", "create something",
+            "build something", "generate something",
+            "ok do it", "yes do it", "go ahead",
+            "do that", "yes build", "yes create",
+            "make me", "build me", "create me",
+        ))
+
+        if _followup_build and not (want_pbi or want_dash or want_pptx or want_pdf or want_docx):
+            # Default follow-up to dashboard (most common rebuild)
+            want_dash = True
+
         is_export = (
             want_pptx or want_pdf or want_docx
             or want_dash or want_pbi or want_all

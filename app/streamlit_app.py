@@ -1482,6 +1482,9 @@ with tab1:
                         # ====== CHAT PATH -- streaming, no spinner ======
 
                         # Auto-load data if the agent hasn't ingested it yet
+                        if agent.dataframe is None:
+                            agent._try_recover_data()
+
                         if st.session_state.uploaded_files and agent.dataframe is None:
                             for name, info in st.session_state.uploaded_files.items():
                                 path = info.get("path", "")

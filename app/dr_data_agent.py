@@ -1253,6 +1253,10 @@ class DrDataAgent:
             pass
 
         if is_export:
+            # Try to recover data before checking
+            if self.dataframe is None:
+                self._try_recover_data()
+
             print(f"[EXPORT] is_export=True. dataframe={self.dataframe is not None}, "
                   f"tableau_spec={bool(self.tableau_spec)}, "
                   f"session={bool(self.session)}")
@@ -1281,6 +1285,9 @@ class DrDataAgent:
                     self.dataframe = df
                     self.data_file_path = csv_path
                     self.data_path = csv_path
+                    # Profile immediately so context builder sees it
+                    if self.data_profile is None:
+                        self.data_profile = self.analyzer.profile(df)
 
                     self._report_progress(
                         f"Synthetic data generated: {len(df)} rows x "
@@ -1934,9 +1941,20 @@ class DrDataAgent:
         # Fallback: single-file context injection
         context_parts = []
 
+        if self.dataframe is not None:
+            rows = len(self.dataframe)
+            cols = len(self.dataframe.columns)
+            col_list = ", ".join(self.dataframe.columns[:15])
+            context_parts.append(
+                f"[SYSTEM: Data is loaded and ready. {rows:,} rows x {cols} columns. "
+                f"Columns: {col_list}. "
+                f"Do NOT ask the user to upload data -- you already have it. "
+                f"Use the tools (build_powerbi, build_html_dashboard, analyze_data) directly.]"
+            )
+
         if self.data_file_path:
             context_parts.append(
-                f"[SYSTEM: File loaded at {self.data_file_path}. "
+                f"[SYSTEM: Source file: {os.path.basename(self.data_file_path)}. "
                 f"Do NOT ask user for file path -- you already have it.]"
             )
 
@@ -1947,19 +1965,23 @@ class DrDataAgent:
                 c["name"] for c in self.data_profile.get("columns", [])
             ]
             context_parts.append(
-                f"[SYSTEM: Dataset has {rows} rows, {cols} columns: "
-                f"{', '.join(col_names[:10])}. Profile is available. "
+                f"[SYSTEM: Data profile available: {rows} rows, {cols} columns: "
+                f"{', '.join(col_names[:10])}. "
                 f"Proceed with analysis -- do not ask for more info.]"
             )
 
         if self.dashboard_spec:
             context_parts.append(
-                "[SYSTEM: Dashboard has been designed and is ready to build.]"
+                "[SYSTEM: A dashboard has already been designed and built. "
+                "You can modify it, build another format, or analyze the data further.]"
             )
 
         if self.tableau_spec:
+            ws_count = len(self.tableau_spec.get("worksheets", []))
+            db_count = len(self.tableau_spec.get("dashboards", []))
             context_parts.append(
-                "[SYSTEM: Tableau/Alteryx file has been parsed. Structure available.]"
+                f"[SYSTEM: Tableau workbook parsed: {ws_count} worksheets, "
+                f"{db_count} dashboards. Structure available for migration.]"
             )
 
         if self.snowflake_tables:
@@ -2231,7 +2253,9 @@ class DrDataAgent:
         title = inputs.get("title", "Dashboard")
         data_path = inputs.get("data_path", self.data_path)
 
-        # Load data if we don't have a DataFrame yet
+        # Try to recover data from session
+        if self.dataframe is None:
+            self._try_recover_data()
         if self.dataframe is None:
             if data_path and os.path.exists(data_path):
                 ext = data_path.rsplit(".", 1)[-1].lower()
@@ -2291,12 +2315,76 @@ class DrDataAgent:
         if hasattr(self, "_progress_callback") and self._progress_callback:
             self._progress_callback(msg)
 
+    def _try_recover_data(self):
+        """Try every available source to recover a dataframe.
+
+        Called when self.dataframe is None but the user expects data to be loaded.
+        Sources tried in order:
+        1. MultiFileSession primary dataframe
+        2. data_file_path (CSV/Excel/Parquet on disk)
+        3. Synthetic generation from tableau_spec
+        """
+        # 1. Session
+        if self.session:
+            try:
+                df = self.session.get_primary_dataframe()
+                if df is not None:
+                    self.dataframe = df
+                    if self.data_profile is None:
+                        self.data_profile = self.analyzer.profile(df)
+                    print(f"[RECOVER] Loaded from session: {df.shape}")
+                    return
+            except Exception:
+                pass
+
+        # 2. File on disk
+        if self.data_file_path and os.path.exists(self.data_file_path):
+            try:
+                ext = self.data_file_path.rsplit(".", 1)[-1].lower()
+                if ext == "csv":
+                    self.dataframe = pd.read_csv(self.data_file_path)
+                elif ext in ("xlsx", "xls"):
+                    from app.file_handler import load_excel_smart
+                    self.dataframe, self.sheet_name = load_excel_smart(self.data_file_path)
+                elif ext == "parquet":
+                    self.dataframe = pd.read_parquet(self.data_file_path)
+                elif ext == "json":
+                    self.dataframe = pd.read_json(self.data_file_path)
+                if self.dataframe is not None:
+                    if self.data_profile is None:
+                        self.data_profile = self.analyzer.profile(self.dataframe)
+                    print(f"[RECOVER] Loaded from file: {self.dataframe.shape}")
+                    return
+            except Exception as e:
+                print(f"[RECOVER] File load failed: {e}")
+
+        # 3. Synthetic from Tableau spec
+        if self.tableau_spec:
+            try:
+                from core.synthetic_data import generate_from_tableau_spec
+                output_dir = str(PROJECT_ROOT / "output")
+                df, csv_path, _ = generate_from_tableau_spec(
+                    self.tableau_spec, num_rows=2000, output_dir=output_dir
+                )
+                self.dataframe = df
+                self.data_file_path = csv_path
+                self.data_path = csv_path
+                if self.data_profile is None:
+                    self.data_profile = self.analyzer.profile(df)
+                print(f"[RECOVER] Generated synthetic: {df.shape}")
+                return
+            except Exception as e:
+                print(f"[RECOVER] Synthetic failed: {e}")
+
     def _tool_build_powerbi(self, inputs):
         """Build a Power BI project using the full AI pipeline and ZIP it."""
         request = inputs.get("request", "Build a comprehensive dashboard")
         audience = inputs.get("audience", "executive")
         project_name = inputs.get("project_name", "Dashboard")
 
+        # Try to recover data from session if not on agent
+        if self.dataframe is None:
+            self._try_recover_data()
         if self.dataframe is None:
             return json.dumps({"error": "No data available. Upload a data file first."})
 

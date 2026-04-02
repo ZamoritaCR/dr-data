@@ -1345,7 +1345,7 @@ with tab1:
                 with st.chat_message(msg["role"]):
                     st.markdown(msg["content"])
 
-        # === HANDLE FILE UPLOAD -- instant acknowledgment, no blocking LLM call ===
+        # === HANDLE FILE UPLOAD -- Claude reacts to the data ===
         if st.session_state.file_just_uploaded:
             file_info = st.session_state.file_just_uploaded
             st.session_state.file_just_uploaded = None
@@ -1357,32 +1357,77 @@ with tab1:
             ws["phase"] = "analyzed"
             ws["progress_messages"].append(f"Loaded {name_str}")
 
-            # Build a quick summary from data already profiled in sidebar
-            preview_note = ""
+            # Build data context for Claude's first reaction
+            _agent = st.session_state.agent
+            _data_ctx = ""
             if ws.get("data_preview") is not None:
-                df = ws["data_preview"]
-                cols = ", ".join(df.columns[:6].tolist())
-                more = "..." if len(df.columns) > 6 else ""
-                preview_note = (
-                    f" I can see {len(df):,} rows and "
-                    f"{len(df.columns)} columns: {cols}{more}."
+                _df = ws["data_preview"]
+                _col_details = []
+                for _c in _df.columns[:20]:
+                    _nu = _df[_c].nunique()
+                    if pd.api.types.is_numeric_dtype(_df[_c]):
+                        _col_details.append(f"{_c} (numeric, range {_df[_c].min():.0f}-{_df[_c].max():.0f})")
+                    elif pd.api.types.is_datetime64_any_dtype(_df[_c]):
+                        _col_details.append(f"{_c} (dates)")
+                    else:
+                        _top = list(_df[_c].value_counts().head(3).index)
+                        _col_details.append(f"{_c} ({_nu} values, e.g. {_top})")
+                _data_ctx = (
+                    f"File: {name_str}\n"
+                    f"Rows: {len(_df):,}, Columns: {len(_df.columns)}\n"
+                    f"Columns: " + "; ".join(_col_details)
                 )
 
-            audit_note = ""
-            if ws.get("audit_releasable") is True:
-                audit_note = " Data quality audit passed."
-                ws["progress_messages"].append("Audit passed")
-            elif ws.get("audit_releasable") is False:
-                audit_note = " Data quality audit flagged some issues -- check the workspace."
-                ws["progress_messages"].append("Audit flagged issues")
+            _tableau_ctx = ""
+            if _agent and _agent.tableau_spec:
+                _ws_ct = len(_agent.tableau_spec.get("worksheets", []))
+                _db_ct = len(_agent.tableau_spec.get("dashboards", []))
+                _cf_ct = len(_agent.tableau_spec.get("calculated_fields", []))
+                _tableau_ctx = (
+                    f"\nTableau workbook: {_ws_ct} worksheets, "
+                    f"{_db_ct} dashboards, {_cf_ct} calculated fields"
+                )
+
+            # Let Claude react naturally
+            _upload_msg = ""
+            try:
+                if _agent and _agent.client and _data_ctx:
+                    _react_prompt = (
+                        f"The user just uploaded data. React as Dr. Data.\n\n"
+                        f"{_data_ctx}{_tableau_ctx}\n\n"
+                        f"In 2-3 sentences:\n"
+                        f"1. Tell them what you see that is interesting in THIS specific data\n"
+                        f"2. Tell them what you would build with it and why\n"
+                        f"3. Be specific to the data -- reference actual column names and patterns\n"
+                        f"Do NOT give a generic menu of capabilities. "
+                        f"Do NOT say 'I can create dashboards, reports...' -- that is boring. "
+                        f"Instead show them you already understand their data."
+                    )
+                    from config.prompts import DR_DATA_SYSTEM_PROMPT
+                    _react_resp = _agent.client.messages.create(
+                        model=_agent.MODEL,
+                        max_tokens=300,
+                        temperature=0.5,
+                        system=DR_DATA_SYSTEM_PROMPT,
+                        messages=[{"role": "user", "content": _react_prompt}],
+                        timeout=20.0,
+                    )
+                    for _blk in _react_resp.content:
+                        if hasattr(_blk, "text"):
+                            _upload_msg = _blk.text
+                            break
+            except Exception as _react_err:
+                print(f"[UPLOAD REACT] Failed: {_react_err}")
+
+            if not _upload_msg:
+                # Fallback if Claude fails
+                _upload_msg = f"Loaded {name_str}."
+                if _data_ctx:
+                    _upload_msg += f" {len(ws.get('data_preview', []))} rows ready to analyze."
 
             st.session_state.messages.append({
                 "role": "assistant",
-                "content": (
-                    f"Loaded {name_str}.{preview_note}{audit_note} "
-                    f"What would you like me to build? I can create dashboards, "
-                    f"Power BI projects, reports, presentations -- whatever you need."
-                ),
+                "content": _upload_msg,
                 "timestamp": time.time(),
             })
 

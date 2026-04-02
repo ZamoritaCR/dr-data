@@ -254,53 +254,75 @@ class HTMLDashboardBuilder:
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 :root {{
-  --bg:#0D0D0D;--surface:#1A1A1A;--elevated:#262626;--border:#333333;
-  --text:#FFFFFF;--text2:#B0B0B0;--muted:#808080;
-  --accent:#FFE600;--accent2:#FFDE00;--green:#238636;--amber:#d29922;--red:#da3633;--purple:#a371f7;
+  --bg:#0F172A;--surface:#1E293B;--elevated:#334155;--border:#475569;
+  --text:#F1F5F9;--text2:#94A3B8;--muted:#64748B;
+  --accent:#6366F1;--accent2:#818CF8;--green:#10B981;--amber:#F59E0B;--red:#EF4444;--purple:#8B5CF6;--cyan:#22D3EE;--pink:#EC4899;
 }}
 *{{margin:0;padding:0;box-sizing:border-box;}}
-body{{background:var(--bg);color:var(--text);font-family:'Inter',system-ui,-apple-system,sans-serif;font-size:14px;}}
-.hdr{{background:linear-gradient(135deg,#0D0D0D,#1A1A1A);border-bottom:1px solid var(--border);padding:20px 32px;position:relative;display:flex;align-items:center;justify-content:space-between;}}
-.hdr::before{{content:"";position:absolute;top:0;left:0;right:0;height:3px;background:var(--accent);}}
-.hdr h1{{font-size:20px;font-weight:600;letter-spacing:-0.3px;}}
+body{{background:var(--bg);color:var(--text);font-family:'Inter',system-ui,-apple-system,sans-serif;font-size:14px;line-height:1.5;}}
+
+/* Header */
+.hdr{{background:linear-gradient(135deg,#0F172A 0%,#1E293B 100%);border-bottom:1px solid var(--border);padding:24px 36px;position:relative;display:flex;align-items:center;justify-content:space-between;}}
+.hdr::before{{content:"";position:absolute;top:0;left:0;right:0;height:4px;background:linear-gradient(90deg,#6366F1,#22D3EE,#10B981,#F59E0B);}}
+.hdr h1{{font-size:22px;font-weight:700;letter-spacing:-0.5px;background:linear-gradient(135deg,#F1F5F9,#94A3B8);-webkit-background-clip:text;-webkit-text-fill-color:transparent;}}
 .hdr .meta{{display:flex;gap:20px;margin-top:6px;font-size:12px;color:var(--text2);flex-wrap:wrap;}}
-.hdr .wu-badge{{background:var(--accent);color:#000;font-weight:900;font-size:11px;padding:5px 12px;border-radius:3px;letter-spacing:1px;white-space:nowrap;}}
-.wrap{{max-width:1440px;margin:0 auto;padding:20px 32px;}}
+.hdr .wu-badge{{background:linear-gradient(135deg,var(--accent),var(--purple));color:#fff;font-weight:700;font-size:11px;padding:5px 14px;border-radius:6px;letter-spacing:.5px;white-space:nowrap;}}
+.wrap{{max-width:1480px;margin:0 auto;padding:24px 36px;}}
 
-/* KPIs */
-.kpi-row{{display:flex;gap:14px;margin-bottom:20px;flex-wrap:wrap;}}
-.kpi{{flex:1;min-width:160px;background:linear-gradient(135deg,var(--surface),var(--elevated));border:1px solid var(--border);border-radius:10px;padding:18px 22px;text-align:center;transition:border-color .2s;}}
-.kpi:hover{{border-color:var(--accent);}}
-.kpi .v{{font-size:26px;font-weight:700;line-height:1.2;}}
-.kpi .l{{font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:.8px;margin-top:4px;}}
-.kpi .s{{font-size:11px;color:var(--muted);margin-top:2px;}}
+/* KPI Cards */
+.kpi-row{{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-bottom:24px;}}
+.kpi{{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px 24px;position:relative;overflow:hidden;transition:all .25s ease;}}
+.kpi::before{{content:"";position:absolute;top:0;left:0;right:0;height:3px;border-radius:12px 12px 0 0;}}
+.kpi:nth-child(1)::before{{background:linear-gradient(90deg,#6366F1,#818CF8);}}
+.kpi:nth-child(2)::before{{background:linear-gradient(90deg,#22D3EE,#67E8F9);}}
+.kpi:nth-child(3)::before{{background:linear-gradient(90deg,#10B981,#34D399);}}
+.kpi:nth-child(4)::before{{background:linear-gradient(90deg,#F59E0B,#FBBF24);}}
+.kpi:hover{{border-color:var(--accent);transform:translateY(-2px);box-shadow:0 8px 25px rgba(99,102,241,0.15);}}
+.kpi .v{{font-size:28px;font-weight:800;line-height:1.1;margin-bottom:2px;}}
+.kpi .l{{font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.8px;font-weight:500;}}
+.kpi .s{{font-size:12px;color:var(--muted);margin-top:4px;}}
 
-/* Stats */
-.stats{{display:flex;gap:16px;margin-bottom:16px;padding:10px 16px;background:var(--surface);border:1px solid var(--border);border-radius:8px;font-size:12px;color:var(--text2);flex-wrap:wrap;}}
-.stats strong{{color:var(--text);}}
+/* Stats bar */
+.stats{{display:flex;gap:20px;margin-bottom:20px;padding:12px 20px;background:var(--surface);border:1px solid var(--border);border-radius:10px;font-size:12px;color:var(--text2);flex-wrap:wrap;align-items:center;}}
+.stats strong{{color:var(--text);font-weight:600;}}
 
 /* Filters */
-.fbar{{display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap;align-items:flex-end;}}
-.fgrp label{{display:block;font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;}}
-.fgrp select{{background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:7px 28px 7px 10px;font-size:13px;min-width:140px;appearance:none;cursor:pointer;
-background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238b949e' d='M2 4l4 4 4-4'/%3E%3C/svg%3E");
-background-repeat:no-repeat;background-position:right 8px center;}}
-.fgrp select:hover{{border-color:var(--accent);}}
-.fgrp .reset{{background:var(--elevated);color:var(--text2);border:1px solid var(--border);border-radius:6px;padding:7px 14px;font-size:12px;cursor:pointer;}}
-.fgrp .reset:hover{{border-color:var(--red);color:var(--red);}}
+.fbar{{display:flex;gap:14px;margin-bottom:24px;flex-wrap:wrap;align-items:flex-end;padding:16px 20px;background:var(--surface);border:1px solid var(--border);border-radius:12px;}}
+.fgrp label{{display:block;font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-bottom:4px;font-weight:600;}}
+.fgrp select{{background:#0F172A;color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px 32px 8px 12px;font-size:13px;min-width:160px;appearance:none;cursor:pointer;font-family:inherit;transition:border-color .2s;
+background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2394A3B8' d='M2 4l4 4 4-4'/%3E%3C/svg%3E");
+background-repeat:no-repeat;background-position:right 10px center;}}
+.fgrp select:hover,.fgrp select:focus{{border-color:var(--accent);outline:none;box-shadow:0 0 0 3px rgba(99,102,241,0.15);}}
+.fgrp .reset{{background:transparent;color:var(--red);border:1px solid var(--red);border-radius:8px;padding:8px 16px;font-size:12px;cursor:pointer;font-family:inherit;font-weight:500;transition:all .2s;}}
+.fgrp .reset:hover{{background:var(--red);color:#fff;}}
 
-/* Charts */
-.cgrid{{display:flex;flex-wrap:wrap;gap:16px;}}
-.cbox{{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px;min-height:340px;transition:border-color .2s;}}
-.cbox:hover{{border-color:var(--accent);}}
-.cbox .insight{{font-size:11px;color:var(--text2);padding:8px 4px 0;line-height:1.5;border-top:1px solid var(--border);margin-top:8px;}}
-.cbox .insight strong{{color:var(--accent);font-weight:600;}}
+/* Chart grid */
+.cgrid{{display:flex;flex-wrap:wrap;gap:20px;}}
+.cbox{{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px;min-height:360px;transition:all .25s ease;position:relative;}}
+.cbox:hover{{border-color:var(--accent);box-shadow:0 4px 20px rgba(99,102,241,0.08);}}
+.cbox .insight{{font-size:12px;color:var(--text2);padding:10px 4px 0;line-height:1.6;border-top:1px solid rgba(71,85,105,0.5);margin-top:10px;}}
+.cbox .insight strong{{color:var(--cyan);font-weight:600;}}
 
-.footer{{border-top:1px solid var(--border);padding:16px 32px;text-align:center;font-size:11px;color:var(--muted);margin-top:32px;}}
-.filtered-badge{{display:inline-block;background:var(--accent);color:#000;font-size:10px;font-weight:600;padding:2px 8px;border-radius:10px;margin-left:8px;}}
+/* Footer */
+.footer{{border-top:1px solid var(--border);padding:20px 36px;text-align:center;font-size:11px;color:var(--muted);margin-top:40px;}}
 
-@media(max-width:900px){{.cgrid>div{{width:100%!important;}}.kpi-row{{flex-direction:column;}}.wrap{{padding:12px;}}}}
-@media print{{body{{background:#fff;color:#1a1a1a;}}.hdr{{background:#fff;border-bottom:3px solid #FFE600;}}.hdr::before{{background:#FFE600;}}.hdr h1{{color:#1a1a1a;}}.hdr .wu-badge{{background:#FFE600;-webkit-print-color-adjust:exact;print-color-adjust:exact;}}.kpi,.cbox{{background:#fff;border-color:#ddd;}}.kpi .v{{color:#1a1a1a;}}.stats{{background:#f5f5f5;}}footer{{color:#666;}}}}
+/* Filter badge */
+.filtered-badge{{display:inline-block;background:linear-gradient(135deg,var(--accent),var(--purple));color:#fff;font-size:10px;font-weight:600;padding:3px 10px;border-radius:12px;margin-left:10px;}}
+
+/* Responsive */
+@media(max-width:900px){{.cgrid>div{{width:100%!important;}}.kpi-row{{grid-template-columns:1fr 1fr;}}.wrap{{padding:16px;}}.fbar{{flex-direction:column;}}}}
+
+/* Print */
+@media print{{
+  body{{background:#fff;color:#1e293b;}}
+  .hdr{{background:#fff;border-bottom:3px solid #6366F1;}}
+  .hdr::before{{background:linear-gradient(90deg,#6366F1,#22D3EE,#10B981);}}
+  .hdr h1{{-webkit-text-fill-color:#1e293b;}}
+  .kpi,.cbox{{background:#fff;border-color:#e2e8f0;}}
+  .kpi .v{{color:#1e293b;}}
+  .stats,.fbar{{background:#f8fafc;border-color:#e2e8f0;}}
+  .footer{{color:#94a3b8;}}
+}}
 </style>
 </head>
 <body>
@@ -315,7 +337,7 @@ background-repeat:no-repeat;background-position:right 8px center;}}
       <span>Built {timestamp}</span>
     </div>
   </div>
-  <span class="wu-badge">WESTERN UNION</span>
+  <div class="wu-badge">DR. DATA</div>
 </div>
 
 <div class="wrap">
@@ -325,7 +347,7 @@ background-repeat:no-repeat;background-position:right 8px center;}}
   <div class="cgrid" id="chartGrid"></div>
 </div>
 
-<div class="footer">Built by Dr. Data -- Western Union Analytics</div>
+<div class="footer">Built by Dr. Data | The Art of the Possible | Powered by Claude Opus 4</div>
 
 <script>
 // ============================================================
@@ -336,17 +358,18 @@ var CHARTS = {charts_json};
 var FILTERS = {filters_json};
 var KPIS = {kpis_json};
 var TOTAL_ROWS = {row_count};
-var COLORS = ['#FFE600','#FFDE00','#E6CF00','#D4A017','#F5C842','#FFB800','#C9A200','#FFF176','#FFD54F','#E0B400','#B8960F','#FFC107'];
+var COLORS = ['#6366F1','#22D3EE','#F59E0B','#10B981','#F43F5E','#8B5CF6','#EC4899','#14B8A6','#F97316','#3B82F6','#84CC16','#EF4444'];
 var PC = {{responsive:true, displayModeBar:false}};
 var BL = {{
-  paper_bgcolor:'#1A1A1A', plot_bgcolor:'#1A1A1A',
-  font:{{color:'#FFFFFF',family:'Inter,system-ui,sans-serif',size:12}},
-  margin:{{l:50,r:20,t:40,b:40}},
-  xaxis:{{gridcolor:'#333333',linecolor:'#333333',zerolinecolor:'#333333'}},
-  yaxis:{{gridcolor:'#333333',linecolor:'#333333',zerolinecolor:'#333333'}},
+  paper_bgcolor:'#111827', plot_bgcolor:'#111827',
+  font:{{color:'#E5E7EB',family:'Inter,system-ui,sans-serif',size:12}},
+  margin:{{l:56,r:24,t:48,b:48}},
+  xaxis:{{gridcolor:'#1F2937',linecolor:'#374151',zerolinecolor:'#374151',tickfont:{{color:'#9CA3AF'}}}},
+  yaxis:{{gridcolor:'#1F2937',linecolor:'#374151',zerolinecolor:'#374151',tickfont:{{color:'#9CA3AF'}}}},
   colorway:COLORS,
-  legend:{{font:{{color:'#B0B0B0',size:11}},bgcolor:'transparent'}},
-  hoverlabel:{{bgcolor:'#262626',font:{{color:'#FFFFFF',size:12}},bordercolor:'#333333'}}
+  legend:{{font:{{color:'#D1D5DB',size:11}},bgcolor:'transparent',orientation:'h',y:-0.15}},
+  hoverlabel:{{bgcolor:'#1F2937',font:{{color:'#F9FAFB',size:12}},bordercolor:'#4B5563'}},
+  bargap:0.2, bargroupgap:0.08
 }};
 function ML(o){{ var b=JSON.parse(JSON.stringify(BL)); for(var k in o) b[k]=o[k]; return b; }}
 
@@ -414,16 +437,20 @@ function formatNum(v) {{
 
 function renderKPIs(data) {{
   var html = '';
-  var kColors = ['#FFE600','#FFDE00','#F5C842','#FFB800'];
+  var kColors = ['#6366F1','#22D3EE','#10B981','#F59E0B','#F43F5E','#8B5CF6'];
   KPIS.forEach(function(kpi, i) {{
     var vals = data.map(function(r){{ return parseFloat(r[kpi.column]); }}).filter(function(v){{ return !isNaN(v); }});
     if (vals.length === 0) return;
     var total = vals.reduce(function(a,b){{ return a+b; }}, 0);
     var avg = total / vals.length;
+    var min = Math.min.apply(null, vals);
+    var max = Math.max.apply(null, vals);
     var color = kColors[i % kColors.length];
-    html += '<div class="kpi"><div class="v" style="color:'+color+'">'+formatNum(total)+'</div>';
+    html += '<div class="kpi">';
+    html += '<div class="v" style="color:'+color+'">'+formatNum(total)+'</div>';
     html += '<div class="l">'+kpi.label+'</div>';
-    html += '<div class="s">Avg: '+formatNum(avg)+'</div></div>';
+    html += '<div class="s">Avg: '+formatNum(avg)+' | Range: '+formatNum(min)+' - '+formatNum(max)+'</div>';
+    html += '</div>';
   }});
   document.getElementById('kpiRow').innerHTML = html;
 }}
@@ -582,50 +609,68 @@ function renderCharts(data) {{
     var agg = chart.agg || 'sum';
     var title = chart.title || '';
 
+    var ci = i % COLORS.length;
+    var chartColor = COLORS[ci];
+    var chartColor2 = COLORS[(ci+1) % COLORS.length];
+
     if (type === 'line' || type === 'area') {{
       var ta = timeAggregate(data, xCol, yCol, agg);
-      var fill = type === 'area' ? 'tozeroy' : 'none';
-      var fillColor = type === 'area' ? 'rgba(255,230,0,0.10)' : 'rgba(255,230,0,0.06)';
-      var lineColor = type === 'area' ? '#FFDE00' : '#FFE600';
+      var fillAlpha = type === 'area' ? '0.15' : '0.05';
+      var fc = chartColor.replace('#','');
+      var r=parseInt(fc.substr(0,2),16), g=parseInt(fc.substr(2,2),16), b=parseInt(fc.substr(4,2),16);
+      var fillRgba = 'rgba('+r+','+g+','+b+','+fillAlpha+')';
       Plotly.newPlot(divId, [{{
         x:ta.x, y:ta.y, type:'scatter', mode:'lines+markers',
-        line:{{color:lineColor, width:2.5, shape:'spline'}},
-        marker:{{size:4, color:lineColor}},
-        fill: type === 'line' ? 'tozeroy' : fill,
-        fillcolor: type === 'line' ? 'rgba(255,230,0,0.06)' : fillColor,
-        hovertemplate:'%{{x}}<br>%{{y:,.0f}}<extra></extra>'
-      }}], ML({{title:{{text:title,font:{{size:14}}}}}}), PC);
+        line:{{color:chartColor, width:3, shape:'spline'}},
+        marker:{{size:5, color:chartColor, line:{{color:'#0F172A',width:1}}}},
+        fill:'tozeroy', fillcolor:fillRgba,
+        hovertemplate:'%{{x}}<br><b>%{{y:,.0f}}</b><extra></extra>'
+      }}], ML({{title:{{text:title,font:{{size:14,color:'#E5E7EB'}}}},
+        xaxis:{{gridcolor:'#1F2937',showgrid:true}},
+        yaxis:{{gridcolor:'#1F2937',showgrid:true}}
+      }}), PC);
 
     }} else if (type === 'bar') {{
       var ag = aggregate(data, xCol, yCol, agg, chart.sort, chart.top_n);
+      // Gradient-like coloring: each bar a shade from the palette
+      var barColors = ag.map(function(_,idx){{ return COLORS[idx % COLORS.length]; }});
       Plotly.newPlot(divId, [{{
         x:ag.map(function(r){{return r.x;}}),
         y:ag.map(function(r){{return r.y;}}),
-        type:'bar', marker:{{color:'#FFE600'}},
-        hovertemplate:'%{{x}}<br>%{{y:,.0f}}<extra></extra>'
-      }}], ML({{title:{{text:title,font:{{size:14}}}}}}), PC);
+        type:'bar',
+        marker:{{color:barColors, line:{{color:'#0F172A',width:1}}, opacity:0.9}},
+        hovertemplate:'<b>%{{x}}</b><br>%{{y:,.0f}}<extra></extra>'
+      }}], ML({{title:{{text:title,font:{{size:14,color:'#E5E7EB'}}}},
+        xaxis:{{tickangle:ag.length>8?-45:0}}
+      }}), PC);
 
     }} else if (type === 'hbar') {{
       var ag = aggregate(data, xCol, yCol, agg, chart.sort, chart.top_n);
       ag.reverse();
+      var hColors = ag.map(function(_,idx){{ return COLORS[idx % COLORS.length]; }});
       Plotly.newPlot(divId, [{{
         y:ag.map(function(r){{return r.x;}}),
         x:ag.map(function(r){{return r.y;}}),
-        type:'bar', orientation:'h', marker:{{color:'#FFDE00'}},
-        hovertemplate:'%{{y}}: %{{x:,.0f}}<extra></extra>'
-      }}], ML({{title:{{text:title,font:{{size:14}}}},yaxis:{{automargin:true}}}}), PC);
+        type:'bar', orientation:'h',
+        marker:{{color:hColors, line:{{color:'#0F172A',width:1}}, opacity:0.9}},
+        hovertemplate:'<b>%{{y}}</b>: %{{x:,.0f}}<extra></extra>'
+      }}], ML({{title:{{text:title,font:{{size:14,color:'#E5E7EB'}}}},yaxis:{{automargin:true}}}}), PC);
 
     }} else if (type === 'donut') {{
       var ag = aggregate(data, xCol, yCol, agg, 'desc', 8);
       Plotly.newPlot(divId, [{{
         labels:ag.map(function(r){{return r.x;}}),
         values:ag.map(function(r){{return r.y;}}),
-        type:'pie', hole:0.5,
+        type:'pie', hole:0.55,
         textinfo:'percent+label',
-        textfont:{{color:'#FFFFFF',size:11}},
-        marker:{{colors:COLORS, line:{{color:'#0D0D0D',width:2}}}},
-        hovertemplate:'%{{label}}<br>%{{value:,.0f}} (%{{percent}})<extra></extra>'
-      }}], ML({{title:{{text:title,font:{{size:14}}}},showlegend:true}}), PC);
+        textposition:'inside',
+        textfont:{{color:'#F1F5F9',size:11,family:'Inter'}},
+        marker:{{colors:COLORS.slice(0,ag.length), line:{{color:'#0F172A',width:2}}}},
+        hovertemplate:'<b>%{{label}}</b><br>%{{value:,.0f}} (%{{percent}})<extra></extra>',
+        pull:ag.map(function(_,idx){{return idx===0?0.04:0;}})
+      }}], ML({{title:{{text:title,font:{{size:14,color:'#E5E7EB'}}}},showlegend:true,
+        legend:{{font:{{color:'#D1D5DB',size:11}},orientation:'v',x:1.02,y:0.5}}
+      }}), PC);
 
     }} else if (type === 'scatter') {{
       var pts = data.map(function(r){{
@@ -635,12 +680,13 @@ function renderCharts(data) {{
         x:pts.map(function(r){{return r.x;}}),
         y:pts.map(function(r){{return r.y;}}),
         type:'scatter', mode:'markers',
-        marker:{{color:'#FFE600',size:5,opacity:0.6}},
-        hovertemplate:xCol+': %{{x:,.1f}}<br>'+yCol+': %{{y:,.1f}}<extra></extra>'
+        marker:{{color:chartColor,size:6,opacity:0.7,
+          line:{{color:'#0F172A',width:0.5}}}},
+        hovertemplate:xCol+': <b>%{{x:,.1f}}</b><br>'+yCol+': <b>%{{y:,.1f}}</b><extra></extra>'
       }}], ML({{
-        title:{{text:title,font:{{size:14}}}},
-        xaxis:{{title:xCol.replace(/_/g,' ')}},
-        yaxis:{{title:yCol.replace(/_/g,' ')}}
+        title:{{text:title,font:{{size:14,color:'#E5E7EB'}}}},
+        xaxis:{{title:{{text:xCol.replace(/_/g,' '),font:{{color:'#94A3B8',size:12}}}}}},
+        yaxis:{{title:{{text:yCol.replace(/_/g,' '),font:{{color:'#94A3B8',size:12}}}}}}
       }}), PC);
     }}
 

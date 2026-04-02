@@ -1835,6 +1835,7 @@ class DrDataAgent:
         else:
             # ---- Normal chat path (guaranteed if not export) ----
             enriched = self._build_context_message(user_message)
+            _msg_lower = user_message.lower()
 
             # Route: use OpenAI for large-context or analysis-heavy requests,
             # but ONLY when no tool calling is needed.
@@ -1842,13 +1843,13 @@ class DrDataAgent:
                 "build", "power bi", "pbi", "pbip", "tableau", "alteryx",
                 "parse", "migrate",
             )
-            needs_tools = any(kw in msg_lower for kw in _tool_keywords)
+            needs_tools = any(kw in _msg_lower for kw in _tool_keywords)
 
             if not needs_tools and self.openai_client:
                 estimated_tokens = len(enriched) // 4
                 is_heavy = (
                     estimated_tokens > 5000
-                    or any(kw in msg_lower for kw in self._HEAVY_KEYWORDS)
+                    or any(kw in _msg_lower for kw in self._HEAVY_KEYWORDS)
                 )
                 if is_heavy:
                     oai_text = self._call_openai(

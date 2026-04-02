@@ -1358,12 +1358,26 @@ class DrDataAgent:
                 if progress_callback:
                     progress_callback(msg)
 
+            # Title priority: Tableau workbook name > original file name > default
             title = "Dr. Data Report"
-            if self.data_file_path:
+            if self.tableau_spec:
+                # Use Tableau workbook/dashboard name
+                _tb_name = ""
+                for _db in self.tableau_spec.get("dashboards", []):
+                    _tb_name = _db.get("name", "")
+                    if _tb_name:
+                        break
+                if not _tb_name:
+                    _tb_name = self.tableau_spec.get("file_name", "")
+                if _tb_name:
+                    title = _tb_name.replace(".twbx", "").replace(".twb", "").strip()
+            if title == "Dr. Data Report" and self.data_file_path:
                 base = os.path.splitext(
                     os.path.basename(self.data_file_path)
                 )[0]
-                title = base.replace("_", " ").strip() or title
+                # Don't use "synthetic_tableau_data" as title
+                if "synthetic" not in base.lower():
+                    title = base.replace("_", " ").strip() or title
             safe = "".join(
                 c if c.isalnum() or c in " _-" else "_" for c in title
             )
@@ -1771,18 +1785,38 @@ class DrDataAgent:
             if _past_work_context:
                 followup_context += f"\n\n{_past_work_context}"
 
-            # Generate LLM content summary if PBI build context available
+            # Generate Claude narration for every build
             content = ""
-            if pbi_bc and self.client:
+            if self.client and (downloads or errors):
                 try:
-                    _progress("Generating build summary...")
+                    _narration_prompt = (
+                        f"The user asked: \"{user_message}\"\n\n"
+                        f"You just built these deliverables:\n"
+                        + "\n".join(detail_lines)
+                        + f"\n\nDataset: {row_count:,} rows, {col_count} columns."
+                        + (f"\n{data_hint}" if data_hint else "")
+                        + (f"\n\n{pbi_detail}" if pbi_detail else "")
+                        + "\n\nNow respond AS DR. DATA. Tell the user:"
+                        + "\n- What you built and what makes it interesting"
+                        + "\n- One specific insight you noticed in the data while building"
+                        + "\n- What you would do next if they want more"
+                        + "\nBe direct, sharp, and opinionated. No bullet lists. "
+                        + "No generic filler. Talk like a senior analyst sharing findings "
+                        + "with a colleague. 2-3 short paragraphs max."
+                    )
+                    if errors:
+                        _narration_prompt += (
+                            f"\n\nSome builds had issues: {'; '.join(errors[:3])}"
+                        )
+
+                    _progress("Dr. Data is reviewing the results...")
                     summary_resp = self.client.messages.create(
                         model=self.MODEL,
-                        max_tokens=500,
-                        temperature=0.3,
+                        max_tokens=600,
+                        temperature=0.5,
                         system=DR_DATA_SYSTEM_PROMPT,
-                        messages=[{"role": "user", "content": followup_context}],
-                        timeout=30.0,
+                        messages=[{"role": "user", "content": _narration_prompt}],
+                        timeout=45.0,
                     )
                     for block in summary_resp.content:
                         if hasattr(block, "text"):
@@ -1790,11 +1824,11 @@ class DrDataAgent:
                             break
                     self.trace.log_llm_call(
                         "claude", self.MODEL,
-                        "PBI build summary narration",
+                        "Build narration",
                         content[:200],
                     )
-                except Exception:
-                    pass
+                except Exception as _narr_err:
+                    print(f"[NARRATE] Failed: {_narr_err}")
 
             return {
                 "type": "export",

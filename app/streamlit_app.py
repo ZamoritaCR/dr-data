@@ -1053,13 +1053,16 @@ with tab1:
                                     "Deliverables ready -- audited"
                                 )
 
-                                _chat_note = (
-                                    f"Built {len(_downloads)} deliverable(s): "
-                                    f"{', '.join(_fnames)}. "
-                                    f"Check the workspace for downloads."
-                                )
                                 if _content:
-                                    _chat_note = _content + "\n\n" + _chat_note
+                                    # Claude narrated -- use that as the main message
+                                    _chat_note = _content
+                                else:
+                                    # Fallback if narration failed
+                                    _chat_note = (
+                                        f"Built {len(_downloads)} deliverable(s): "
+                                        f"{', '.join(_fnames)}. "
+                                        f"Check the workspace for downloads."
+                                    )
                             else:
                                 _build_status.update(
                                     label="Done", state="complete"

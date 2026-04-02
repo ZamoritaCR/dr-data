@@ -1396,30 +1396,22 @@ class DrDataAgent:
                 print('[BUILD] Starting dashboard generation...')
                 self._dashboard_iteration += 1
                 _progress(
-                    f"Designing dashboard (iteration {self._dashboard_iteration})..."
+                    f"Claude is creating your dashboard from scratch "
+                    f"(version {self._dashboard_iteration})..."
                 )
                 try:
-                    # Use Claude to design the dashboard before building
-                    dash_spec = self._design_html_dashboard(
+                    p = self._generate_freeform_dashboard(
                         user_message, title, _progress
                     )
-
-                    _progress("Rendering HTML dashboard with designed layout...")
-                    p = self.html_builder.build(
-                        self.dataframe,
-                        output_dir=self.output_dir,
-                        title=title,
-                        subtitle=f"Version {self._dashboard_iteration}",
-                        dashboard_spec=dash_spec,
-                    )
                     if p:
+                        fname = os.path.basename(p)
                         downloads.append({
                             "name": "Interactive Dashboard",
-                            "filename": os.path.basename(p),
+                            "filename": fname,
                             "path": p,
                             "description": (
-                                "AI-designed interactive dashboard with "
-                                "filterable charts, KPIs, and insights"
+                                "AI-generated interactive dashboard -- "
+                                "unique design, charts, and insights"
                             ),
                         })
                         self.trace.log_deliverable(
@@ -2362,6 +2354,164 @@ class DrDataAgent:
 
         self.generated_files.append(filepath)
         return json.dumps({"status": "success", "file_path": filepath})
+
+    def _generate_freeform_dashboard(self, user_request, title, progress_fn=None):
+        """Let Claude generate the ENTIRE HTML dashboard from scratch.
+
+        No template. No constraints. Claude analyzes the data and writes
+        a complete standalone HTML file with whatever design, charts,
+        colors, animations, and layout it decides is best.
+        """
+        df = self.dataframe
+        if df is None:
+            return None
+
+        if progress_fn:
+            progress_fn("Analyzing data for dashboard design...")
+
+        # Build a rich data summary
+        col_info = []
+        for col in df.columns[:40]:
+            nunique = df[col].nunique()
+            if pd.api.types.is_numeric_dtype(df[col]):
+                s = df[col].dropna()
+                if len(s) > 0:
+                    col_info.append(
+                        f"  {col} (numeric): min={s.min():.2f}, max={s.max():.2f}, "
+                        f"mean={s.mean():.2f}, median={s.median():.2f}, nulls={s.isna().sum()}"
+                    )
+            elif pd.api.types.is_datetime64_any_dtype(df[col]):
+                col_info.append(f"  {col} (date): {df[col].min()} to {df[col].max()}")
+            else:
+                top_vals = df[col].value_counts().head(5).to_dict()
+                col_info.append(
+                    f"  {col} (categorical, {nunique} unique): top values = {top_vals}"
+                )
+
+        # Embed a data sample as JSON for Plotly
+        sample_size = min(5000, len(df))
+        df_sample = df.sample(sample_size, random_state=42) if len(df) > sample_size else df.copy()
+        for c in df_sample.columns:
+            if pd.api.types.is_datetime64_any_dtype(df_sample[c]):
+                df_sample[c] = df_sample[c].dt.strftime("%Y-%m-%d")
+        data_json = df_sample.to_json(orient="records", date_format="iso")
+
+        data_summary = (
+            f"Dataset: \"{title}\" -- {len(df):,} rows x {len(df.columns)} columns\n"
+            f"Column details:\n" + "\n".join(col_info)
+        )
+
+        if progress_fn:
+            progress_fn(
+                f"Claude Opus is designing and coding your dashboard "
+                f"({len(df.columns)} columns, {len(df):,} rows)..."
+            )
+
+        prompt = f"""You are Dr. Data, the most talented data visualization designer alive.
+
+The user said: "{user_request}"
+This is version {self._dashboard_iteration} -- make it DIFFERENT from any previous version.
+
+{data_summary}
+
+Generate a COMPLETE, standalone HTML file that renders an interactive dashboard.
+The data is provided below as a JSON array -- embed it in a <script> tag.
+
+REQUIREMENTS:
+1. Use Plotly.js (CDN: https://cdn.plot.ly/plotly-2.35.0.min.js) for ALL charts
+2. The HTML must be 100% self-contained (inline CSS, inline JS, embedded data)
+3. Make it BEAUTIFUL. You are a design god. Think Bloomberg Terminal meets Apple.
+4. Use a sophisticated color palette -- NOT just one color. Be creative.
+5. Include interactive filters/dropdowns that actually filter all charts
+6. Include KPI cards at the top showing the most important numbers
+7. Include at least 5-8 different charts (mix of types: line, bar, heatmap, scatter, donut, area, treemap -- whatever fits the data best)
+8. Each chart should have a title that states the INSIGHT, not just "X by Y"
+9. Make the layout responsive (works on desktop and tablet)
+10. Add smooth transitions/animations where appropriate
+11. Add a dark professional theme
+12. The footer should say: "Built by Dr. Data | The Art of the Possible"
+13. Think about what STORY the data tells. Lead with the most important finding.
+14. Use Google Fonts (Inter or similar professional font)
+
+DO NOT:
+- Use any external dependencies other than Plotly.js CDN and Google Fonts
+- Use placeholder data -- use the ACTUAL data provided below
+- Make it boring or generic
+- Use the same layout as a typical template
+
+DATA (JSON array, {sample_size:,} rows):
+The data is too large to include in the prompt. Instead, use this variable in your script:
+var DATA = {{DATA_PLACEHOLDER}};
+
+Output ONLY the complete HTML file. No markdown fences. No explanation. Just the HTML.
+Start with <!DOCTYPE html> and end with </html>."""
+
+        try:
+            collected = []
+            with self.client.messages.stream(
+                model=self.MODEL,
+                max_tokens=16000,
+                temperature=0.7,
+                messages=[{"role": "user", "content": prompt}],
+            ) as stream:
+                for chunk in stream.text_stream:
+                    collected.append(chunk)
+            html = "".join(collected)
+
+            # Strip markdown fences if present
+            import re as _re
+            html = _re.sub(r'^```(?:html)?\s*\n?', '', html.strip())
+            html = _re.sub(r'\n?```\s*$', '', html)
+
+            # Inject the actual data
+            html = html.replace("{DATA_PLACEHOLDER}", data_json)
+            html = html.replace("{{DATA_PLACEHOLDER}}", data_json)
+
+            # If Claude didn't include the data placeholder, inject before </script>
+            if "DATA_PLACEHOLDER" not in "".join(collected) and "var DATA" not in html:
+                html = html.replace(
+                    "</script>",
+                    f"\nvar DATA = {data_json};\n</script>",
+                    1
+                )
+
+            # Validate it's actual HTML
+            if not html.strip().startswith("<!") and not html.strip().startswith("<html"):
+                print("[FREEFORM] Output doesn't look like HTML, falling back to template")
+                return self._fallback_template_dashboard(title)
+
+            # Save
+            safe_title = "".join(
+                c if c.isalnum() or c in " _-" else "_" for c in title
+            ).strip().replace(" ", "_") or "Dashboard"
+            filepath = os.path.join(
+                self.output_dir,
+                f"{safe_title}_v{self._dashboard_iteration}.html"
+            )
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(html)
+
+            if progress_fn:
+                progress_fn(f"Dashboard generated: {len(html):,} characters of custom HTML")
+
+            return os.path.abspath(filepath)
+
+        except Exception as e:
+            print(f"[FREEFORM] Claude generation failed: {e}")
+            if progress_fn:
+                progress_fn("Free-form generation failed, using designed template...")
+            return self._fallback_template_dashboard(title)
+
+    def _fallback_template_dashboard(self, title):
+        """Fallback to the template builder if free-form generation fails."""
+        try:
+            return self.html_builder.build(
+                self.dataframe,
+                output_dir=self.output_dir,
+                title=title,
+            )
+        except Exception:
+            return None
 
     def _design_html_dashboard(self, user_request, title, progress_fn=None):
         """Use Claude to design a dashboard spec for HTML rendering.

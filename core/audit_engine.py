@@ -328,7 +328,7 @@ body{{background:#0D0D0D;color:#FFFFFF;font-family:'Inter',system-ui,sans-serif;
 <body>
 <div class="hdr">
   <h1>{title}</h1>
-  <span class="wu-badge">WESTERN UNION</span>
+
 </div>
 <div class="wrap">
 {engine_html}

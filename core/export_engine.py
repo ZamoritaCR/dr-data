@@ -257,35 +257,11 @@ class ExportEngine:
                 shape.fill.fore_color.rgb = yellow_rgb
                 shape.line.fill.background()
 
-            def _add_wu_badge(slide, top=0.3):
-                """WESTERN UNION badge in top-right."""
-                txBox = slide.shapes.add_textbox(
-                    Inches(10.5), Inches(top), Inches(2.5), Inches(0.4)
-                )
-                tf = txBox.text_frame
-                p = tf.paragraphs[0]
-                p.text = "WESTERN UNION"
-                p.font.size = Pt(10)
-                p.font.color.rgb = RGBColor(0x00, 0x00, 0x00)
-                p.font.bold = True
-                p.alignment = PP_ALIGN.CENTER
-                # Yellow background via shape behind
-                badge = slide.shapes.add_shape(
-                    1, Inches(10.5), Inches(top),
-                    Inches(2.3), Inches(0.35),
-                )
-                badge.fill.solid()
-                badge.fill.fore_color.rgb = yellow_rgb
-                badge.line.fill.background()
-                # Move badge behind text
-                slide.shapes._spTree.remove(badge._element)
-                slide.shapes._spTree.insert(2, badge._element)
 
             # ── Slide 1: Title ──
             sl = prs.slides.add_slide(prs.slide_layouts[6])
             _set_bg(sl)
             _add_accent_bar(sl)
-            _add_wu_badge(sl)
             _add_text(sl, 1, 2.0, 11, 1.5, title,
                       size=40, color=white_rgb, bold=True, align=PP_ALIGN.CENTER)
             _add_text(sl, 1, 3.8, 11, 0.5,
@@ -304,7 +280,6 @@ class ExportEngine:
                 sl = prs.slides.add_slide(prs.slide_layouts[6])
                 _set_bg(sl)
                 _add_accent_bar(sl)
-                _add_wu_badge(sl)
                 _add_text(sl, 0.8, 0.4, 8, 0.6, "Key Metrics",
                           size=28, color=yellow_rgb, bold=True)
 
@@ -344,7 +319,6 @@ class ExportEngine:
                 sl = prs.slides.add_slide(prs.slide_layouts[6])
                 _set_bg(sl)
                 _add_accent_bar(sl)
-                _add_wu_badge(sl)
                 _add_text(sl, 0.8, 0.4, 8, 0.6, "Top Performers",
                           size=28, color=yellow_rgb, bold=True)
 
@@ -370,7 +344,6 @@ class ExportEngine:
                 sl = prs.slides.add_slide(prs.slide_layouts[6])
                 _set_bg(sl)
                 _add_accent_bar(sl)
-                _add_wu_badge(sl)
                 _add_text(sl, 0.8, 0.4, 8, 0.6, "Composition Breakdown",
                           size=28, color=yellow_rgb, bold=True)
 
@@ -402,7 +375,6 @@ class ExportEngine:
             sl = prs.slides.add_slide(prs.slide_layouts[6])
             _set_bg(sl)
             _add_accent_bar(sl)
-            _add_wu_badge(sl)
             _add_text(sl, 0.8, 0.4, 8, 0.6, "Data Quality Assessment",
                       size=28, color=yellow_rgb, bold=True)
 
@@ -434,7 +406,6 @@ class ExportEngine:
             sl = prs.slides.add_slide(prs.slide_layouts[6])
             _set_bg(sl)
             _add_accent_bar(sl)
-            _add_wu_badge(sl, top=0.3)
             _add_text(sl, 1, 2.5, 11, 1, "Thank You",
                       size=36, color=white_rgb, bold=True, align=PP_ALIGN.CENTER)
             _add_text(sl, 1, 3.8, 11, 0.5,

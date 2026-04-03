@@ -95,3 +95,10 @@ DR_DATA_UI_FIX.md
 IMPLEMENTATION_PLAN.md
 SETUP.md
 .env.example
+MASTER_KEYS.env
+.env
+*.key
+secrets/
+node_modules/
+nohup.out
+*.db

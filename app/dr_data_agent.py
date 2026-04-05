@@ -3039,6 +3039,17 @@ Output ONLY valid JSON. No markdown. No commentary."""
                     migration_intent, table_name
                 )
 
+                # Prepend the user's actual instruction so Claude knows
+                # what they want (replicate vs. reimagine vs. specific changes)
+                translate_request = (
+                    f"USER REQUEST: {request}\n\n"
+                    f"Follow the user's request above. If they asked for a "
+                    f"replica, match the Tableau visuals closely. If they "
+                    f"asked for something different, use the Tableau structure "
+                    f"as a data reference but create a fresh design.\n\n"
+                    + translate_request
+                )
+
                 # Append DAX mapping reference + contract
                 translate_request += (
                     "\n\n" + self._TABLEAU_DAX_MAP.replace(

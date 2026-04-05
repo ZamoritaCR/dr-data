@@ -198,6 +198,7 @@ class PBIPGenerator:
         page_ids, field_audit = self._write_pages(
             pages_dir, raw_sections, table_name, valid_measure_names,
             col_types, profile_col_names,
+            dashboard_spec=dashboard_spec,
         )
 
         # Visual field audit summary
@@ -208,8 +209,15 @@ class PBIPGenerator:
         # 7. pages.json
         self._write_pages_json(pages_dir, page_ids)
 
-        # 8. Theme file (copy from reference)
-        self._write_theme(theme_dir)
+        # 8. Theme file -- use translated Tableau design if available,
+        #    otherwise copy the default reference theme.
+        tableau_design = dashboard_spec.get("design") or {}
+        if tableau_design.get("color_palettes"):
+            from core.design_translator import build_pbi_theme
+            custom_theme = build_pbi_theme(tableau_design, title)
+            self._write_json(theme_dir / "CY25SU12.json", custom_theme)
+        else:
+            self._write_theme(theme_dir)
 
         # 15. Auto-launcher .bat (patches data path + opens .pbip)
         data_filename = ""
@@ -487,12 +495,37 @@ class PBIPGenerator:
         return cfg_obj.get("visualType", "unknown").lower()
 
     def _write_pages(self, pages_dir, raw_sections, table_name, measure_names,
-                     col_types=None, profile_col_names=None):
+                     col_types=None, profile_col_names=None,
+                     dashboard_spec=None):
         """Write page.json and visual.json files.
+
+        Args:
+            dashboard_spec: optional full dashboard_spec dict. When present,
+                Tableau zone positions and worksheet designs are used for
+                layout and visual formatting instead of the deterministic grid.
 
         Returns (page_ids, audit_totals) where audit_totals is
         {"valid": int, "fixed": int, "removed": int}.
         """
+        if dashboard_spec is None:
+            dashboard_spec = {}
+
+        # Pre-compute Tableau zone positions if available
+        tableau_positions = {}
+        tableau_dashboards = dashboard_spec.get("tableau_dashboards", [])
+        if tableau_dashboards:
+            from core.design_translator import translate_positions
+            db = tableau_dashboards[0]  # primary dashboard
+            zones = db.get("zones", [])
+            canvas = db.get("canvas", {})
+            if zones and canvas.get("width") and canvas.get("height"):
+                pbi_positions = translate_positions(zones, canvas)
+                for p in pbi_positions:
+                    tableau_positions[p["name"]] = p
+
+        # Pre-compute worksheet designs for visual formatting
+        ws_designs = dashboard_spec.get("worksheet_designs", {})
+
         page_ids = []
         audit_totals = {"valid": 0, "fixed": 0, "removed": 0}
 
@@ -512,11 +545,19 @@ class PBIPGenerator:
             page["height"] = int(raw.get("height", 720))
             self._write_json(page_dir / "page.json", page)
 
-            # --- Deterministic layout pass ---
-            # Re-compute positions for ALL visuals on this page using a
-            # clean grid, regardless of what GPT-4 suggested.
             containers = list(raw.get("visualContainers", []))
-            containers = self._deterministic_layout(containers)
+
+            # --- Layout pass ---
+            # If Tableau zone positions are available, apply them by matching
+            # zone names to visual titles. Otherwise use deterministic grid.
+            applied_tableau_layout = False
+            if tableau_positions:
+                applied_tableau_layout = self._apply_tableau_positions(
+                    containers, tableau_positions
+                )
+
+            if not applied_tableau_layout:
+                containers = self._deterministic_layout(containers)
 
             # Visuals
             visuals_root = page_dir / "visuals"
@@ -529,20 +570,63 @@ class PBIPGenerator:
                     viz_dir, vc, vidx, viz_id,
                     table_name, measure_names, col_types,
                     profile_col_names,
+                    ws_designs=ws_designs,
                 )
                 if fix_stats:
                     for k in audit_totals:
                         audit_totals[k] += fix_stats.get(k, 0)
                 vc_count += 1
 
-            print(f"    [+] page '{display_name}': {vc_count} visuals")
+            layout_src = "Tableau zones" if applied_tableau_layout else "deterministic grid"
+            print(f"    [+] page '{display_name}': {vc_count} visuals ({layout_src})")
 
         return page_ids, audit_totals
 
+    @classmethod
+    def _apply_tableau_positions(cls, containers, tableau_positions):
+        """Try to apply Tableau zone positions to visual containers.
+
+        Matches zone names to visual config titles or worksheet names.
+        Returns True if at least one container was positioned from Tableau data.
+        """
+        if not tableau_positions or not containers:
+            return False
+
+        matched = 0
+        for vc in containers:
+            raw_cfg = vc.get("config", "{}")
+            if isinstance(raw_cfg, str):
+                try:
+                    cfg_obj = json.loads(raw_cfg)
+                except (json.JSONDecodeError, TypeError):
+                    cfg_obj = {}
+            else:
+                cfg_obj = raw_cfg if isinstance(raw_cfg, dict) else {}
+
+            # Try to match by title, then by worksheet_name
+            title = cfg_obj.get("title", "")
+            ws_name = cfg_obj.get("worksheet_name", "")
+
+            pos = tableau_positions.get(title) or tableau_positions.get(ws_name)
+            if pos:
+                vc["x"] = pos["x"]
+                vc["y"] = pos["y"]
+                vc["width"] = pos["width"]
+                vc["height"] = pos["height"]
+                matched += 1
+
+        if matched > 0:
+            print(f"    [LAYOUT] Applied Tableau zone positions to {matched} visuals")
+            return True
+        return False
+
     def _write_visual_json(self, viz_dir, vc, vidx, viz_id, table_name,
                            measure_names, col_types=None,
-                           profile_col_names=None):
+                           profile_col_names=None, ws_designs=None):
         """Write a single visual.json file."""
+        if ws_designs is None:
+            ws_designs = {}
+
         x = vc.get("x", 0)
         y = vc.get("y", 0)
         w = vc.get("width", 300)
@@ -558,7 +642,14 @@ class PBIPGenerator:
         else:
             cfg_obj = raw_cfg
 
-        visual_type = cfg_obj.get("visualType", "card")
+        # Chart type: prefer Tableau-translated type over GPT-4 guess
+        tableau_mark = cfg_obj.get("tableau_mark_type", "")
+        if tableau_mark:
+            from core.design_translator import translate_chart_type
+            visual_type = translate_chart_type(tableau_mark)
+        else:
+            visual_type = cfg_obj.get("visualType", "card")
+
         title_text = cfg_obj.get("title", "")
         data_roles = cfg_obj.get("dataRoles", {})
 
@@ -585,6 +676,19 @@ class PBIPGenerator:
                     }
                 }]
             }
+
+        # Apply Tableau worksheet design formatting if available
+        ws_name = cfg_obj.get("worksheet_name", "")
+        if ws_name and ws_name in ws_designs:
+            from core.design_translator import build_visual_formatting
+            formatting = build_visual_formatting(ws_designs[ws_name])
+            if formatting:
+                existing_objects = doc["visual"].get("objects", {})
+                # Merge: formatting keys that don't already exist
+                for key, val in formatting.items():
+                    if key not in existing_objects:
+                        existing_objects[key] = val
+                doc["visual"]["objects"] = existing_objects
 
         # Validate & fix all field references against real column names
         valid_cols = list(profile_col_names | measure_names) if profile_col_names else []

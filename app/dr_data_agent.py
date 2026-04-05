@@ -3089,6 +3089,14 @@ Output ONLY valid JSON. No markdown. No commentary."""
                     dashboard_spec.get("migration_warnings", [])
                     + migration_intent.warnings
                 )
+
+                # Attach design metadata for visual replication
+                dashboard_spec["design"] = self.tableau_spec.get("design", {})
+                ws_designs = {}
+                for ws in self.tableau_spec.get("worksheets", []):
+                    if ws.get("design"):
+                        ws_designs[ws["name"]] = ws["design"]
+                dashboard_spec["worksheet_designs"] = ws_designs
             else:
                 # --- FRESH DESIGN PATH (CSV / Excel) ---
                 self._report_progress(

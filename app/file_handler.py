@@ -20,8 +20,14 @@ SUPPORTED_DATA = {
 }
 SUPPORTED_REPORTS = {"twb", "twbx", "wid", "yxmd", "yxwz", "yxmc", "yxzp"}
 SUPPORTED_ARCHIVES = {"zip"}
+SUPPORTED_IMAGES = {"png", "jpg", "jpeg", "webp", "gif", "bmp", "tiff", "svg"}
+SUPPORTED_DOCS = {"pdf", "docx", "doc"}
+SUPPORTED_BI_EXTRA = {"pbix", "pbit", "tds", "tdsx", "hyper", "tde", "qvf", "rdl"}
 
-ALL_SUPPORTED = SUPPORTED_DATA | SUPPORTED_REPORTS | SUPPORTED_ARCHIVES
+ALL_SUPPORTED = (
+    SUPPORTED_DATA | SUPPORTED_REPORTS | SUPPORTED_ARCHIVES
+    | SUPPORTED_IMAGES | SUPPORTED_DOCS | SUPPORTED_BI_EXTRA
+)
 
 
 def sanitize_columns(df):
@@ -65,6 +71,12 @@ def identify_file(file_path):
         return "report", ext
     elif ext in SUPPORTED_ARCHIVES:
         return "archive", ext
+    elif ext in SUPPORTED_IMAGES:
+        return "image", ext
+    elif ext in SUPPORTED_DOCS:
+        return "document", ext
+    elif ext in SUPPORTED_BI_EXTRA:
+        return "bi_extra", ext
     else:
         return "unknown", ext
 
@@ -121,6 +133,15 @@ def ingest_file(file_path):
 
         elif category == "archive":
             result = ingest_zip(file_path)
+
+        elif category == "image":
+            result["report_structure"] = _extract_image(file_path, ext)
+
+        elif category == "document":
+            result["report_structure"] = _extract_document(file_path, ext)
+
+        elif category == "bi_extra":
+            result["report_structure"] = _extract_bi_extra(file_path, ext)
 
         else:
             # Try loading as text/CSV anyway
@@ -344,3 +365,270 @@ def ingest_zip(file_path):
             result["errors"].append(str(e))
 
     return result
+
+
+# -------------------------------------------------------------------
+# New-type extraction helpers (additive -- does not touch existing code)
+# -------------------------------------------------------------------
+
+def _extract_image(file_path, ext):
+    """Extract image content for AI vision analysis.
+
+    Returns a report_structure dict with base64-encoded image and metadata.
+    Vision AI call happens in the agent, not here -- we just prepare the payload.
+    """
+    import base64
+    media_map = {
+        "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+        "webp": "image/webp", "gif": "image/gif", "bmp": "image/bmp",
+        "tiff": "image/tiff", "svg": "image/svg+xml",
+    }
+    try:
+        with open(file_path, "rb") as f:
+            raw = f.read()
+        size_mb = len(raw) / (1024 * 1024)
+        b64 = base64.b64encode(raw).decode("utf-8")
+        return {
+            "type": "image",
+            "media_type": media_map.get(ext, "application/octet-stream"),
+            "base64": b64,
+            "size_mb": round(size_mb, 2),
+            "file_name": os.path.basename(file_path),
+            "note": (
+                "Image file ready for AI vision analysis. "
+                "Upload to Dr. Data to extract dashboard structure, "
+                "chart types, fields, KPIs, color palette, and layout."
+            ),
+        }
+    except Exception as e:
+        return {"type": "image", "error": str(e)[:200]}
+
+
+def _extract_document(file_path, ext):
+    """Extract text from PDF or DOCX documents."""
+    extracted = {
+        "type": "document",
+        "format": ext,
+        "file_name": os.path.basename(file_path),
+        "text": "",
+    }
+    try:
+        if ext == "pdf":
+            extracted["text"] = _extract_pdf_text(file_path)
+        elif ext in ("docx", "doc"):
+            extracted["text"] = _extract_docx_text(file_path)
+    except Exception as e:
+        extracted["error"] = str(e)[:200]
+        extracted["text"] = f"[Extraction failed: {str(e)[:100]}]"
+    if not extracted["text"]:
+        extracted["text"] = "[No readable text extracted from this file]"
+    return extracted
+
+
+def _extract_pdf_text(file_path):
+    """Extract text from PDF using pdfminer (already installed)."""
+    try:
+        from pdfminer.high_level import extract_text
+        text = extract_text(file_path)
+        if text and text.strip():
+            return text.strip()[:50000]
+    except ImportError:
+        pass
+    except Exception:
+        pass
+    # Fallback: try reading raw bytes for any text
+    try:
+        with open(file_path, "rb") as f:
+            raw = f.read()
+        chunks = []
+        current = []
+        for byte in raw:
+            if 32 <= byte < 127:
+                current.append(chr(byte))
+            else:
+                if len(current) > 10:
+                    chunks.append("".join(current))
+                current = []
+        return "\n".join(chunks[:500])
+    except Exception:
+        return ""
+
+
+def _extract_docx_text(file_path):
+    """Extract text from DOCX using python-docx (already installed)."""
+    try:
+        from docx import Document
+        doc = Document(file_path)
+        paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+        return "\n".join(paragraphs)[:50000]
+    except ImportError:
+        return "[python-docx not installed]"
+    except Exception as e:
+        return f"[DOCX extraction failed: {str(e)[:100]}]"
+
+
+def _extract_bi_extra(file_path, ext):
+    """Extract content from additional BI file formats."""
+    extracted = {
+        "type": "bi_file",
+        "format": ext,
+        "file_name": os.path.basename(file_path),
+    }
+    try:
+        if ext in ("pbix", "pbit"):
+            extracted.update(_extract_pbix(file_path))
+        elif ext in ("tds", "tdsx"):
+            extracted.update(_extract_tds(file_path))
+        elif ext in ("hyper", "tde"):
+            extracted["note"] = (
+                f"Tableau .{ext} extract file detected. "
+                "This is a binary data extract. Schema metadata extracted where possible."
+            )
+            extracted["schema"] = _extract_hyper_schema(file_path)
+        else:
+            # qvf, rdl, lookml -- best-effort text extraction
+            extracted["note"] = (
+                f".{ext} file received. Attempting text extraction for AI analysis."
+            )
+            extracted["text"] = _try_text_extract(file_path)
+    except Exception as e:
+        extracted["error"] = str(e)[:200]
+    return extracted
+
+
+def _extract_pbix(file_path):
+    """Extract DataModelSchema and Report/Layout from PBIX/PBIT (ZIP archive)."""
+    info = {"type": "power_bi", "tables": [], "report_layout": None}
+    try:
+        with zipfile.ZipFile(file_path, "r") as z:
+            names = z.namelist()
+            info["contained_files"] = names
+            # DataModelSchema -- the semantic model definition
+            for name in names:
+                if "datamodelschema" in name.lower():
+                    try:
+                        raw = z.read(name)
+                        # PBIX DataModelSchema is UTF-16-LE encoded JSON
+                        for encoding in ("utf-16-le", "utf-8", "utf-16"):
+                            try:
+                                text = raw.decode(encoding).lstrip("\ufeff")
+                                schema = json.loads(text)
+                                info["data_model_schema"] = schema
+                                # Extract table names and columns
+                                for tbl in schema.get("model", {}).get("tables", []):
+                                    tbl_info = {
+                                        "name": tbl.get("name", ""),
+                                        "columns": [
+                                            c.get("name", "")
+                                            for c in tbl.get("columns", [])
+                                        ],
+                                        "measures": [
+                                            {"name": m.get("name", ""),
+                                             "expression": m.get("expression", "")}
+                                            for m in tbl.get("measures", [])
+                                        ],
+                                    }
+                                    info["tables"].append(tbl_info)
+                                break
+                            except (UnicodeDecodeError, json.JSONDecodeError):
+                                continue
+                    except Exception:
+                        pass
+            # Report/Layout JSON
+            for name in names:
+                if name.lower() in ("report/layout", "report\\layout"):
+                    try:
+                        raw = z.read(name)
+                        for encoding in ("utf-16-le", "utf-8", "utf-16"):
+                            try:
+                                text = raw.decode(encoding).lstrip("\ufeff")
+                                info["report_layout"] = json.loads(text)
+                                break
+                            except (UnicodeDecodeError, json.JSONDecodeError):
+                                continue
+                    except Exception:
+                        pass
+    except zipfile.BadZipFile:
+        info["error"] = "Not a valid ZIP/PBIX archive"
+    except Exception as e:
+        info["error"] = str(e)[:200]
+    return info
+
+
+def _extract_tds(file_path):
+    """Extract Tableau Data Source (.tds/.tdsx) metadata."""
+    info = {"type": "tableau_datasource"}
+    try:
+        if file_path.lower().endswith(".tdsx"):
+            with zipfile.ZipFile(file_path, "r") as z:
+                for name in z.namelist():
+                    if name.endswith(".tds"):
+                        with z.open(name) as f:
+                            tree = ET.parse(f)
+                        info["xml_parsed"] = True
+                        break
+        else:
+            tree = ET.parse(file_path)
+            info["xml_parsed"] = True
+        if "xml_parsed" in info:
+            root = tree.getroot()
+            info["connection_type"] = ""
+            conn = root.find(".//connection")
+            if conn is not None:
+                info["connection_type"] = conn.get("class", "unknown")
+            columns = []
+            for col in root.iter("column"):
+                columns.append({
+                    "name": col.get("caption", col.get("name", "")),
+                    "datatype": col.get("datatype", ""),
+                    "role": col.get("role", ""),
+                })
+            info["columns"] = columns
+    except Exception as e:
+        info["error"] = str(e)[:200]
+    return info
+
+
+def _extract_hyper_schema(file_path):
+    """Best-effort schema extraction from .hyper/.tde files."""
+    # These are binary Tableau extract formats. Without the Tableau Hyper API
+    # (proprietary C library), we can only extract readable text fragments.
+    try:
+        with open(file_path, "rb") as f:
+            header = f.read(4096)
+        # Look for readable column name fragments in the header
+        chunks = []
+        current = []
+        for byte in header:
+            if 32 <= byte < 127:
+                current.append(chr(byte))
+            else:
+                if len(current) > 3:
+                    chunks.append("".join(current))
+                current = []
+        return {"header_text_fragments": chunks[:50]}
+    except Exception:
+        return {"note": "Binary extract -- install tableauhyperapi for full schema"}
+
+
+def _try_text_extract(file_path):
+    """Last-resort text extraction for unknown BI file formats."""
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            return f.read(50000)
+    except Exception:
+        try:
+            with open(file_path, "rb") as f:
+                raw = f.read(50000)
+            chunks = []
+            current = []
+            for byte in raw:
+                if 32 <= byte < 127:
+                    current.append(chr(byte))
+                else:
+                    if len(current) > 5:
+                        chunks.append("".join(current))
+                    current = []
+            return "\n".join(chunks[:200])
+        except Exception:
+            return "[Could not extract text from this file]"

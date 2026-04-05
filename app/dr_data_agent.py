@@ -50,6 +50,101 @@ from core.audit_engine import AuditEngine as _AuditEngine
 from core.dashboard_rationalization import DashboardRationalizationEngine
 
 # ------------------------------------------------------------------ #
+#  Vision extraction for uploaded images                                #
+# ------------------------------------------------------------------ #
+
+_VISION_PROMPT = (
+    "Analyze this dashboard/report screenshot in detail. Extract:\n"
+    "1. Every chart type visible (bar, line, pie, map, KPI card, table, etc.)\n"
+    "2. Every field name, metric, KPI, and dimension visible\n"
+    "3. All filter/slicer controls and their values\n"
+    "4. Page layout structure (how visuals are arranged)\n"
+    "5. Color palette (list hex codes if detectable)\n"
+    "6. Titles, subtitles, and any visible text\n"
+    "7. Number of pages/tabs if indicated\n"
+    "8. Data source hints (table names, connection info)\n\n"
+    "Return a structured analysis. Be exhaustive -- do not skip any visible element."
+)
+
+
+def _extract_image_with_vision(image_structure):
+    """Run AI vision on an uploaded image. Gemini primary, Claude fallback."""
+    b64 = image_structure.get("base64", "")
+    media_type = image_structure.get("media_type", "image/png")
+    if not b64:
+        return ""
+
+    # Try Gemini 2.5 Pro first
+    gemini_key = _get_secret("GEMINI_API_KEY")
+    if gemini_key:
+        try:
+            import google.generativeai as genai
+            import base64 as b64_mod
+            genai.configure(api_key=gemini_key)
+            model = genai.GenerativeModel("gemini-2.5-pro-preview-06-05")
+            image_bytes = b64_mod.b64decode(b64)
+            response = model.generate_content([
+                _VISION_PROMPT,
+                {"mime_type": media_type, "data": image_bytes},
+            ])
+            if response and response.text:
+                return response.text
+        except Exception as e:
+            print(f"[VISION] Gemini failed: {e}")
+
+    # Fallback: Claude Opus vision
+    anthropic_key = _get_secret("ANTHROPIC_API_KEY")
+    if anthropic_key:
+        try:
+            client = anthropic.Anthropic(api_key=anthropic_key)
+            resp = client.messages.create(
+                model="claude-opus-4-20250514",
+                max_tokens=4096,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": b64,
+                        }},
+                        {"type": "text", "text": _VISION_PROMPT},
+                    ],
+                }],
+            )
+            if resp and resp.content:
+                return resp.content[0].text
+        except Exception as e:
+            print(f"[VISION] Claude fallback failed: {e}")
+
+    # Fallback: GPT-4o vision
+    if _HAS_OPENAI:
+        openai_key = _get_secret("OPENAI_API_KEY")
+        if openai_key:
+            try:
+                client = _OpenAIClient(api_key=openai_key)
+                resp = client.chat.completions.create(
+                    model="gpt-4o",
+                    max_tokens=4096,
+                    messages=[{
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {
+                                "url": f"data:{media_type};base64,{b64}",
+                            }},
+                            {"type": "text", "text": _VISION_PROMPT},
+                        ],
+                    }],
+                )
+                if resp and resp.choices:
+                    return resp.choices[0].message.content
+            except Exception as e:
+                print(f"[VISION] GPT-4o fallback failed: {e}")
+
+    return ""
+
+
+# ------------------------------------------------------------------ #
 #  Tool Definitions for Claude                                         #
 # ------------------------------------------------------------------ #
 
@@ -701,6 +796,17 @@ class DrDataAgent:
         if session.alteryx_spec:
             self.tableau_spec = session.alteryx_spec
 
+        # Run AI vision extraction on any uploaded images
+        for fname, finfo in session.files.items():
+            structure = finfo.get("structure")
+            if (structure and isinstance(structure, dict)
+                    and structure.get("type") == "image"
+                    and structure.get("base64")
+                    and "vision_analysis" not in structure):
+                vision_text = _extract_image_with_vision(structure)
+                if vision_text:
+                    structure["vision_analysis"] = vision_text
+
         # Get primary data file path and sheet name.
         # IMPORTANT: if the source is a .twbx/.twb, the path points to the
         # Tableau archive, which is NOT a valid data file for Power BI.
@@ -960,6 +1066,54 @@ class DrDataAgent:
             self.trace.log_relationships(session.relationships)
         if session.join_log:
             extra_parts.append("JOIN LOG: " + " | ".join(session.join_log))
+
+        # Include extracted content from images, documents, and BI files
+        for fname, finfo in session.files.items():
+            structure = finfo.get("structure")
+            if not structure or not isinstance(structure, dict):
+                continue
+            stype = structure.get("type", "")
+            if stype == "image":
+                vision = structure.get("vision_analysis", "")
+                if vision:
+                    extra_parts.append(
+                        f"Image uploaded: {fname} ({structure.get('size_mb', '?')} MB). "
+                        f"AI vision analysis:\n{vision}"
+                    )
+                else:
+                    extra_parts.append(
+                        f"Image uploaded: {fname} ({structure.get('size_mb', '?')} MB). "
+                        "Vision extraction pending -- image content available for analysis."
+                    )
+            elif stype == "document":
+                text = structure.get("text", "")
+                if text and text.strip():
+                    preview = text[:2000]
+                    extra_parts.append(
+                        f"Document uploaded: {fname} ({structure.get('format', '?')}). "
+                        f"Extracted text:\n{preview}"
+                    )
+            elif stype == "power_bi":
+                tables = structure.get("tables", [])
+                if tables:
+                    tbl_desc = "; ".join(
+                        f"{t['name']} ({len(t.get('columns', []))} cols, "
+                        f"{len(t.get('measures', []))} measures)"
+                        for t in tables[:10]
+                    )
+                    extra_parts.append(
+                        f"Power BI file uploaded: {fname}. Tables: {tbl_desc}"
+                    )
+            elif stype == "bi_file":
+                note = structure.get("note", "")
+                if note:
+                    extra_parts.append(f"BI file uploaded: {fname}. {note}")
+            elif stype == "tableau_datasource":
+                cols = structure.get("columns", [])
+                conn = structure.get("connection_type", "")
+                extra_parts.append(
+                    f"Tableau datasource: {fname} ({conn}), {len(cols)} columns."
+                )
 
         # If session was auto-unified, use the unified DataFrame
         if session.unified_df is not None and self.dataframe is not session.unified_df:

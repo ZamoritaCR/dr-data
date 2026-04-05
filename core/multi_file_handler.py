@@ -28,6 +28,9 @@ from core.relationship_detector import RelationshipDetector
 STRUCTURE_FILES = {"twb", "twbx", "yxmd", "yxwz", "yxmc", "yxzp", "wid"}
 DATA_FILES = {"csv", "xlsx", "xls", "tsv", "parquet", "json", "xml", "txt"}
 ARCHIVE_FILES = {"zip", "twbx", "yxzp"}
+IMAGE_FILES = {"png", "jpg", "jpeg", "webp", "gif", "bmp", "tiff", "svg"}
+DOC_FILES = {"pdf", "docx", "doc"}
+BI_EXTRA_FILES = {"pbix", "pbit", "tds", "tdsx", "hyper", "tde", "qvf", "rdl"}
 
 
 class MultiFileSession:
@@ -167,6 +170,15 @@ class MultiFileSession:
             extracted = self._process_zip(path)
             for item in extracted:
                 self.add_file(item["filename"], item["path"])
+
+        elif ext in IMAGE_FILES or ext in DOC_FILES or ext in BI_EXTRA_FILES:
+            # Route through file_handler extraction -- store as structure
+            from app.file_handler import ingest_file
+            sub = ingest_file(path)
+            info["structure"] = sub.get("report_structure")
+            info["category"] = sub.get("file_type", ext)
+            if not self.structure_file:
+                self.structure_file = info
 
         self.files[filename] = info
         return self._describe_session()

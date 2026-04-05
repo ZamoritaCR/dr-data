@@ -93,6 +93,222 @@ def _extract_ws_filters(ws_element):
     return filters
 
 
+def _extract_global_design(root):
+    """Extract workbook-level design metadata: color palettes and global fonts.
+
+    Returns a dict with 'color_palettes' and 'global_fonts' keys.
+    """
+    design = {
+        "color_palettes": [],
+        "global_fonts": {},
+    }
+
+    # Color palettes defined at workbook level
+    for cp in root.iter("color-palette"):
+        palette_name = cp.get("name", "")
+        palette_type = cp.get("type", "")
+        colors = [c.text for c in cp.findall("color") if c.text]
+        design["color_palettes"].append({
+            "name": palette_name,
+            "type": palette_type,
+            "colors": colors,
+        })
+
+    # Global font settings from top-level <style> or <preferences> format elements.
+    # Only capture font-related attributes from direct workbook-level style elements.
+    font_attrs = {}
+    for style_el in root.findall("style"):
+        for sr in style_el.findall("style-rule"):
+            for fmt in sr.findall("format"):
+                attr = fmt.get("attr", "")
+                val = fmt.get("value", "")
+                if attr in ("font-family", "font-size", "font-color",
+                            "font-style", "font-weight") and val:
+                    font_attrs[attr] = val
+    if font_attrs:
+        design["global_fonts"] = font_attrs
+
+    # Datasource-level color encodings (discrete palette maps applied globally)
+    ds_color_maps = []
+    for ds in root.iter("datasource"):
+        for sr in ds.iter("style-rule"):
+            if sr.get("element") == "mark":
+                for enc in sr.findall("encoding"):
+                    if enc.get("attr") == "color" and enc.get("type") == "palette":
+                        field = enc.get("field", "")
+                        mappings = []
+                        for m in enc.findall("map"):
+                            color = m.get("to", "")
+                            bucket = m.find("bucket")
+                            if color:
+                                mappings.append({
+                                    "color": color,
+                                    "value": bucket.text.strip('"') if bucket is not None and bucket.text else "",
+                                })
+                        if mappings:
+                            ds_color_maps.append({
+                                "field": field,
+                                "mappings": mappings,
+                            })
+    if ds_color_maps:
+        design["datasource_color_maps"] = ds_color_maps
+
+    return design
+
+
+def _extract_ws_design(ws_element):
+    """Extract per-worksheet design metadata from style-rules and mark elements.
+
+    Returns a dict with mark_colors, background_color, title_font,
+    axis_config, mark_style, and border keys.
+    """
+    ws_design = {
+        "mark_colors": [],
+        "background_color": "",
+        "title_font": {},
+        "axis_config": [],
+        "mark_style": {},
+        "border": {},
+    }
+
+    seen_colors = set()
+
+    for sr in ws_element.iter("style-rule"):
+        element_type = sr.get("element", "")
+
+        if element_type == "mark":
+            # Mark colors from <encoding> with color maps
+            for enc in sr.findall("encoding"):
+                if enc.get("attr") == "color":
+                    palette = enc.get("palette", "")
+                    enc_type = enc.get("type", "")
+                    # Discrete palette color mappings
+                    for m in enc.findall("map"):
+                        color = m.get("to", "")
+                        if color and color not in seen_colors:
+                            seen_colors.add(color)
+                            bucket = m.find("bucket")
+                            ws_design["mark_colors"].append({
+                                "color": color,
+                                "value": bucket.text.strip('"') if bucket is not None and bucket.text else "",
+                            })
+                    # If no discrete maps but palette is named, record palette info
+                    if not ws_design["mark_colors"] and (palette or enc_type):
+                        ws_design["mark_style"]["color_palette"] = palette
+                        ws_design["mark_style"]["color_type"] = enc_type
+
+            # Mark style from <format> attrs
+            for fmt in sr.findall("format"):
+                attr = fmt.get("attr", "")
+                val = fmt.get("value", "")
+                if attr == "mark-color" and val:
+                    if val not in seen_colors:
+                        seen_colors.add(val)
+                        ws_design["mark_colors"].append({"color": val, "value": ""})
+                elif attr == "mark-labels-show" and val:
+                    ws_design["mark_style"]["labels_visible"] = val.lower() == "true"
+                elif attr == "mark-labels-mode" and val:
+                    ws_design["mark_style"]["labels_mode"] = val
+                elif attr == "mark-labels-cull" and val:
+                    ws_design["mark_style"]["labels_cull"] = val.lower() == "true"
+                elif attr.startswith("mark-labels-line-") and val:
+                    ws_design["mark_style"][attr] = val.lower() == "true"
+                elif attr.startswith("mark-labels-range-") and val:
+                    ws_design["mark_style"][attr] = val
+
+        elif element_type == "worksheet":
+            # Background color from worksheet style rules
+            for fmt in sr.findall("format"):
+                attr = fmt.get("attr", "")
+                val = fmt.get("value", "")
+                if attr == "background-color" and val:
+                    ws_design["background_color"] = val
+
+        elif element_type == "axis":
+            # Axis configuration
+            for enc in sr.findall("encoding"):
+                axis_info = {
+                    "field": enc.get("field", ""),
+                    "scope": enc.get("scope", ""),
+                    "type": enc.get("type", ""),
+                    "synchronized": enc.get("synchronized", ""),
+                }
+                ws_design["axis_config"].append(axis_info)
+            for fmt in sr.findall("format"):
+                attr = fmt.get("attr", "")
+                val = fmt.get("value", "")
+                if attr == "display" and val == "false":
+                    # Axis hidden
+                    field = fmt.get("field", "")
+                    ws_design["axis_config"].append({
+                        "field": field,
+                        "hidden": True,
+                    })
+
+    # Title font from <title> element with <run> children or <format> elements
+    for title_el in ws_element.iter("title"):
+        for fmt in title_el.iter("formatted-text"):
+            for run in fmt.iter("run"):
+                font_info = {}
+                for attr_name in ("fontname", "fontsize", "fontcolor", "bold",
+                                  "italic", "underline"):
+                    v = run.get(attr_name, "")
+                    if v:
+                        font_info[attr_name] = v
+                if run.text:
+                    font_info["text"] = run.text.strip()
+                if font_info:
+                    ws_design["title_font"] = font_info
+                break  # first run is enough
+        break  # only first title
+
+    # Mark opacity/size from <mark> elements directly
+    for pane in ws_element.iter("pane"):
+        for mark in pane.iter("mark"):
+            for child in mark:
+                if child.tag == "encoding" and child.get("attr") == "size":
+                    size_val = child.get("value", "")
+                    if size_val:
+                        ws_design["mark_style"]["size"] = size_val
+                elif child.tag == "encoding" and child.get("attr") == "opacity":
+                    opacity_val = child.get("value", "")
+                    if opacity_val:
+                        ws_design["mark_style"]["opacity"] = opacity_val
+
+    # Border from zone-style (will be populated at dashboard level instead)
+    # Keep border empty here -- dashboard zones carry border info
+
+    return ws_design
+
+
+def _extract_zone_layout(zone_element):
+    """Extract spatial layout dict from a zone element's x/y/w/h attributes.
+
+    Returns a dict with int values for x, y, w, h (0 if not present).
+    """
+    layout = {}
+    for attr in ("x", "y", "w", "h"):
+        raw = zone_element.get(attr, "")
+        if raw:
+            try:
+                layout[attr] = int(raw)
+            except (ValueError, TypeError):
+                layout[attr] = 0
+    return layout
+
+
+def _extract_zone_style(zone_element):
+    """Extract border and style info from a zone's <zone-style> child."""
+    border = {}
+    for zs in zone_element.findall("zone-style"):
+        for fmt in zs.findall("format"):
+            attr = fmt.get("attr", "")
+            val = fmt.get("value", "")
+            if attr and val:
+                border[attr] = val
+    return border
+
+
 def parse_twb(path):
     """Parse a Tableau workbook XML with full metadata extraction.
 
@@ -143,6 +359,9 @@ def parse_twb(path):
         tree = ET.parse(actual_path)
         root = tree.getroot()
         spec["version"] = root.get("version", "unknown")
+
+        # --- Global design metadata (color palettes, fonts) ---
+        spec["design"] = _extract_global_design(root)
 
         # --- Datasources ---
         for ds in root.iter("datasource"):
@@ -304,6 +523,9 @@ def parse_twb(path):
                     ws_info["sort_field"] = sort_field
                     break
 
+            # Per-worksheet design metadata
+            ws_info["design"] = _extract_ws_design(ws)
+
             spec["worksheets"].append(ws_info)
 
         # --- Dashboards (with zone deduplication) ---
@@ -324,6 +546,25 @@ def parse_twb(path):
                     "height": size_el.get("maxheight", size_el.get("height", "")),
                 }
 
+            # Canvas dimensions as integers for design replication
+            canvas_w = ""
+            canvas_h = ""
+            if size_el is not None:
+                canvas_w = size_el.get("maxwidth", size_el.get("width", ""))
+                canvas_h = size_el.get("maxheight", size_el.get("height", ""))
+            try:
+                canvas_w_int = int(canvas_w) if canvas_w else 0
+            except (ValueError, TypeError):
+                canvas_w_int = 0
+            try:
+                canvas_h_int = int(canvas_h) if canvas_h else 0
+            except (ValueError, TypeError):
+                canvas_h_int = 0
+            db_info["canvas"] = {
+                "width": canvas_w_int,
+                "height": canvas_h_int,
+            }
+
             # Track seen zone names for deduplication
             seen_zones = set()
 
@@ -341,6 +582,14 @@ def parse_twb(path):
                     val = zone.get(attr, "")
                     if val:
                         zone_data[attr] = val
+
+                # Zone layout (x, y, w, h as integers)
+                zone_data["layout"] = _extract_zone_layout(zone)
+
+                # Zone border/style from <zone-style>
+                zone_style = _extract_zone_style(zone)
+                if zone_style:
+                    zone_data["zone_style"] = zone_style
 
                 # Keep the first (outermost) zone occurrence with spatial data;
                 # skip duplicates from nested zone references.

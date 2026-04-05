@@ -1366,7 +1366,11 @@ with tab1:
                 for _c in _df.columns[:20]:
                     _nu = _df[_c].nunique()
                     if pd.api.types.is_numeric_dtype(_df[_c]):
-                        _col_details.append(f"{_c} (numeric, range {_df[_c].min():.0f}-{_df[_c].max():.0f})")
+                        _cmin, _cmax = _df[_c].min(), _df[_c].max()
+                        if pd.notna(_cmin) and pd.notna(_cmax):
+                            _col_details.append(f"{_c} (numeric, range {_cmin:.0f}-{_cmax:.0f})")
+                        else:
+                            _col_details.append(f"{_c} (numeric, all null)")
                     elif pd.api.types.is_datetime64_any_dtype(_df[_c]):
                         _col_details.append(f"{_c} (dates)")
                     else:

@@ -641,8 +641,10 @@ with st.sidebar:
     # If uploader is empty but we have tracked files, full session wipe
     if not uploaded_files_list and st.session_state.uploaded_files:
         next_key = st.session_state.get("uploader_key", 0) + 1
+        _preserve = {"uploader_key", "theme", "user_prefs"}
         for key in list(st.session_state.keys()):
-            del st.session_state[key]
+            if key not in _preserve:
+                del st.session_state[key]
         st.session_state.uploader_key = next_key
         st.rerun()
 
@@ -896,15 +898,19 @@ with st.sidebar:
             # retains its files -- they'll be re-ingested into a fresh
             # MultiFileSession since uploaded_files dict is cleared.
             cur_key = st.session_state.get("uploader_key", 0)
+            _preserve = {"uploader_key", "theme", "user_prefs"}
             for key in list(st.session_state.keys()):
-                del st.session_state[key]
+                if key not in _preserve:
+                    del st.session_state[key]
             st.session_state.uploader_key = cur_key
             st.rerun()
     with col_new:
         if st.button("New Session", width="stretch"):
             next_key = st.session_state.get("uploader_key", 0) + 1
+            _preserve = {"uploader_key", "theme", "user_prefs"}
             for key in list(st.session_state.keys()):
-                del st.session_state[key]
+                if key not in _preserve:
+                    del st.session_state[key]
             st.session_state.uploader_key = next_key
             st.rerun()
 

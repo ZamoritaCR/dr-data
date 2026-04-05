@@ -854,6 +854,33 @@ class DrDataAgent:
         if result.get("report_structure"):
             self.tableau_spec = result["report_structure"]
 
+            # Wire field resolution: if we have both a Tableau spec and data,
+            # resolve field names against actual columns using fuzzy matching.
+            if self.dataframe is not None and self.tableau_spec.get("type", "").startswith("tableau"):
+                try:
+                    from core.field_resolver import TableauFieldResolver
+                    resolver = TableauFieldResolver()
+                    col_names = list(self.dataframe.columns)
+                    resolution_map = {}
+                    for ws in self.tableau_spec.get("worksheets", []):
+                        for field in ws.get("rows_fields", []) + ws.get("cols_fields", []) + ws.get("dimensions", []) + ws.get("measures", []):
+                            if field and field not in resolution_map:
+                                match = resolver.resolve_field(field, col_names)
+                                if match:
+                                    resolution_map[field] = match["matched"]
+                    for cf in self.tableau_spec.get("calculated_fields", []):
+                        fname = cf.get("name", "")
+                        if fname and fname not in resolution_map:
+                            match = resolver.resolve_field(fname, col_names)
+                            if match:
+                                resolution_map[fname] = match["matched"]
+                    self.tableau_spec["field_resolution_map"] = resolution_map
+                    print(f"[FIELD RESOLVER] Resolved {len(resolution_map)}/{len(resolution_map)} fields via fuzzy matching")
+                except ImportError:
+                    print("[FIELD RESOLVER] rapidfuzz not installed -- skipping field resolution")
+                except Exception as e:
+                    print(f"[FIELD RESOLVER] Failed: {e}")
+
         return self._format_data_context(
             file_names=[os.path.basename(file_path)]
         )

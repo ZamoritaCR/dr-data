@@ -11,6 +11,17 @@ import shutil
 import os
 
 
+def _safe_strip_brackets(name):
+    """Strip surrounding [] from Tableau column names without mangling edge cases.
+
+    strip("[]") is dangerous: it strips ALL leading/trailing [ and ] characters,
+    so "[Sales [Net]]" becomes "Sales [Net" instead of "Sales [Net]".
+    """
+    if name.startswith('[') and name.endswith(']') and name.count('[') == 1:
+        return name[1:-1]
+    return name
+
+
 def parse_twb(path):
     """Parse a Tableau workbook XML with enhanced field extraction.
 
@@ -88,9 +99,27 @@ def parse_twb(path):
                     if table_name:
                         ds_info["tables"].append(table_name)
 
+                    # Parse join relationships
+                    if rel.get("type") == "join":
+                        join_type = rel.get("join", "inner")
+                        for clause in rel.iter("expression"):
+                            if clause.get("op") == "=":
+                                operands = list(clause)
+                                if len(operands) >= 2:
+                                    left = operands[0].get("op", "")
+                                    right = operands[1].get("op", "")
+                                    # op contains "[Table].[Column]" reference
+                                    if left and right:
+                                        spec["relationships"].append({
+                                            "left_ref": left,
+                                            "right_ref": right,
+                                            "join_type": join_type,
+                                            "datasource": ds_name,
+                                        })
+
             for col in ds.findall("column"):
                 col_info = {
-                    "name": col.get("name", "").strip("[]"),
+                    "name": _safe_strip_brackets(col.get("name", "")),
                     "caption": col.get("caption", ""),
                     "datatype": col.get("datatype", ""),
                     "role": col.get("role", ""),
@@ -122,11 +151,18 @@ def parse_twb(path):
                 "rows": "",
                 "cols": "",
                 "filters": [],
+                "color_field": "",
+                "size_field": "",
+                "label_fields": [],
+                "tooltip_fields": [],
+                "sort_field": "",
             }
 
-            mark = ws.find(".//mark")
-            if mark is not None:
-                ws_info["mark_type"] = mark.get("class", "")
+            # Mark types (all layers, not just first)
+            marks = [m.get("class", "") for m in ws.iter("mark") if m.get("class")]
+            ws_info["mark_type"] = marks[0] if marks else ""
+            if len(marks) > 1:
+                ws_info["mark_layers"] = marks
 
             table = ws.find(".//table")
             if table is not None:
@@ -146,6 +182,26 @@ def parse_twb(path):
                             "column": f_col,
                         })
 
+            # Visual encoding shelves
+            for enc in ws.iter("encoding"):
+                attr = enc.get("attr", "")
+                field = enc.get("column", enc.get("field", ""))
+                if attr == "color" and field:
+                    ws_info["color_field"] = field
+                elif attr == "size" and field:
+                    ws_info["size_field"] = field
+                elif attr == "label" and field:
+                    ws_info["label_fields"].append(field)
+                elif attr == "tooltip" and field:
+                    ws_info["tooltip_fields"].append(field)
+
+            # Sort field
+            for sort_el in ws.iter("sort"):
+                sort_field = sort_el.get("column", sort_el.get("field", ""))
+                if sort_field:
+                    ws_info["sort_field"] = sort_field
+                    break
+
             spec["worksheets"].append(ws_info)
 
         # Dashboards
@@ -154,11 +210,22 @@ def parse_twb(path):
             db_info = {
                 "name": db_name,
                 "worksheets_used": [],
+                "zones": [],
             }
             for zone in db.iter("zone"):
                 ws_ref = zone.get("name", "")
-                if ws_ref and ws_ref != db_name:
-                    db_info["worksheets_used"].append(ws_ref)
+                zone_data = {"name": ws_ref}
+                for attr in ("x", "y", "w", "h"):
+                    val = zone.get(attr, "")
+                    if val:
+                        zone_data[attr] = val
+                zone_type = zone.get("type-v2", zone.get("type", ""))
+                if zone_type:
+                    zone_data["type"] = zone_type
+                if ws_ref:
+                    db_info["zones"].append(zone_data)
+                    if ws_ref != db_name:
+                        db_info["worksheets_used"].append(ws_ref)
             spec["dashboards"].append(db_info)
 
     except Exception as e:

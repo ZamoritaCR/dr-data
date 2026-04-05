@@ -303,6 +303,25 @@ def parse_twb(file_path):
                     "caption": ds.get("caption", ds_name),
                 })
 
+            # Parse join relationships from <relation type="join"> nodes
+            for conn in ds.iter("connection"):
+                for rel in conn.iter("relation"):
+                    if rel.get("type") == "join":
+                        join_type = rel.get("join", "inner")
+                        for clause in rel.iter("expression"):
+                            if clause.get("op") == "=":
+                                operands = list(clause)
+                                if len(operands) >= 2:
+                                    left = operands[0].get("op", "")
+                                    right = operands[1].get("op", "")
+                                    if left and right:
+                                        structure["relationships"].append({
+                                            "left_ref": left,
+                                            "right_ref": right,
+                                            "join_type": join_type,
+                                            "datasource": ds_name,
+                                        })
+
             for col in ds.iter("column"):
                 calc = col.find("calculation")
                 if calc is not None:

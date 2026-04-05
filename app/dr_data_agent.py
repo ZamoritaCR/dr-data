@@ -3117,7 +3117,10 @@ Output ONLY valid JSON. No markdown. No commentary."""
             )
             from core.openai_engine import OpenAIEngine
             engine = OpenAIEngine()
-            config = engine.generate_pbip_config(dashboard_spec, pbi_profile)
+            config = engine.generate_pbip_config(
+                dashboard_spec, pbi_profile,
+                user_instructions=request,
+            )
 
             sections = config.get("report_layout", {}).get("sections", [])
             total_vc = sum(

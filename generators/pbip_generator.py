@@ -358,6 +358,134 @@ class PBIPGenerator:
     #  Pages and visuals                                                   #
     # ------------------------------------------------------------------ #
 
+    # ------------------------------------------------------------------ #
+    #  Deterministic grid layout (applied as final pass over GPT-4 output) #
+    # ------------------------------------------------------------------ #
+
+    # Canvas and spacing constants for deterministic layout
+    _CANVAS_W = 1280
+    _CANVAS_H = 720
+    _MARGIN = 12       # Edge margin
+    _GAP = 8           # Gap between visuals
+    _SLICER_H = 52     # Height of a slicer row
+    _CARD_H = 80       # Height of a KPI card row
+    _MIN_VIS_H = 100   # Minimum height for a chart visual
+
+    # Visual types classified as KPI cards
+    _CARD_TYPES = {"card", "kpi", "multiRowCard"}
+    # Visual types classified as slicers
+    _SLICER_TYPES = {"slicer"}
+
+    @classmethod
+    def _deterministic_layout(cls, visual_containers):
+        """Re-compute x/y/width/height for all visuals using a clean grid.
+
+        Layout strategy:
+          - Row 1 (top):    Slicer visuals in an evenly-spaced horizontal row
+          - Row 2:          KPI / card visuals in an evenly-spaced horizontal row
+          - Remaining area: Main charts in a 2-column grid
+
+        All positions respect canvas bounds (1280x720), margins (12px edges),
+        and gaps (8px between visuals). No visual will overlap another or
+        exceed the canvas.
+
+        Args:
+            visual_containers: list of dicts, each with at least "config"
+                (str or dict with "visualType").
+
+        Returns:
+            list of dicts -- same containers with x/y/width/height updated.
+        """
+        if not visual_containers:
+            return visual_containers
+
+        CW = cls._CANVAS_W
+        CH = cls._CANVAS_H
+        M = cls._MARGIN
+        G = cls._GAP
+
+        # Classify visuals into buckets while preserving original order index
+        slicers = []
+        cards = []
+        charts = []
+
+        for i, vc in enumerate(visual_containers):
+            vtype = cls._extract_visual_type(vc)
+            if vtype in cls._SLICER_TYPES:
+                slicers.append((i, vc))
+            elif vtype in cls._CARD_TYPES:
+                cards.append((i, vc))
+            else:
+                charts.append((i, vc))
+
+        usable_w = CW - 2 * M
+        cursor_y = M
+
+        # -- Slicer row (top) --
+        if slicers:
+            n = len(slicers)
+            sw = (usable_w - (n - 1) * G) // n
+            for idx, (orig_i, vc) in enumerate(slicers):
+                vc["x"] = M + idx * (sw + G)
+                vc["y"] = cursor_y
+                vc["width"] = sw
+                vc["height"] = cls._SLICER_H
+            cursor_y += cls._SLICER_H + G
+
+        # -- KPI card row --
+        if cards:
+            n = len(cards)
+            cw = (usable_w - (n - 1) * G) // n
+            for idx, (orig_i, vc) in enumerate(cards):
+                vc["x"] = M + idx * (cw + G)
+                vc["y"] = cursor_y
+                vc["width"] = cw
+                vc["height"] = cls._CARD_H
+            cursor_y += cls._CARD_H + G
+
+        # -- Main charts: 2-column grid in remaining space --
+        if charts:
+            remaining_h = CH - cursor_y - M
+            n = len(charts)
+            cols = 2 if n > 1 else 1
+            rows = (n + cols - 1) // cols
+            cell_w = (usable_w - (cols - 1) * G) // cols
+            cell_h = max(cls._MIN_VIS_H, (remaining_h - (rows - 1) * G) // rows)
+
+            # Clamp: ensure charts do not exceed canvas bottom
+            if cursor_y + rows * cell_h + (rows - 1) * G > CH - M:
+                cell_h = max(
+                    cls._MIN_VIS_H,
+                    (CH - M - cursor_y - (rows - 1) * G) // rows,
+                )
+
+            for idx, (orig_i, vc) in enumerate(charts):
+                row = idx // cols
+                col = idx % cols
+                vc["x"] = M + col * (cell_w + G)
+                vc["y"] = cursor_y + row * (cell_h + G)
+                vc["width"] = cell_w
+                vc["height"] = cell_h
+
+        print(f"    [LAYOUT] Deterministic grid: "
+              f"{len(slicers)} slicers, {len(cards)} cards, "
+              f"{len(charts)} charts")
+
+        return visual_containers
+
+    @staticmethod
+    def _extract_visual_type(vc):
+        """Extract the visualType string from a visual container dict."""
+        raw_cfg = vc.get("config", "{}")
+        if isinstance(raw_cfg, str):
+            try:
+                cfg_obj = json.loads(raw_cfg)
+            except (json.JSONDecodeError, TypeError):
+                cfg_obj = {}
+        else:
+            cfg_obj = raw_cfg if isinstance(raw_cfg, dict) else {}
+        return cfg_obj.get("visualType", "unknown").lower()
+
     def _write_pages(self, pages_dir, raw_sections, table_name, measure_names,
                      col_types=None, profile_col_names=None):
         """Write page.json and visual.json files.
@@ -384,10 +512,16 @@ class PBIPGenerator:
             page["height"] = int(raw.get("height", 720))
             self._write_json(page_dir / "page.json", page)
 
+            # --- Deterministic layout pass ---
+            # Re-compute positions for ALL visuals on this page using a
+            # clean grid, regardless of what GPT-4 suggested.
+            containers = list(raw.get("visualContainers", []))
+            containers = self._deterministic_layout(containers)
+
             # Visuals
             visuals_root = page_dir / "visuals"
             vc_count = 0
-            for vidx, vc in enumerate(raw.get("visualContainers", [])):
+            for vidx, vc in enumerate(containers):
                 viz_id = uuid.uuid4().hex[:20]
                 viz_dir = visuals_root / viz_id
                 viz_dir.mkdir(parents=True, exist_ok=True)

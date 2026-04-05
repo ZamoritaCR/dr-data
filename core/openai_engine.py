@@ -35,17 +35,24 @@ class OpenAIEngine:
     #  Main entry point                                                    #
     # ------------------------------------------------------------------ #
 
-    def generate_pbip_config(self, dashboard_spec, data_profile):
+    def generate_pbip_config(self, dashboard_spec, data_profile,
+                             user_instructions=None):
         """Convert Claude's dashboard spec into full Power BI config.
 
         Args:
             dashboard_spec: dict from ClaudeInterpreter.interpret().
             data_profile: dict from DataAnalyzer.analyze().
+            user_instructions: optional str -- the user's original request/instructions
+                from chat. Injected into the GPT-4 prompt so the generated config
+                reflects the user's intent (e.g. "replicate this Tableau" vs
+                "make a KPI-focused executive dashboard").
 
         Returns:
             dict with keys: report_layout, tmdl_model
         """
-        user_message = self._build_user_message(dashboard_spec, data_profile)
+        user_message = self._build_user_message(
+            dashboard_spec, data_profile, user_instructions=user_instructions
+        )
 
         page_count = len(dashboard_spec.get("pages", []))
         visual_count = sum(
@@ -106,18 +113,33 @@ class OpenAIEngine:
     #  Internal helpers                                                    #
     # ------------------------------------------------------------------ #
 
-    def _build_user_message(self, dashboard_spec, data_profile):
-        """Combine dashboard spec + data profile into the prompt."""
+    def _build_user_message(self, dashboard_spec, data_profile,
+                            user_instructions=None):
+        """Combine dashboard spec + data profile into the prompt.
+
+        If user_instructions are provided, they are prepended so GPT-4
+        understands the user's intent and can tailor the output accordingly.
+        """
         spec_json = json.dumps(dashboard_spec, indent=2, default=str)
         profile_json = json.dumps(data_profile, indent=2, default=str)
-        return (
-            f"DASHBOARD SPECIFICATION:\n{spec_json}\n\n"
-            f"DATASET PROFILE:\n{profile_json}\n\n"
+
+        parts = []
+
+        if user_instructions:
+            parts.append(
+                f"USER INSTRUCTIONS (follow these closely):\n{user_instructions}\n"
+            )
+
+        parts.append(f"DASHBOARD SPECIFICATION:\n{spec_json}\n")
+        parts.append(f"DATASET PROFILE:\n{profile_json}\n")
+        parts.append(
             "Generate the complete Power BI configuration JSON with "
             "report_layout and tmdl_model. Use ONLY columns from the dataset profile. "
             "Map all visuals from the specification to proper Power BI visualContainers "
             "on a 1280x720 canvas with no overlaps."
         )
+
+        return "\n".join(parts)
 
     def _call_openai(self, system_prompt, user_message):
         """Make a single OpenAI API call and return the text response."""

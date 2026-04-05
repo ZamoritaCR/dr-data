@@ -12,6 +12,8 @@ import xml.etree.ElementTree as ET
 import tempfile
 import shutil
 
+from core.enhanced_tableau_parser import parse_twb as _enhanced_parse_twb
+
 SUPPORTED_DATA = {
     "csv", "tsv", "xlsx", "xls", "parquet", "json",
     "xml", "txt", "dat", "rpt"
@@ -95,12 +97,12 @@ def ingest_file(file_path):
                 result["dataframes"]["main"] = df
 
         elif category == "report":
-            if ext == "twbx":
-                structure, dfs = parse_twbx(file_path)
-                result["report_structure"] = structure
-                result["dataframes"].update(dfs)
-            elif ext == "twb":
-                result["report_structure"] = parse_twb(file_path)
+            if ext in ("twbx", "twb"):
+                result["report_structure"] = _enhanced_parse_twb(file_path)
+                if ext == "twbx":
+                    # Also extract embedded data files
+                    _, dfs = _extract_twbx_data(file_path)
+                    result["dataframes"].update(dfs)
             elif ext == "wid":
                 result["report_structure"] = parse_bobj(file_path)
             elif ext in ("yxmd", "yxwz", "yxmc", "yxzp"):
@@ -205,243 +207,50 @@ def load_rpt(file_path):
                 return None
 
 
-def _extract_mark_type(ws_element):
-    """Extract the primary mark/chart type from a Tableau worksheet element.
-
-    Tableau stores the mark type in several places depending on version:
-    - <table><pane><mark class="..."> (common)
-    - <mark class="..."> directly under worksheet
-    - Inferred from <style-rule element="mark"> type attribute
-    Returns the most specific mark class found, or "automatic".
-    """
-    # Check <table><pane><mark> first (most specific)
-    for pane in ws_element.iter("pane"):
-        for mark in pane.iter("mark"):
-            mc = mark.get("class", "")
-            if mc and mc != "Automatic":
-                return mc.lower().replace(" ", "-")
-
-    # Check direct <mark> children
-    for mark in ws_element.iter("mark"):
-        mc = mark.get("class", "")
-        if mc and mc != "Automatic":
-            return mc.lower().replace(" ", "-")
-
-    return "automatic"
-
-
-def _extract_shelf_fields(ws_element):
-    """Extract field references from <rows> and <cols> text elements.
-
-    Tableau stores shelf expressions as text content:
-      <rows>[Category]</rows>
-      <cols>SUM([Sales])</cols>
-    These can also contain multiple fields separated by newlines or spaces.
-    """
-    import re
-    rows_fields = []
-    cols_fields = []
-
-    for rows_el in ws_element.iter("rows"):
-        text = rows_el.text or ""
-        rows_fields.extend(re.findall(r'\[([^\]]+)\]', text))
-
-    for cols_el in ws_element.iter("cols"):
-        text = cols_el.text or ""
-        cols_fields.extend(re.findall(r'\[([^\]]+)\]', text))
-
-    return rows_fields, cols_fields
-
-
-def _extract_ws_filters(ws_element):
-    """Extract worksheet-level filters from <filter> elements."""
-    filters = []
-    for filt in ws_element.iter("filter"):
-        col = filt.get("column", "")
-        fclass = filt.get("class", "")
-        if col:
-            # Strip bracket notation: [datasource].[field] -> field
-            import re
-            field = col
-            m = re.search(r'\[([^\]]+)\]$', col)
-            if m:
-                field = m.group(1)
-            filters.append({
-                "field": field,
-                "column_ref": col,
-                "type": fclass or "categorical",
-            })
-    return filters
-
 
 def parse_twb(file_path):
     """Parse Tableau .twb XML file.
 
-    Extracts worksheets with chart types, shelf fields, and filters;
-    dashboards with zone spatial layout; calculated fields; parameters.
+    Legacy wrapper -- delegates to core.enhanced_tableau_parser.parse_twb().
     """
-    try:
-        tree = ET.parse(file_path)
-        root = tree.getroot()
-
-        structure = {
-            "type": "tableau_workbook",
-            "version": root.get("version", "unknown"),
-            "worksheets": [],
-            "dashboards": [],
-            "datasources": [],
-            "calculated_fields": [],
-            "parameters": [],
-            "relationships": [],
-        }
-
-        for ds in root.iter("datasource"):
-            ds_name = ds.get("name", ds.get("caption", "unknown"))
-            if ds_name != "Parameters":
-                structure["datasources"].append({
-                    "name": ds_name,
-                    "caption": ds.get("caption", ds_name),
-                })
-
-            # Parse join relationships from <relation type="join"> nodes
-            for conn in ds.iter("connection"):
-                for rel in conn.iter("relation"):
-                    if rel.get("type") == "join":
-                        join_type = rel.get("join", "inner")
-                        for clause in rel.iter("expression"):
-                            if clause.get("op") == "=":
-                                operands = list(clause)
-                                if len(operands) >= 2:
-                                    left = operands[0].get("op", "")
-                                    right = operands[1].get("op", "")
-                                    if left and right:
-                                        structure["relationships"].append({
-                                            "left_ref": left,
-                                            "right_ref": right,
-                                            "join_type": join_type,
-                                            "datasource": ds_name,
-                                        })
-
-            for col in ds.iter("column"):
-                calc = col.find("calculation")
-                if calc is not None:
-                    structure["calculated_fields"].append({
-                        "name": col.get("caption", col.get("name", "")),
-                        "formula": calc.get("formula", ""),
-                        "datasource": ds_name
-                    })
-
-            if ds_name == "Parameters":
-                for col in ds.iter("column"):
-                    structure["parameters"].append({
-                        "name": col.get("caption", col.get("name", "")),
-                        "datatype": col.get("datatype", ""),
-                        "value": col.get("value", "")
-                    })
-
-        for ws in root.iter("worksheet"):
-            chart_type = _extract_mark_type(ws)
-            rows_fields, cols_fields = _extract_shelf_fields(ws)
-            ws_filters = _extract_ws_filters(ws)
-
-            ws_info = {
-                "name": ws.get("name", ""),
-                "chart_type": chart_type,
-                "marks": [],
-                "rows_fields": rows_fields,
-                "cols_fields": cols_fields,
-                "dimensions": [],
-                "measures": [],
-                "filters": ws_filters,
-            }
-
-            for mark in ws.iter("mark"):
-                mc = mark.get("class", "")
-                if mc:
-                    ws_info["marks"].append(mc)
-
-            for enc in ws.iter("encoding"):
-                shelf = enc.get("attr", "")
-                col_name = enc.get("column", "")
-                if shelf in ("columns", "rows"):
-                    ws_info["dimensions"].append(col_name)
-                elif shelf in ("size", "color", "text"):
-                    ws_info["measures"].append(col_name)
-
-            structure["worksheets"].append(ws_info)
-
-        for db in root.iter("dashboard"):
-            db_info = {
-                "name": db.get("name", ""),
-                "size": {},
-                "zones": [],
-            }
-
-            # Extract dashboard size
-            size_el = db.find("size")
-            if size_el is not None:
-                db_info["size"] = {
-                    "width": size_el.get("maxwidth", size_el.get("width", "")),
-                    "height": size_el.get("maxheight", size_el.get("height", "")),
-                }
-
-            for zone in db.iter("zone"):
-                zone_name = zone.get("name", "")
-                zone_type = zone.get("type-v2", zone.get("type", ""))
-                zone_data = {
-                    "name": zone_name,
-                    "type": zone_type,
-                }
-                # Extract spatial coordinates if present
-                for attr in ("x", "y", "w", "h"):
-                    val = zone.get(attr, "")
-                    if val:
-                        zone_data[attr] = val
-                # Only include zones that have a name (worksheet ref or object)
-                if zone_name:
-                    db_info["zones"].append(zone_data)
-
-            structure["dashboards"].append(db_info)
-
-        return structure
-
-    except Exception as e:
-        return {
-            "type": "tableau_workbook",
-            "error": str(e),
-            "note": "Partial parse -- file may use newer Tableau format"
-        }
+    return _enhanced_parse_twb(file_path)
 
 
-def parse_twbx(file_path):
-    """Parse packaged Tableau workbook -- extract data + structure."""
-    structure = None
+def _extract_twbx_data(file_path):
+    """Extract embedded data files (CSV/Excel) from a .twbx archive.
+
+    Returns (None, dataframes_dict). Structure parsing is handled by
+    the enhanced parser which processes .twbx natively.
+    """
     dataframes = {}
-
     with tempfile.TemporaryDirectory() as tmp:
         try:
             with zipfile.ZipFile(file_path, "r") as z:
                 z.extractall(tmp)
-
             for root_dir, dirs, files in os.walk(tmp):
                 for f in files:
                     fpath = os.path.join(root_dir, f)
-                    if f.endswith(".twb"):
-                        structure = parse_twb(fpath)
-                    elif f.endswith((".csv", ".xlsx")):
+                    if f.endswith((".csv", ".xlsx")):
                         try:
                             if f.endswith(".csv"):
                                 df = pd.read_csv(fpath)
-                            elif f.endswith(".xlsx"):
-                                df = pd.read_excel(fpath)
                             else:
-                                continue
+                                df = pd.read_excel(fpath)
                             dataframes[f] = df
                         except Exception:
                             pass
-        except Exception as e:
-            structure = {"type": "tableau_packaged", "error": str(e)}
+        except Exception:
+            pass
+    return None, dataframes
 
+
+def parse_twbx(file_path):
+    """Parse packaged Tableau workbook -- extract data + structure.
+
+    Legacy wrapper -- delegates structure parsing to the enhanced parser.
+    """
+    structure = _enhanced_parse_twb(file_path)
+    _, dataframes = _extract_twbx_data(file_path)
     return structure, dataframes
 
 

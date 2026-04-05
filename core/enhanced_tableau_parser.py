@@ -1,9 +1,12 @@
 """
 Enhanced Tableau Parser.
 
-Wraps the existing TWB/TWBX parsing logic and adds field resolution
-via the TableauFieldResolver from Sprint 1.
+Single authoritative TWB/TWBX parser for Dr. Data.
+Extracts worksheets with chart types, shelf fields, visual encodings,
+filters; dashboards with deduplicated zone spatial layout; calculated
+fields; parameters; join relationships; hyper file detection.
 """
+import re
 import xml.etree.ElementTree as ET
 import zipfile
 import tempfile
@@ -12,26 +15,78 @@ import os
 
 
 def _safe_strip_brackets(name):
-    """Strip surrounding [] from Tableau column names without mangling edge cases.
-
-    strip("[]") is dangerous: it strips ALL leading/trailing [ and ] characters,
-    so "[Sales [Net]]" becomes "Sales [Net" instead of "Sales [Net]".
-    """
+    """Strip surrounding [] from Tableau column names without mangling edge cases."""
     if name.startswith('[') and name.endswith(']') and name.count('[') == 1:
         return name[1:-1]
     return name
 
 
+def _extract_mark_type(ws_element):
+    """Extract the primary mark/chart type from a Tableau worksheet element.
+
+    Checks <table><pane><mark class="..."> first (most specific),
+    then falls back to any <mark> element under the worksheet.
+    Returns lowercase hyphenated mark class, or "automatic".
+    """
+    for pane in ws_element.iter("pane"):
+        for mark in pane.iter("mark"):
+            mc = mark.get("class", "")
+            if mc and mc.lower() != "automatic":
+                return mc.lower().replace(" ", "-")
+
+    for mark in ws_element.iter("mark"):
+        mc = mark.get("class", "")
+        if mc and mc.lower() != "automatic":
+            return mc.lower().replace(" ", "-")
+
+    return "automatic"
+
+
+def _extract_shelf_fields(text):
+    """Extract field references from shelf expression text.
+
+    Tableau stores shelf expressions like:
+      [Category]
+      SUM([Sales])
+      ([federated.xxx].[none:Region:nk] * [federated.xxx].[sum:Sales:qk])
+    Returns a list of field reference strings found inside brackets.
+    """
+    if not text:
+        return []
+    return re.findall(r'\[([^\]]+)\]', text)
+
+
+def _extract_ws_filters(ws_element):
+    """Extract worksheet-level filters from <filter> elements."""
+    filters = []
+    for filt in ws_element.iter("filter"):
+        col = filt.get("column", "")
+        fclass = filt.get("class", "")
+        if col:
+            field = col
+            m = re.search(r'\[([^\]]+)\]$', col)
+            if m:
+                field = m.group(1)
+            filters.append({
+                "field": field,
+                "column_ref": col,
+                "type": fclass or "categorical",
+            })
+    return filters
+
+
 def parse_twb(path):
-    """Parse a Tableau workbook XML with enhanced field extraction.
+    """Parse a Tableau workbook XML with full metadata extraction.
+
+    Handles both .twb and .twbx files (extracts .twb from archive).
 
     Returns a dict with:
         type, version, datasources, worksheets, dashboards,
         calculated_fields, parameters, filters, relationships,
-        has_hyper, field_resolution_map (if resolver is run)
+        has_hyper
     """
     spec = {
-        "type": "tableau",
+        "type": "tableau_workbook",
         "version": "",
         "datasources": [],
         "worksheets": [],
@@ -45,7 +100,9 @@ def parse_twb(path):
 
     actual_path = path
     tmpdir = None
-    # Handle .twbx
+    has_hyper = False
+
+    # Handle .twbx (packaged workbook)
     if str(path).lower().endswith('.twbx'):
         try:
             tmpdir = tempfile.mkdtemp(prefix="etp_")
@@ -54,28 +111,34 @@ def parse_twb(path):
                     if name.endswith('.twb'):
                         z.extract(name, tmpdir)
                         actual_path = os.path.join(tmpdir, name)
-                        break
+                    if name.endswith('.hyper') or name.endswith('.tde'):
+                        has_hyper = True
         except Exception as e:
             if tmpdir:
                 shutil.rmtree(tmpdir, ignore_errors=True)
             spec["parse_error"] = str(e)
             return spec
 
+    spec["has_hyper"] = has_hyper
+
     try:
         tree = ET.parse(actual_path)
         root = tree.getroot()
         spec["version"] = root.get("version", "unknown")
 
-        # Data sources
+        # --- Datasources ---
         for ds in root.iter("datasource"):
             ds_name = ds.get("name", "") or ds.get("caption", "")
-            if ds_name.startswith("Parameters"):
+
+            # Parameters datasource
+            if ds_name == "Parameters" or ds_name.startswith("Parameters"):
                 for col in ds.iter("column"):
                     if col.get("param-domain-type"):
                         spec["parameters"].append({
                             "name": col.get("caption", col.get("name", "")),
-                            "type": col.get("datatype", ""),
+                            "datatype": col.get("datatype", ""),
                             "domain": col.get("param-domain-type", ""),
+                            "value": col.get("value", ""),
                         })
                 continue
 
@@ -83,6 +146,9 @@ def parse_twb(path):
                 "name": ds_name,
                 "caption": ds.get("caption", ds_name),
                 "connection_type": "",
+                "server": "",
+                "dbname": "",
+                "filename": "",
                 "tables": [],
                 "columns": [],
             }
@@ -96,7 +162,7 @@ def parse_twb(path):
 
                 for rel in conn.iter("relation"):
                     table_name = rel.get("table", rel.get("name", ""))
-                    if table_name:
+                    if table_name and table_name not in ds_info["tables"]:
                         ds_info["tables"].append(table_name)
 
                     # Parse join relationships
@@ -108,7 +174,6 @@ def parse_twb(path):
                                 if len(operands) >= 2:
                                     left = operands[0].get("op", "")
                                     right = operands[1].get("op", "")
-                                    # op contains "[Table].[Column]" reference
                                     if left and right:
                                         spec["relationships"].append({
                                             "left_ref": left,
@@ -142,15 +207,24 @@ def parse_twb(path):
             if ds_name:
                 spec["datasources"].append(ds_info)
 
-        # Worksheets
+        # --- Worksheets ---
         for ws in root.iter("worksheet"):
             ws_name = ws.get("name", "")
+            chart_type = _extract_mark_type(ws)
+            ws_filters = _extract_ws_filters(ws)
+
             ws_info = {
                 "name": ws_name,
-                "mark_type": "",
+                "chart_type": chart_type,
+                "mark_type": chart_type,
+                "marks": [],
                 "rows": "",
                 "cols": "",
-                "filters": [],
+                "rows_fields": [],
+                "cols_fields": [],
+                "dimensions": [],
+                "measures": [],
+                "filters": ws_filters,
                 "color_field": "",
                 "size_field": "",
                 "label_fields": [],
@@ -158,25 +232,28 @@ def parse_twb(path):
                 "sort_field": "",
             }
 
-            # Mark types (all layers, not just first)
-            marks = [m.get("class", "") for m in ws.iter("mark") if m.get("class")]
-            ws_info["mark_type"] = marks[0] if marks else ""
-            if len(marks) > 1:
-                ws_info["mark_layers"] = marks
+            # Collect all mark layers
+            for mark in ws.iter("mark"):
+                mc = mark.get("class", "")
+                if mc:
+                    ws_info["marks"].append(mc)
 
+            # Shelf expressions from <rows> and <cols>
             table = ws.find(".//table")
             if table is not None:
                 rows_el = table.find("rows")
                 cols_el = table.find("cols")
                 if rows_el is not None and rows_el.text:
                     ws_info["rows"] = rows_el.text
+                    ws_info["rows_fields"] = _extract_shelf_fields(rows_el.text)
                 if cols_el is not None and cols_el.text:
                     ws_info["cols"] = cols_el.text
+                    ws_info["cols_fields"] = _extract_shelf_fields(cols_el.text)
 
+                # Filters from the table element (append to spec-level list too)
                 for filt in table.iter("filter"):
                     f_col = filt.get("column", "")
                     if f_col:
-                        ws_info["filters"].append(f_col)
                         spec["filters"].append({
                             "worksheet": ws_name,
                             "column": f_col,
@@ -186,13 +263,20 @@ def parse_twb(path):
             for enc in ws.iter("encoding"):
                 attr = enc.get("attr", "")
                 field = enc.get("column", enc.get("field", ""))
-                if attr == "color" and field:
+                if not field:
+                    continue
+                if attr in ("columns", "rows"):
+                    ws_info["dimensions"].append(field)
+                elif attr in ("size", "color", "text", "detail"):
+                    ws_info["measures"].append(field)
+
+                if attr == "color":
                     ws_info["color_field"] = field
-                elif attr == "size" and field:
+                elif attr == "size":
                     ws_info["size_field"] = field
-                elif attr == "label" and field:
+                elif attr == "label":
                     ws_info["label_fields"].append(field)
-                elif attr == "tooltip" and field:
+                elif attr == "tooltip":
                     ws_info["tooltip_fields"].append(field)
 
             # Sort field
@@ -204,28 +288,51 @@ def parse_twb(path):
 
             spec["worksheets"].append(ws_info)
 
-        # Dashboards
+        # --- Dashboards (with zone deduplication) ---
         for db in root.iter("dashboard"):
             db_name = db.get("name", "")
             db_info = {
                 "name": db_name,
+                "size": {},
                 "worksheets_used": [],
                 "zones": [],
             }
+
+            # Dashboard canvas size
+            size_el = db.find("size")
+            if size_el is not None:
+                db_info["size"] = {
+                    "width": size_el.get("maxwidth", size_el.get("width", "")),
+                    "height": size_el.get("maxheight", size_el.get("height", "")),
+                }
+
+            # Track seen zone names for deduplication
+            seen_zones = set()
+
             for zone in db.iter("zone"):
-                ws_ref = zone.get("name", "")
-                zone_data = {"name": ws_ref}
+                zone_name = zone.get("name", "")
+                if not zone_name:
+                    continue
+
+                zone_type = zone.get("type-v2", zone.get("type", ""))
+                zone_data = {
+                    "name": zone_name,
+                    "type": zone_type,
+                }
                 for attr in ("x", "y", "w", "h"):
                     val = zone.get(attr, "")
                     if val:
                         zone_data[attr] = val
-                zone_type = zone.get("type-v2", zone.get("type", ""))
-                if zone_type:
-                    zone_data["type"] = zone_type
-                if ws_ref:
+
+                # Keep the first (outermost) zone occurrence with spatial data;
+                # skip duplicates from nested zone references.
+                zone_key = zone_name
+                if zone_key not in seen_zones:
+                    seen_zones.add(zone_key)
                     db_info["zones"].append(zone_data)
-                    if ws_ref != db_name:
-                        db_info["worksheets_used"].append(ws_ref)
+                    if zone_name != db_name:
+                        db_info["worksheets_used"].append(zone_name)
+
             spec["dashboards"].append(db_info)
 
     except Exception as e:

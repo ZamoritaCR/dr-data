@@ -160,7 +160,8 @@ async def upload(file: UploadFile = File(...)):
 # ============================================================
 
 class AnalyzeRequest(BaseModel):
-    sheet_name: str = ""
+    model_config = {"extra": "ignore"}
+    sheet_name: str | None = ""
 
 
 @router.post("/analyze/{job_id}")
@@ -404,6 +405,7 @@ async def analyze(job_id: str, req: AnalyzeRequest = AnalyzeRequest()):
 # ============================================================
 
 class SyntheticRequest(BaseModel):
+    model_config = {"extra": "ignore"}
     mode: str = "quick"  # "quick" or "deep"
     rows: int = 100
 
@@ -518,10 +520,11 @@ async def generate_synthetic(job_id: str, req: SyntheticRequest = SyntheticReque
 # ============================================================
 
 class BuildRequest(BaseModel):
+    model_config = {"extra": "ignore"}
     confirmed_visuals: list[dict] = []
     confirmed_layout: str = "auto"
     output_format: str = "pbip"
-    project_name: str = ""
+    project_name: str | None = ""
 
 
 @router.post("/build/{job_id}")
@@ -728,9 +731,11 @@ async def download(job_id: str):
 # ============================================================
 
 class ChatRequest(BaseModel):
-    job_id: str = ""
+    model_config = {"extra": "ignore"}
+    job_id: str | None = None
     message: str
     history: list[dict] = []
+    screen: str | None = None
 
 
 @router.post("/chat")

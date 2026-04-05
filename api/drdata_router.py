@@ -211,15 +211,12 @@ async def analyze(job_id: str, req: AnalyzeRequest = AnalyzeRequest()):
                 job["dataframe_path"] = str(UPLOAD_DIR / job_id / f"{first_key}.csv")
                 df.to_csv(job["dataframe_path"], index=False)
             else:
-                # Extract column info from Tableau spec
-                all_cols = set()
-                for ds in structure.get("datasources", []):
-                    for col in ds.get("columns", []):
-                        all_cols.add(col.get("caption") or col.get("name", ""))
-                for ws in structure.get("worksheets", []):
-                    for f in ws.get("rows_fields", []) + ws.get("cols_fields", []):
-                        all_cols.add(f)
-                analysis["columns"] = sorted(c for c in all_cols if c)
+                # Extract clean column info using the same logic as
+                # synthetic data generation (handles Tableau shelf prefixes,
+                # internal fields, quoted names, etc.)
+                from core.synthetic_data import extract_schema_from_tableau
+                schema = extract_schema_from_tableau(structure)
+                analysis["columns"] = [s["name"] for s in schema]
                 analysis["needs_synthetic_data"] = True
 
             job["progress_pct"] = 30
@@ -569,35 +566,33 @@ async def build(job_id: str, req: BuildRequest):
         if df is None:
             # Auto-generate synthetic data when none available
             _log(job, "No data found -- auto-generating synthetic data...")
-            columns = analysis.get("columns", [])
-            if not columns:
-                raise HTTPException(status_code=422, detail="No columns found -- cannot generate data")
-            rows_count = 100
-            synth_data = {}
-            for col in columns:
-                cl = col.lower()
-                if any(k in cl for k in ("date", "time", "day", "month", "year")):
-                    synth_data[col] = pd.date_range("2023-01-01", periods=rows_count, freq="D").tolist()[:rows_count]
-                elif any(k in cl for k in ("revenue", "sales", "amount", "price", "cost", "profit", "total")):
-                    synth_data[col] = [round(max(0, random.gauss(1000, 500)), 2) for _ in range(rows_count)]
-                elif any(k in cl for k in ("quantity", "count", "units", "qty")):
-                    synth_data[col] = [random.randint(1, 200) for _ in range(rows_count)]
-                elif any(k in cl for k in ("region", "country", "state")):
-                    synth_data[col] = [random.choice(["North", "South", "East", "West", "Central"]) for _ in range(rows_count)]
-                elif any(k in cl for k in ("category", "segment", "type", "class", "group")):
-                    synth_data[col] = [random.choice(["Electronics", "Furniture", "Office", "Clothing", "Food"]) for _ in range(rows_count)]
-                elif any(k in cl for k in ("ratio", "percent", "pct", "margin")):
-                    synth_data[col] = [round(random.uniform(0, 1), 3) for _ in range(rows_count)]
-                elif any(k in cl for k in ("id", "key", "code", "number")):
-                    synth_data[col] = list(range(1, rows_count + 1))
-                else:
-                    synth_data[col] = [random.choice(["Alpha", "Beta", "Gamma", "Delta", "Epsilon"]) for _ in range(rows_count)]
-            df = pd.DataFrame(synth_data)
-            synth_path = UPLOAD_DIR / job_id / "synthetic_data.csv"
-            df.to_csv(synth_path, index=False)
-            df_path = str(synth_path)
-            job["dataframe_path"] = df_path
-            _log(job, f"Generated {len(df)} synthetic rows")
+            report_structure = analysis.get("report_structure")
+            if report_structure:
+                # Tableau file: use the full-featured synthetic generator
+                # which handles shelf prefixes, quoted names, etc.
+                from core.synthetic_data import generate_from_tableau_spec
+                synth_dir = str(UPLOAD_DIR / job_id)
+                df, csv_path, schema = generate_from_tableau_spec(
+                    report_structure, num_rows=2000, output_dir=synth_dir,
+                )
+                df_path = csv_path
+                job["dataframe_path"] = df_path
+                _log(job, f"Generated {len(df)} synthetic rows from Tableau structure")
+            else:
+                # Non-Tableau: fallback to column-name heuristics
+                columns = analysis.get("columns", [])
+                if not columns:
+                    raise HTTPException(status_code=422, detail="No columns found -- cannot generate data")
+                from core.synthetic_data import (
+                    extract_schema_from_tableau, generate_synthetic_dataframe,
+                )
+                schema = [{"name": c, "datatype": "string", "role": "dimension"} for c in columns]
+                df = generate_synthetic_dataframe(schema, num_rows=2000)
+                synth_path = UPLOAD_DIR / job_id / "synthetic_data.csv"
+                df.to_csv(synth_path, index=False)
+                df_path = str(synth_path)
+                job["dataframe_path"] = df_path
+                _log(job, f"Generated {len(df)} synthetic rows")
 
         # Profile the data for PBIP generator
         _log(job, "Profiling data for PBIP generation...")

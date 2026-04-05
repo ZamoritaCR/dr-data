@@ -979,7 +979,7 @@ class PBIPGenerator:
 
         # Columns -- from data_profile (always matches the actual data)
         for col_info in profile_columns:
-            col_name = col_info["name"]
+            col_name = self._strip_control_chars(col_info["name"])
             sem = col_info.get("semantic_type", "dimension")
             dtype_str = col_info.get("dtype", "object")
             dt = self._pandas_dtype_to_pbi(dtype_str, sem)
@@ -1023,9 +1023,13 @@ class PBIPGenerator:
 
         valid_measure_names = set()
         for m in all_measures:
-            m_name = m["name"]
-            dax = m.get("dax", m.get("expression", "BLANK()"))
-            fmt = m.get("format", m.get("formatString", "#,0"))
+            m_name = self._strip_control_chars(m["name"])
+            dax = self._strip_control_chars(
+                m.get("dax", m.get("expression", "BLANK()"))
+            )
+            fmt = self._strip_control_chars(
+                m.get("format", m.get("formatString", "#,0"))
+            )
 
             # --- Name conflict check: measure vs column ---
             if m_name.lower() in col_names_lower:
@@ -1101,7 +1105,10 @@ class PBIPGenerator:
         lines.append("\tannotation PBI_ResultType = Table")
         lines.append("")
 
-        self._write_text(tables_dir / f"{tbl_name}.tmdl", "\n".join(lines) + "\n")
+        # Final sanitization: strip any control chars that slipped through
+        # (AI-generated DAX can contain invisible 0x1F etc.)
+        tmdl_text = self._strip_control_chars("\n".join(lines) + "\n")
+        self._write_text(tables_dir / f"{tbl_name}.tmdl", tmdl_text)
 
         return table_names, valid_measure_names
 
@@ -1354,6 +1361,19 @@ class PBIPGenerator:
         if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', name):
             return f"'{name}'"
         return name
+
+    @staticmethod
+    def _strip_control_chars(text):
+        """Remove XML-illegal control characters (0x00-0x1F except tab/newline/CR).
+
+        Power BI Desktop serializes TMDL to XMLA internally. Any control
+        character in the file causes: 'hexadecimal value 0x1F, is an invalid
+        character'. AI-generated DAX can contain these invisibly.
+        """
+        if not isinstance(text, str):
+            return text
+        import re
+        return re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F]', '', text)
 
     def _safe_remove(self, target):
         """Remove a file or folder, handling OneDrive locks."""

@@ -63,3 +63,14 @@ Fix: use relative dates from `datetime.now()`.
 - Python venv: `~/taop-agents-env/`
 - Tests: `pytest tests/` (use the venv)
 - Output dir: `output/`
+
+## Cross-Machine Context
+
+Global memory (user prefs, infra, project list) is stored in `.claude-memory/` in this repo.
+If starting on a new machine without `~/.claude/` memory, read these files first:
+- `.claude-memory/MEMORY.md` -- user profile, project list, council architecture, environment
+- `.claude-memory/infrastructure.md` -- domains, services, ports, cron, tunnels
+
+## Owner
+
+Johan (zamoritacr). Server: ROG Strix 192.168.0.55. Domain: theartofthepossible.io.

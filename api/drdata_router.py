@@ -120,19 +120,27 @@ async def upload(file: UploadFile = File(...)):
     job_dir.mkdir(parents=True, exist_ok=True)
 
     file_path = job_dir / file.filename
-    content = await file.read()
 
-    if len(content) > 200_000_000:
-        raise HTTPException(status_code=400, detail="File too large (max 200MB)")
-
-    file_path.write_bytes(content)
+    # Stream to disk in 1MB chunks -- never load entire file into memory
+    written = 0
+    with open(file_path, "wb") as f:
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            f.write(chunk)
+            written += len(chunk)
+            if written > 500_000_000:
+                f.close()
+                file_path.unlink(missing_ok=True)
+                raise HTTPException(status_code=400, detail="File too large (max 500MB)")
 
     JOBS[job_id] = {
         "job_id": job_id,
         "filename": file.filename,
         "file_path": str(file_path),
         "file_type": ext,
-        "size_bytes": len(content),
+        "size_bytes": written,
         "status": "uploaded",
         "stage": "uploaded",
         "progress_pct": 0,
@@ -144,13 +152,14 @@ async def upload(file: UploadFile = File(...)):
         "created_at": time.time(),
     }
 
-    _log(JOBS[job_id], f"Uploaded {file.filename} ({len(content):,} bytes, .{ext})")
+    _log(JOBS[job_id], f"Uploaded {file.filename} ({written:,} bytes, .{ext})")
 
     return {
         "job_id": job_id,
         "filename": file.filename,
         "file_type": ext,
-        "size_bytes": len(content),
+        "size_bytes": written,
+        "size_mb": round(written / (1024 * 1024), 2),
         "status": "uploaded",
     }
 

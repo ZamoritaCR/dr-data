@@ -324,13 +324,13 @@ def generate_synthetic_dataframe(
         role = col.get("role", "dimension")
 
         if _is_date_column(name, datatype):
-            # Date column: last 2 years relative to now
-            end = datetime.now()
+            # Date column: last 2 years relative to now (date-only, no time)
+            end = datetime.now().date()
             start = end.replace(year=end.year - 2)
             delta = (end - start).days
             dates = [start + timedelta(days=int(rng.integers(0, delta)))
                      for _ in range(num_rows)]
-            data[name] = dates
+            data[name] = pd.to_datetime(dates)
 
         elif _is_id_column(name):
             # ID column: sequential

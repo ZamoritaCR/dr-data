@@ -38,24 +38,30 @@ Both call `core/synthetic_data.generate_from_tableau_spec(tableau_spec)`.
 
 ## Active Bugs (as of 2026-04-05)
 
-### BUG 1 -- CRITICAL: synthetic_data.py filter format mismatch
-`core/synthetic_data.py:196-211` -- expects filter strings but enhanced parser now outputs filter dicts.
-The `isinstance(filt, str)` check silently skips all dict filters, dropping filter-only dimensions from synthetic data.
-Fix: add `elif isinstance(filt, dict):` branch using `filt.get("field")` or `filt.get("column_ref")`.
+### BUG 1 -- FIXED: synthetic_data.py filter format mismatch
+Fixed. Dict filters from enhanced parser are now handled with `isinstance(filt, dict)` branch.
 
-### BUG 2 -- Hardcoded date range in synthetic data
-`core/synthetic_data.py:~275` -- dates hardcoded to 2023-2025, stale for 2026.
-Fix: use relative dates from `datetime.now()`.
+### BUG 2 -- FIXED: Hardcoded date range in synthetic data
+Fixed. Uses `datetime.now()` with 2-year relative window.
 
-### BUG 3 -- Silent synthetic data errors
-`app/dr_data_agent.py:1334-1337, 2716-2717` -- errors printed to console, never shown to user.
+### BUG 3 -- FIXED: Silent synthetic data errors
+Fixed. Errors now reported to user via `_report_progress()`.
 
-### BUG 4 -- Dead code
+### BUG 4 -- Dead code (NOT fixed -- low priority)
 `core/synthetic_data_generator.py` -- entire Faker-based generator is never imported or called.
+Kept for potential future use; not causing any runtime issues.
 
 ## Recent Changes
 
-- **2026-04-05:** Parser unification (commit `86cd299`). Merged two competing TWB parsers into `core/enhanced_tableau_parser.py`. `file_handler.py` now delegates all TWB/TWBX parsing there. 275 tests passing.
+- **2026-04-05:** Full pipeline audit and fix (308 tests passing). Key fixes:
+  - Shelf field prefix parsing: all Tableau prefixes (tqr:, yr:, mn:, qr:, tmn:, etc.) now resolved
+  - Generated fields (Latitude/Longitude (generated)) filtered from synthetic schema
+  - Action/Tooltip filters excluded from parser output (were leaking as fake columns)
+  - Filter field names cleaned of shelf encoding (none:Region:nk -> Region)
+  - Agent prompt builder: fixed wrong keys (columns->cols_fields, worksheets->worksheets_used)
+  - Added multipolygon/polygon chart type mappings to visual_intent.py and agent
+  - New comprehensive E2E test suite: tests/test_e2e_pipeline.py (33 tests)
+- **2026-04-05:** Parser unification (commit `86cd299`). Merged two competing TWB parsers into `core/enhanced_tableau_parser.py`. `file_handler.py` now delegates all TWB/TWBX parsing there.
 
 ## Conventions
 

@@ -57,7 +57,13 @@ def _extract_shelf_fields(text):
 
 
 def _extract_ws_filters(ws_element):
-    """Extract worksheet-level filters from <filter> elements."""
+    """Extract worksheet-level filters from <filter> elements.
+
+    Skips Tableau-internal filters (Action filters, Tooltip filters)
+    that do not correspond to real data columns.
+    """
+    # Prefixes that indicate Tableau-internal (non-data) filters
+    _INTERNAL_FILTER_PREFIXES = ("Action (", "Tooltip (", "Multiple Values")
     filters = []
     for filt in ws_element.iter("filter"):
         col = filt.get("column", "")
@@ -67,6 +73,18 @@ def _extract_ws_filters(ws_element):
             m = re.search(r'\[([^\]]+)\]$', col)
             if m:
                 field = m.group(1)
+            # Strip Tableau shelf encoding from field name.
+            # e.g. "none:Region:nk" -> "Region", "sum:Sales:qk" -> "Sales"
+            if ":" in field:
+                parts = field.split(":")
+                if len(parts) >= 2:
+                    # Middle part is the actual field name
+                    candidate = parts[1].strip().strip('"').strip("'")
+                    if candidate:
+                        field = candidate
+            # Skip Tableau-internal action/tooltip filters
+            if any(field.startswith(p) for p in _INTERNAL_FILTER_PREFIXES):
+                continue
             filters.append({
                 "field": field,
                 "column_ref": col,

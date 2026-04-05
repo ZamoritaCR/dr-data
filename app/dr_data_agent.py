@@ -1335,6 +1335,10 @@ class DrDataAgent:
                     print(f"[SYNTH] Failed to generate synthetic data: {synth_err}")
                     import traceback
                     traceback.print_exc()
+                    self._report_progress(
+                        f"Synthetic data generation failed: {synth_err}. "
+                        "Upload a CSV or Excel file with your data to proceed."
+                    )
 
             if self.dataframe is None:
                 return {
@@ -2715,6 +2719,8 @@ Output ONLY valid JSON. No markdown. No commentary."""
                 return
             except Exception as e:
                 print(f"[RECOVER] Synthetic failed: {e}")
+                import traceback
+                traceback.print_exc()
 
     def _tool_build_powerbi(self, inputs):
         """Build a Power BI project using the full AI pipeline and ZIP it."""
@@ -3148,6 +3154,12 @@ Output ONLY valid JSON. No markdown. No commentary."""
         "waterfall": "waterfallChart",
         "funnel": "funnelChart",
         "donut": "donutChart",
+        "multipolygon": "filledMap",
+        "polygon": "filledMap",
+        "circle": "scatterChart",
+        "shape": "scatterChart",
+        "square": "treemap",
+        "automatic": "clusteredBarChart",
     }
 
     # Tableau formula -> DAX mapping reference (included in prompt)
@@ -3202,8 +3214,8 @@ Output ONLY valid JSON. No markdown. No commentary."""
                     chart_type.lower().replace(" ", "-"),
                     "clusteredBarChart",
                 )
-                rows = ws.get("rows", [])
-                cols = ws.get("columns", [])
+                rows = ws.get("rows_fields", ws.get("rows", []))
+                cols = ws.get("cols_fields", ws.get("cols", []))
                 marks = ws.get("marks", ws.get("mark_type", ""))
                 filters = ws.get("filters", [])
 
@@ -3227,7 +3239,7 @@ Output ONLY valid JSON. No markdown. No commentary."""
             db_lines = []
             for db in dashboards:
                 name = db.get("name", "Dashboard")
-                sheets = db.get("worksheets", db.get("sheets", []))
+                sheets = db.get("worksheets_used", db.get("worksheets", db.get("sheets", [])))
                 size = db.get("size", {})
                 w = size.get("width", size.get("maxwidth", ""))
                 h = size.get("height", size.get("maxheight", ""))

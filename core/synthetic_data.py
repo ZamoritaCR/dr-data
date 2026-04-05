@@ -124,6 +124,25 @@ def _is_id_column(col_name: str) -> bool:
     return any(h in name_lower for h in id_hints)
 
 
+def _clean_field_name(name: str) -> str:
+    """Strip surrounding quotes and whitespace from a Tableau field name.
+
+    Tableau shelf expressions can embed quoted field names like:
+        [none:"Region":nk]  ->  after split on ':', parts[1] is '"Region"'
+    This strips those outer quotes so the column name is clean.
+    Returns empty string for names that are only punctuation/whitespace.
+    """
+    name = name.strip()
+    if name.startswith('"') and name.endswith('"') and len(name) >= 2:
+        name = name[1:-1].strip()
+    if name.startswith("'") and name.endswith("'") and len(name) >= 2:
+        name = name[1:-1].strip()
+    # Reject names that are only punctuation or whitespace
+    if not name or not re.search(r'[a-zA-Z0-9]', name):
+        return ""
+    return name
+
+
 def extract_schema_from_tableau(tableau_spec: dict) -> List[dict]:
     """Extract column schema from a Tableau spec.
 
@@ -146,7 +165,9 @@ def extract_schema_from_tableau(tableau_spec: dict) -> List[dict]:
             if not raw_name or raw_name == "Number of Records":
                 continue
 
-            name = raw_name.strip()
+            name = _clean_field_name(raw_name)
+            if not name:
+                continue
             if name not in columns:
                 columns[name] = {
                     "name": name,
@@ -157,7 +178,17 @@ def extract_schema_from_tableau(tableau_spec: dict) -> List[dict]:
 
     # 2. Field references from worksheet shelves
     field_ref_pattern = re.compile(r'\[([^\]]+)\]')
-    role_hint_pattern = re.compile(r'(sum|avg|count|min|max|countd)\:', re.IGNORECASE)
+    # Aggregation prefixes that indicate a measure
+    _agg_prefixes = {"sum", "avg", "count", "min", "max", "countd", "median"}
+    # All known Tableau shelf prefixes (aggregation + dimension qualifiers).
+    # Format: prefix:FieldName:suffix  (e.g. sum:Sales:qk, none:Region:nk,
+    # tqr:Date:qk, yr:Date:ok, mn:Date:ok, qr:Date:ok, tmn:Date:ok, etc.)
+    _all_shelf_prefix_pattern = re.compile(
+        r'^(sum|avg|count|min|max|countd|median|attr|'
+        r'none|usr|yr|mn|qr|tqr|tmn|twk|day|'
+        r'mdy|wk|md|qy|my)\:(.+?)(?:\:[a-z]+)?$',
+        re.IGNORECASE,
+    )
     agg_pattern = re.compile(r'(SUM|AVG|COUNT|MIN|MAX|COUNTD|ATTR)\s*\(', re.IGNORECASE)
 
     for ws in tableau_spec.get("worksheets", []):
@@ -170,20 +201,21 @@ def extract_schema_from_tableau(tableau_spec: dict) -> List[dict]:
                 # Skip datasource IDs and internal refs
                 if ref.startswith("federated.") or ref.startswith(":"):
                     continue
-                # Detect role from context
+                # Parse Tableau shelf prefix:FieldName:suffix pattern
                 role = "dimension"
-                if role_hint_pattern.search(ref):
-                    role = "measure"
-                    # Extract clean name from "sum:Sales:qk" pattern
-                    parts = ref.split(":")
-                    if len(parts) >= 2:
-                        ref = parts[1]
-                elif "none:" in ref:
+                m = _all_shelf_prefix_pattern.match(ref)
+                if m:
+                    prefix = m.group(1).lower()
+                    ref = m.group(2)
+                    if prefix in _agg_prefixes:
+                        role = "measure"
+                elif ":" in ref:
+                    # Unknown prefix:value:suffix -- extract middle part
                     parts = ref.split(":")
                     if len(parts) >= 2:
                         ref = parts[1]
 
-                name = ref.strip()
+                name = _clean_field_name(ref)
                 if name and name not in columns:
                     columns[name] = {
                         "name": name,
@@ -192,16 +224,28 @@ def extract_schema_from_tableau(tableau_spec: dict) -> List[dict]:
                         "source": "shelf_reference",
                     }
 
-        # Filters
+        # Filters (handles both legacy string filters and dict filters
+        # from the enhanced parser)
         for filt in ws.get("filters", []):
-            if isinstance(filt, str):
+            if isinstance(filt, dict):
+                name = _clean_field_name(
+                    filt.get("field") or filt.get("column_ref") or ""
+                )
+                if name and name not in columns:
+                    columns[name] = {
+                        "name": name,
+                        "datatype": "string",
+                        "role": "dimension",
+                        "source": "filter_reference",
+                    }
+            elif isinstance(filt, str):
                 refs = field_ref_pattern.findall(filt)
                 for ref in refs:
                     if ref.startswith("federated.") or ref.startswith(":"):
                         continue
                     parts = ref.split(":")
-                    name = parts[1] if len(parts) >= 2 else ref
-                    name = name.strip()
+                    raw = parts[1] if len(parts) >= 2 else ref
+                    name = _clean_field_name(raw)
                     if name and name not in columns:
                         columns[name] = {
                             "name": name,
@@ -217,7 +261,7 @@ def extract_schema_from_tableau(tableau_spec: dict) -> List[dict]:
         for ref in refs:
             if ref.startswith("Parameters.") or ref.startswith(":"):
                 continue
-            name = ref.strip()
+            name = _clean_field_name(ref)
             if name and name not in columns:
                 # If used in an aggregation, it's likely a measure
                 role = "measure" if agg_pattern.search(formula) else "dimension"
@@ -231,15 +275,24 @@ def extract_schema_from_tableau(tableau_spec: dict) -> List[dict]:
     # Filter out Tableau internal / noise columns
     _internal_prefixes = (
         "Action (", "Tooltip (", "__tableau", "usr:", "pcto:", "cnt:",
-        "twk:", "tmn:", "yr:", "mn:", "qr:", "Calculation_",
+        "twk:", "tmn:", "yr:", "mn:", "qr:", "tqr:", "Calculation_",
         "federated.", "Multiple Values",
+    )
+    _internal_suffixes = (
+        "(generated)",  # Tableau auto-generated fields like Latitude/Longitude
+        "(copy)",
+        "(bin)",
     )
     cleaned = []
     for col in columns.values():
         name = col["name"]
         if any(name.startswith(p) for p in _internal_prefixes):
             continue
+        if any(name.endswith(s) for s in _internal_suffixes):
+            continue
         if len(name) > 60:  # Overly long names are usually internal
+            continue
+        if len(name) < 2 or not re.search(r'[a-zA-Z0-9]', name):
             continue
         cleaned.append(col)
 
@@ -271,9 +324,9 @@ def generate_synthetic_dataframe(
         role = col.get("role", "dimension")
 
         if _is_date_column(name, datatype):
-            # Date column: last 2 years
-            start = datetime(2023, 1, 1)
-            end = datetime(2025, 3, 31)
+            # Date column: last 2 years relative to now
+            end = datetime.now()
+            start = end.replace(year=end.year - 2)
             delta = (end - start).days
             dates = [start + timedelta(days=int(rng.integers(0, delta)))
                      for _ in range(num_rows)]

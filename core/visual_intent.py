@@ -70,6 +70,8 @@ TABLEAU_TO_PBI_MAP: Dict[str, dict] = {
               "note": "Shape marks become scatter plot in PBI."},
     "square": {"pbi_type": "treemap", "fidelity": "approximate",
                "note": "Square marks mapped to treemap."},
+    "multipolygon": {"pbi_type": "filledMap", "fidelity": "exact"},
+    "polygon": {"pbi_type": "filledMap", "fidelity": "exact"},
     "automatic": {"pbi_type": "clusteredBarChart", "fidelity": "inferred",
                   "note": "Chart type was 'Automatic' in Tableau -- defaulted to bar chart."},
 }

@@ -890,6 +890,12 @@ async def download(job_id: str):
     )
 
 
+# Alias: /export/{job_id} -> same as /download/{job_id}
+@router.get("/export/{job_id}")
+async def export_download(job_id: str):
+    return await download(job_id)
+
+
 # ============================================================
 # POST /drdata/chat
 # ============================================================

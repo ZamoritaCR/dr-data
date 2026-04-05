@@ -1120,6 +1120,16 @@ class PBIPGenerator:
             except Exception:
                 filename = str(data_file_path).split("/")[-1].split("\\")[-1]
 
+            # Guard: .twbx/.twb files are ZIP archives, not valid data sources
+            # for Power BI M expressions. If one slips through, rewrite the
+            # filename to reference a CSV instead (the data file should have
+            # been exported to CSV upstream).
+            if filename.lower().endswith((".twbx", ".twb")):
+                print(f"    [WARN] data_file_path points to Tableau archive: {filename}")
+                filename = filename.rsplit(".", 1)[0] + "_data.csv"
+                data_file_path = str(Path(data_file_path).parent / filename)
+                print(f"    [FIX]  Rewritten to: {filename}")
+
             # Build a valid Windows path for PBI Desktop.
             # If we're already on Windows with a real path, use it.
             # Otherwise use a placeholder the user can update.

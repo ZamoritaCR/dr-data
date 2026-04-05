@@ -701,11 +701,29 @@ class DrDataAgent:
         if session.alteryx_spec:
             self.tableau_spec = session.alteryx_spec
 
-        # Get primary data file path and sheet name
+        # Get primary data file path and sheet name.
+        # IMPORTANT: if the source is a .twbx/.twb, the path points to the
+        # Tableau archive, which is NOT a valid data file for Power BI.
+        # In that case, export the DataFrame to CSV so the M expression
+        # references a real CSV file that Power BI Desktop can load.
         for fname, info in session.files.items():
             if info.get("df") is not None:
-                self.data_file_path = info["path"]
-                self.data_path = info["path"]
+                raw_path = info["path"]
+                raw_ext = raw_path.rsplit(".", 1)[-1].lower() if "." in raw_path else ""
+                if raw_ext in ("twbx", "twb"):
+                    # Tableau archive -- save embedded data to CSV
+                    csv_dir = str(PROJECT_ROOT / "output")
+                    os.makedirs(csv_dir, exist_ok=True)
+                    csv_name = os.path.splitext(os.path.basename(raw_path))[0]
+                    csv_name = csv_name.replace(" ", "_") + "_data.csv"
+                    csv_path = os.path.join(csv_dir, csv_name)
+                    info["df"].to_csv(csv_path, index=False)
+                    self.data_file_path = csv_path
+                    self.data_path = csv_path
+                    print(f"[SESSION] Exported .twbx embedded data to {csv_path}")
+                else:
+                    self.data_file_path = raw_path
+                    self.data_path = raw_path
                 self.sheet_name = info.get("sheet_name") or getattr(
                     session, "primary_sheet_name", None
                 )
@@ -2736,6 +2754,22 @@ Output ONLY valid JSON. No markdown. No commentary."""
 
         row_count = len(self.dataframe)
         col_count = len(self.dataframe.columns)
+
+        # Safety: if data_file_path points to a Tableau archive (.twbx/.twb),
+        # Power BI cannot load it as CSV/Excel. Export the DataFrame to CSV.
+        if self.data_file_path:
+            _ext = self.data_file_path.rsplit(".", 1)[-1].lower() if "." in self.data_file_path else ""
+            if _ext in ("twbx", "twb"):
+                csv_dir = str(PROJECT_ROOT / "output")
+                os.makedirs(csv_dir, exist_ok=True)
+                _base = os.path.splitext(os.path.basename(self.data_file_path))[0]
+                _base = _base.replace(" ", "_") + "_data.csv"
+                _csv_path = os.path.join(csv_dir, _base)
+                self.dataframe.to_csv(_csv_path, index=False)
+                self.data_file_path = _csv_path
+                self.data_path = _csv_path
+                print(f"[PBI] Exported DataFrame to CSV (was .twbx): {_csv_path}")
+
         self._report_progress(
             f"Profiling data: {row_count:,} rows x {col_count} columns -- "
             f"detecting column types, distributions, and relationships"

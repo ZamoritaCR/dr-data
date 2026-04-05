@@ -51,8 +51,22 @@ Fixed. Errors now reported to user via `_report_progress()`.
 `core/synthetic_data_generator.py` -- entire Faker-based generator is never imported or called.
 Kept for potential future use; not causing any runtime issues.
 
+### BUG 5 -- FIXED: .twbx data_file_path passed to PBIP M expression
+When a .twbx with embedded data (xlsx/csv inside the archive) was uploaded,
+`data_file_path` was set to the .twbx path. The PBIP generator then wrote
+`File.Contents("C:\PBI_Data\DigitalAds-Sales-Data.twbx")` in the M expression.
+Power BI tried to load a ZIP archive as CSV, causing "column 'Date' not found".
+
+Fix (3 layers of defense):
+1. `set_session()`: detects .twbx path, exports embedded DataFrame to CSV
+2. `_tool_build_powerbi()`: safety check re-exports if data_file_path is .twbx
+3. `PBIPGenerator._build_m_expression()`: rewrites .twbx filename to .csv as last resort
+
 ## Recent Changes
 
+- **2026-04-05:** Fix .twbx data_file_path causing "column not found" in Power BI.
+  Root cause: M expression referenced .twbx archive instead of CSV data file.
+  Three-layer fix in set_session, _tool_build_powerbi, and PBIPGenerator.
 - **2026-04-05:** Full pipeline audit and fix (308 tests passing). Key fixes:
   - Shelf field prefix parsing: all Tableau prefixes (tqr:, yr:, mn:, qr:, tmn:, etc.) now resolved
   - Generated fields (Latitude/Longitude (generated)) filtered from synthetic schema

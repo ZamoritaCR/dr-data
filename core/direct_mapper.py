@@ -11,8 +11,10 @@ PBIPGenerator.generate() expects, so it plugs in as a drop-in
 replacement for the OpenAI engine output.
 """
 
-import re
 import json
+import logging
+import os
+import re
 
 from core.design_translator import (
     translate_chart_type,
@@ -486,6 +488,134 @@ def _classify_fields_for_chart(ws, chart_type, profile_col_names, col_types):
 
 
 # ------------------------------------------------------------------ #
+#  AI formula translation                                              #
+# ------------------------------------------------------------------ #
+
+_logger = logging.getLogger(__name__)
+
+
+def _ai_translate_formulas(measures, table_name, columns):
+    """Translate complex Tableau formulas to DAX using Claude.
+
+    Only called for measures where needs_ai=True and original_formula is set.
+    Sends a single batch prompt for all formulas to minimize API calls.
+    Falls back to BLANK() if translation fails -- safe for TMDL output.
+    """
+    try:
+        import anthropic
+    except ImportError:
+        _logger.warning("[AI-TRANSLATE] anthropic not installed -- skipping")
+        return measures
+
+    api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        _logger.warning("[AI-TRANSLATE] ANTHROPIC_API_KEY not set -- skipping")
+        return measures
+
+    needs_translation = [
+        m for m in measures
+        if m.get("needs_ai") and m.get("original_formula")
+    ]
+    if not needs_translation:
+        return measures
+
+    formula_list = "\n".join(
+        f"- {m['name']}: {m['original_formula']}"
+        for m in needs_translation
+    )
+    column_list = ", ".join(sorted(columns)[:50])
+
+    prompt = (
+        f"You are a Tableau-to-DAX formula translator. Target table: '{table_name}'.\n"
+        f"Available columns: {column_list}\n\n"
+        "RULES:\n"
+        "- Output ONLY valid DAX syntax. No Tableau syntax.\n"
+        "- DAX IF: IF(condition, true_value, false_value) -- no THEN, no END\n"
+        "- DAX SWITCH: SWITCH(expression, value1, result1, ..., default)\n"
+        "- DATEDIFF: DATEDIFF(start, end, DAY) -- uppercase unit\n"
+        "- LOD FIXED: CALCULATE(SUM('T'[F]), ALLEXCEPT('T', 'T'[Dim]))\n"
+        "- Column refs: 'TableName'[ColumnName] format\n"
+        "- If untranslatable, output BLANK()\n\n"
+        f"Translate each Tableau formula to DAX:\n{formula_list}\n\n"
+        'Respond as JSON array: [{"name": "measure_name", "dax": "DAX_EXPRESSION"}]\n'
+        "Only the JSON array, nothing else."
+    )
+
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=4096,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = response.content[0].text.strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+        translations = json.loads(text)
+
+        translation_map = {t["name"]: t["dax"] for t in translations if t.get("dax")}
+        translated_count = 0
+        for m in measures:
+            if m["name"] in translation_map and translation_map[m["name"]] != "BLANK()":
+                m["dax"] = translation_map[m["name"]]
+                m["needs_ai"] = False
+                m["translation_method"] = "claude_sonnet"
+                translated_count += 1
+
+        _logger.info("[AI-TRANSLATE] Translated %d/%d complex formulas", translated_count, len(needs_translation))
+        print(f"    [AI-TRANSLATE] {translated_count}/{len(needs_translation)} complex formulas translated by Claude")
+
+    except Exception as e:
+        _logger.warning("[AI-TRANSLATE] Failed: %s", e)
+        print(f"    [AI-TRANSLATE] Failed: {e}")
+
+    return measures
+
+
+# ------------------------------------------------------------------ #
+#  Chart type inference for "automatic" marks                          #
+# ------------------------------------------------------------------ #
+
+def _infer_chart_type(ws_info):
+    """Infer PBI chart type from Tableau shelf structure when mark is 'automatic'.
+
+    Uses field roles and date detection to pick the most appropriate visual.
+    """
+    rows = ws_info.get("rows_fields", []) or []
+    cols = ws_info.get("cols_fields", []) or []
+    all_fields = rows + cols
+
+    has_date = any(
+        any(k in f.lower() for k in ("date", "year", "month", "quarter", "week", "day"))
+        for f in all_fields
+    )
+
+    dims = ws_info.get("dimensions", []) or []
+    meas = ws_info.get("measures", []) or []
+
+    # Also check shelf expressions for aggregated refs
+    agg_in_shelves = any(
+        any(a in f.lower() for a in ("sum(", "avg(", "count(", "min(", "max("))
+        for f in all_fields
+    )
+    if agg_in_shelves and not meas:
+        meas = [f for f in all_fields if any(a in f.lower() for a in ("sum(", "avg(", "count("))]
+
+    if has_date and (meas or agg_in_shelves):
+        return "lineChart"
+    if len(meas) >= 2 and len(dims) == 0 and len(all_fields) <= 2:
+        return "card"
+    if len(meas) >= 2 and len(dims) >= 1:
+        return "scatterChart"
+    if dims and not meas and not agg_in_shelves:
+        return "tableEx"
+    if (dims or all_fields) and (meas or agg_in_shelves):
+        return "clusteredColumnChart"
+
+    return "clusteredColumnChart"
+
+
+# ------------------------------------------------------------------ #
 #  Measure generation                                                  #
 # ------------------------------------------------------------------ #
 
@@ -695,7 +825,11 @@ def _build_page_from_dashboard(dashboard, worksheets_by_name, profile_col_names,
 
         added_ws_names.add(ws_name)
 
-        chart_type = translate_chart_type(ws.get("chart_type", "automatic"))
+        raw_mark = ws.get("chart_type", ws.get("mark_type", "automatic"))
+        chart_type = translate_chart_type(raw_mark)
+        # If mark is "automatic" or unknown, infer from shelf structure
+        if not raw_mark or raw_mark.lower() in ("automatic", ""):
+            chart_type = _infer_chart_type(ws)
         data_roles = _classify_fields_for_chart(
             ws, chart_type, profile_col_names, col_types
         )
@@ -761,7 +895,10 @@ def _build_page_for_orphan_worksheets(worksheets, profile_col_names,
         row = idx // cols
         col = idx % cols
 
-        chart_type = translate_chart_type(ws.get("chart_type", "automatic"))
+        raw_mark = ws.get("chart_type", ws.get("mark_type", "automatic"))
+        chart_type = translate_chart_type(raw_mark)
+        if not raw_mark or raw_mark.lower() in ("automatic", ""):
+            chart_type = _infer_chart_type(ws)
         data_roles = _classify_fields_for_chart(
             ws, chart_type, profile_col_names, col_types
         )
@@ -826,6 +963,12 @@ def build_pbip_config_from_tableau(tableau_spec, data_profile, table_name="Data"
     measures = _build_measures_from_spec(
         tableau_spec, table_name, profile_col_names
     )
+
+    # -- AI translate complex formulas (needs_ai=True) --
+    blank_count = sum(1 for m in measures if m.get("needs_ai"))
+    if blank_count > 0:
+        print(f"    [DIRECT-MAPPER] {blank_count} complex formulas need AI translation...")
+        measures = _ai_translate_formulas(measures, table_name, list(profile_col_names))
 
     # -- Build pages from dashboards --
     sections = []

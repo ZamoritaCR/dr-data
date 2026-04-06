@@ -620,6 +620,27 @@ def parse_twb(path):
 
             spec["dashboards"].append(db_info)
 
+        # --- Modern Tableau object-graph relationships (v2018.3+) ---
+        for rel in root.iter("relationship"):
+            left_table = rel.get("left-table", "")
+            right_table = rel.get("right-table", "")
+            join_type = rel.get("join", "inner")
+            clause = rel.find("clause") or rel.find(".//clause")
+            if clause is not None:
+                left_col = _safe_strip_brackets(clause.get("left-field", ""))
+                right_col = _safe_strip_brackets(clause.get("right-field", ""))
+                if left_col and right_col:
+                    spec["relationships"].append({
+                        "left_table": left_table,
+                        "right_table": right_table,
+                        "left_column": left_col,
+                        "right_column": right_col,
+                        "left_ref": f"{left_table}.{left_col}",
+                        "right_ref": f"{right_table}.{right_col}",
+                        "join_type": join_type,
+                        "source": "object-graph",
+                    })
+
     except Exception as e:
         spec["parse_error"] = str(e)
     finally:

@@ -57,8 +57,8 @@ class TestTranslateColors:
         result = translate_colors(design)
         assert result["foreground"] == "#112233"
 
-    def test_datasource_color_maps_fallback(self):
-        """When no palette but datasource color maps exist, use those."""
+    def test_datasource_color_maps_skipped(self):
+        """Datasource color maps are skipped -- use professional default instead."""
         design = {
             "color_palettes": [],
             "global_fonts": {},
@@ -71,7 +71,9 @@ class TestTranslateColors:
             }],
         }
         result = translate_colors(design)
-        assert result["dataColors"] == ["#AA0000", "#00BB00"]
+        # Datasource color maps are skipped; default palette used
+        from core.design_translator import _DEFAULT_DATA_COLORS
+        assert result["dataColors"] == list(_DEFAULT_DATA_COLORS)
 
     def test_colors_without_hash_prefix(self):
         design = {

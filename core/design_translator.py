@@ -88,18 +88,9 @@ def translate_colors(tableau_design):
                         data_colors.append(hex_color)
                 break  # use the first regular palette found
 
-    # If no colors found from palettes, try datasource color maps
-    if not data_colors:
-        ds_maps = tableau_design.get("datasource_color_maps", [])
-        for cm in ds_maps:
-            for mapping in cm.get("mappings", []):
-                color = mapping.get("color", "")
-                if color and isinstance(color, str):
-                    hex_color = color.strip()
-                    if not hex_color.startswith("#"):
-                        hex_color = "#" + hex_color
-                    if hex_color not in data_colors:
-                        data_colors.append(hex_color)
+    # Datasource color maps contain per-value colors from Tableau but they
+    # are often muted pastels that look washed out in PBI. Skip them and
+    # fall through to the professional default palette instead.
 
     if not data_colors:
         data_colors = list(_DEFAULT_DATA_COLORS)

@@ -16,6 +16,15 @@ Stage 5  openai_engine.generate_pbip_config()        GPT-4 generates report_layo
 Stage 6  pbip_generator.generate()                   Write PBIP project files
 ```
 
+When a Tableau spec has dashboards, the direct mapper path is used:
+```
+Stage 1  enhanced_tableau_parser.parse_twb()        Parse .twb/.twbx XML -> tableau_spec dict
+Stage 2  direct_mapper.build_pbip_config_from_tableau()  Deterministic visual/layout/field mapping
+Stage 3  pbip_generator.generate()                   Write PBIP project files
+```
+AI is only called for complex calculated field -> DAX translation.
+Falls back to full AI pipeline on error or when no dashboards exist.
+
 When no data is embedded in the Tableau file, synthetic data is generated at:
 - `dr_data_agent.py:1300-1337` (export path)
 - `dr_data_agent.py:2701-2717` (recovery path)
@@ -26,6 +35,7 @@ Both call `core/synthetic_data.generate_from_tableau_spec(tableau_spec)`.
 | File | Purpose |
 |------|---------|
 | `core/enhanced_tableau_parser.py` | Single authoritative TWB/TWBX parser |
+| `core/direct_mapper.py` | Direct Tableau-to-PBIP mapper (bypasses AI for visuals) |
 | `core/synthetic_data.py` | Synthetic data generation from tableau_spec |
 | `core/visual_intent.py` | Visual intent model (chart type mapping, page layout) |
 | `core/field_resolver.py` | Fuzzy field name matching (tableau fields -> data columns) |
@@ -64,6 +74,19 @@ Fix (3 layers of defense):
 
 ## Recent Changes
 
+- **2026-04-06:** Critical direct mapper overhaul (507 tests passing). Tested with 4 real TWBX files.
+  Root causes: (1) datasource names leaked as visual fields, (2) no worksheet dedup per page,
+  (3) dangerous substring/index fallback matching in zone-to-worksheet mapping.
+  Fixes in core/direct_mapper.py:
+  - Added `_is_datasource_name()` to filter datasource/table names from shelf fields
+  - Added `_TABLEAU_META_FIELDS` set to filter "Multiple Values", "Measure Names", etc.
+  - Added `_DOUBLE_PREFIX_RE` for pcto:sum:Field:suffix patterns
+  - Fixed `_SHELF_PREFIX_RE` to handle 4-part patterns (prefix:field:suffix:N)
+  - Rewrote `_build_page_from_dashboard()`: uses worksheets_used as authoritative source,
+    removed dangerous substring/index matching, added per-page deduplication
+  Fixes in core/enhanced_tableau_parser.py:
+  - `worksheets_used` now cross-references zone names against actual worksheet names,
+    filtering out layout containers, filter zones, and non-worksheet zones
 - **2026-04-05:** Fix .twbx data_file_path causing "column not found" in Power BI.
   Root cause: M expression referenced .twbx archive instead of CSV data file.
   Three-layer fix in set_session, _tool_build_powerbi, and PBIPGenerator.

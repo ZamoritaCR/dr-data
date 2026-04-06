@@ -38,3 +38,4 @@ pydot>=1.4.2
 # Visualization enhancements
 altair>=5.2.0
 seaborn>=0.13.0
+defusedxml>=0.7.0

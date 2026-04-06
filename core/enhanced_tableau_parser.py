@@ -7,7 +7,7 @@ filters; dashboards with deduplicated zone spatial layout; calculated
 fields; parameters; join relationships; hyper file detection.
 """
 import re
-import xml.etree.ElementTree as ET
+import defusedxml.ElementTree as ET
 import zipfile
 import tempfile
 import shutil
@@ -529,6 +529,11 @@ def parse_twb(path):
             spec["worksheets"].append(ws_info)
 
         # --- Dashboards (with zone deduplication) ---
+        # Build a set of known worksheet names for cross-referencing
+        known_ws_names = {ws.get("name", "") for ws in spec["worksheets"]}
+        # Also build case-insensitive lookup
+        known_ws_lower = {n.lower().strip(): n for n in known_ws_names if n}
+
         for db in root.iter("dashboard"):
             db_name = db.get("name", "")
             db_info = {
@@ -567,6 +572,8 @@ def parse_twb(path):
 
             # Track seen zone names for deduplication
             seen_zones = set()
+            # Track seen worksheet names for worksheets_used dedup
+            seen_ws_used = set()
 
             for zone in db.iter("zone"):
                 zone_name = zone.get("name", "")
@@ -597,8 +604,19 @@ def parse_twb(path):
                 if zone_key not in seen_zones:
                     seen_zones.add(zone_key)
                     db_info["zones"].append(zone_data)
-                    if zone_name != db_name:
-                        db_info["worksheets_used"].append(zone_name)
+
+                    # Only add to worksheets_used if the zone name matches
+                    # an actual worksheet (not layout containers, filters, etc.)
+                    # Also skip the dashboard's own name and deduplicate.
+                    if zone_name != db_name and zone_name not in seen_ws_used:
+                        # Check if this zone name is a real worksheet
+                        ws_match = zone_name in known_ws_names
+                        if not ws_match:
+                            # Try case-insensitive match
+                            ws_match = zone_name.lower().strip() in known_ws_lower
+                        if ws_match:
+                            seen_ws_used.add(zone_name)
+                            db_info["worksheets_used"].append(zone_name)
 
             spec["dashboards"].append(db_info)
 

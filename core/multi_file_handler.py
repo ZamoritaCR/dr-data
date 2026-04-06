@@ -17,7 +17,7 @@ import sys
 import pandas as pd
 import zipfile
 import tempfile
-import xml.etree.ElementTree as ET
+import defusedxml.ElementTree as ET
 
 sys.path.insert(0, str(os.path.join(os.path.dirname(__file__), "..")))
 from app.file_handler import load_excel_smart

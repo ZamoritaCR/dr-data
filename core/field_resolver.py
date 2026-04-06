@@ -250,7 +250,7 @@ class TableauFieldResolver:
 
     def _extract_fields_xml(self, twb_path):
         """Extract fields by parsing TWB XML directly."""
-        import xml.etree.ElementTree as ET
+        import defusedxml.ElementTree as ET
         import zipfile
         import tempfile
 

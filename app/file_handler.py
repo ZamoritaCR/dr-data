@@ -8,7 +8,7 @@ import pandas as pd
 import json
 import os
 import zipfile
-import xml.etree.ElementTree as ET
+import defusedxml.ElementTree as ET
 import tempfile
 import shutil
 

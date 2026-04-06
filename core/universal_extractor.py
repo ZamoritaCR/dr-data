@@ -611,7 +611,7 @@ class UniversalExtractor:
 
         if not spec:
             # Minimal XML extraction
-            import xml.etree.ElementTree as ET
+            import defusedxml.ElementTree as ET
             import zipfile, tempfile, shutil
 
             actual = path

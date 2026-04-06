@@ -384,6 +384,140 @@ def generate_synthetic_dataframe(
     return df
 
 
+def extract_twbx_embedded_data(
+    twbx_path: str,
+    output_dir: Optional[str] = None,
+) -> Tuple[Optional[pd.DataFrame], str]:
+    """Extract real embedded data from a .twbx ZIP archive.
+
+    A .twbx is a ZIP file containing a .twb (XML) and optionally:
+    - Data/Extracts/*.hyper  — Tableau Hyper extract (most common)
+    - *.csv / *.xlsx / *.xls — raw data files
+
+    Returns:
+        (DataFrame, csv_path) if data found, (None, "") otherwise.
+    """
+    import zipfile
+
+    if not twbx_path or not os.path.exists(twbx_path):
+        return None, ""
+
+    try:
+        zf = zipfile.ZipFile(twbx_path)
+    except Exception:
+        return None, ""
+
+    names = zf.namelist()
+
+    # --- Try CSV/Excel files first (no extra deps) ---
+    for name in names:
+        lower = name.lower()
+        if lower.endswith(".csv") and not lower.endswith(".twb"):
+            try:
+                with zf.open(name) as f:
+                    df = pd.read_csv(f)
+                if df is not None and len(df) > 0:
+                    csv_path = _save_extracted(df, twbx_path, output_dir)
+                    print(f"[TWBX] Extracted CSV '{name}': {df.shape}")
+                    return df, csv_path
+            except Exception as e:
+                print(f"[TWBX] CSV read failed for '{name}': {e}")
+
+    for name in names:
+        lower = name.lower()
+        if lower.endswith(".xlsx") or lower.endswith(".xls"):
+            try:
+                import tempfile
+                tmp = tempfile.mkdtemp()
+                extracted = zf.extract(name, tmp)
+                df = pd.read_excel(extracted)
+                if df is not None and len(df) > 0:
+                    csv_path = _save_extracted(df, twbx_path, output_dir)
+                    print(f"[TWBX] Extracted Excel '{name}': {df.shape}")
+                    return df, csv_path
+            except Exception as e:
+                print(f"[TWBX] Excel read failed for '{name}': {e}")
+
+    # --- Try Hyper files (requires tableauhyperapi) ---
+    hyper_names = [n for n in names if n.lower().endswith(".hyper")]
+    if hyper_names:
+        try:
+            import tempfile
+            from tableauhyperapi import (
+                HyperProcess, Telemetry, Connection,
+            )
+            tmp = tempfile.mkdtemp()
+            hyper_path = zf.extract(hyper_names[0], tmp)
+
+            with HyperProcess(
+                telemetry=Telemetry.DO_NOT_SEND_USAGE_DATA_TO_TABLEAU
+            ) as hyper:
+                with Connection(hyper.endpoint, hyper_path) as conn:
+                    df = _hyper_to_dataframe(conn)
+                    if df is not None and len(df) > 0:
+                        csv_path = _save_extracted(df, twbx_path, output_dir)
+                        print(f"[TWBX] Extracted Hyper '{hyper_names[0]}': {df.shape}")
+                        return df, csv_path
+        except ImportError:
+            print("[TWBX] tableauhyperapi not installed; cannot read .hyper file")
+        except Exception as e:
+            print(f"[TWBX] Hyper read failed: {e}")
+
+    return None, ""
+
+
+def _hyper_to_dataframe(conn) -> Optional[pd.DataFrame]:
+    """Read the first non-empty table from a HyperProcess Connection."""
+    try:
+        schemas = conn.catalog.get_schema_names()
+        # Prefer 'Extract' schema, fall back to others
+        ordered = sorted(schemas, key=lambda s: (str(s) != "Extract", str(s)))
+        for schema in ordered:
+            tables = conn.catalog.get_table_names(schema)
+            for tbl in tables:
+                try:
+                    count = conn.execute_scalar_query(f"SELECT COUNT(*) FROM {tbl}")
+                    if not count:
+                        continue
+                    rows = []
+                    with conn.execute_query(f"SELECT * FROM {tbl}") as result:
+                        cols = [c.name.unescaped for c in result.schema.columns]
+                        for row in result:
+                            rows.append(list(row))
+                    if rows:
+                        df = pd.DataFrame(rows, columns=cols)
+                        # Convert Tableau Date objects to Python date strings
+                        for col in df.columns:
+                            sample = df[col].dropna().head(1)
+                            if not sample.empty:
+                                val = sample.iloc[0]
+                                if hasattr(val, "year") and hasattr(val, "month"):
+                                    df[col] = df[col].apply(
+                                        lambda v: f"{v.year}-{v.month:02d}-{v.day:02d}"
+                                        if v is not None else None
+                                    )
+                        return df
+                except Exception:
+                    continue
+    except Exception as e:
+        print(f"[TWBX] _hyper_to_dataframe error: {e}")
+    return None
+
+
+def _save_extracted(
+    df: pd.DataFrame, twbx_path: str, output_dir: Optional[str]
+) -> str:
+    """Save DataFrame to CSV alongside the TWBX or in output_dir."""
+    if not output_dir:
+        output_dir = os.path.dirname(twbx_path) or "."
+    os.makedirs(output_dir, exist_ok=True)
+    base = os.path.splitext(os.path.basename(twbx_path))[0]
+    base = base.replace(" ", "_") + "_extracted.csv"
+    csv_path = os.path.join(output_dir, base)
+    df.to_csv(csv_path, index=False)
+    return csv_path
+
+
 def generate_from_tableau_spec(
     tableau_spec: dict,
     num_rows: int = 2000,

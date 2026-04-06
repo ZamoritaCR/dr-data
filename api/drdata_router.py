@@ -1000,9 +1000,9 @@ async def status(job_id: str):
         "progress_pct": job["progress_pct"],
         "steps": steps,
         "log_lines": log_lines,
-        "fields_resolved": len(job.get("analysis", {}).get("columns", [])),
-        "visuals_mapped": len(job.get("proposal", {}).get("proposed_visuals", [])),
-        "formulas_translated": len(job.get("proposal", {}).get("data_model", {}).get("key_measures", [])),
+        "fields_resolved": len((job.get("analysis") or {}).get("columns", [])),
+        "visuals_mapped": len((job.get("proposal") or {}).get("proposed_visuals", [])),
+        "formulas_translated": len((job.get("proposal") or {}).get("data_model", {}).get("key_measures", [])),
         "log": log_entries,
         "partial_results": {
             k: job.get(k)

@@ -1468,49 +1468,75 @@ class DrDataAgent:
             print(f"[EXPORT] is_export=True. dataframe={self.dataframe is not None}, "
                   f"tableau_spec={bool(self.tableau_spec)}, "
                   f"session={bool(self.session)}")
-            # Guard: need data first -- but auto-generate if we have Tableau structure
+            # Guard: need data first -- try real TWBX extract, then synthetic
             if self.dataframe is None and self.tableau_spec:
-                self._report_progress(
-                    "No extractable data found in the Tableau file "
-                    "(uses .hyper format). Generating synthetic data "
-                    "from the workbook structure..."
-                )
-                try:
-                    from core.synthetic_data import generate_from_tableau_spec
-                    ws_count = len(self.tableau_spec.get("worksheets", []))
-                    cf_count = len(self.tableau_spec.get("calculated_fields", []))
-                    self._report_progress(
-                        f"Reading Tableau structure: {ws_count} worksheets, "
-                        f"{cf_count} calculated fields"
-                    )
+                output_dir = str(PROJECT_ROOT / "output")
 
-                    output_dir = str(PROJECT_ROOT / "output")
-                    df, csv_path, schema = generate_from_tableau_spec(
-                        self.tableau_spec,
-                        num_rows=2000,
-                        output_dir=output_dir,
+                # Step A: try to extract real embedded data from the .twbx archive
+                if (self.data_file_path
+                        and self.data_file_path.lower().endswith(".twbx")):
+                    self._report_progress(
+                        "Extracting embedded data from Tableau archive..."
                     )
-                    self.dataframe = df
-                    self.data_file_path = csv_path
-                    self.data_path = csv_path
-                    # Profile immediately so context builder sees it
-                    if self.data_profile is None:
-                        self.data_profile = self.analyzer.profile(df)
+                    try:
+                        from core.synthetic_data import extract_twbx_embedded_data
+                        df, csv_path = extract_twbx_embedded_data(
+                            self.data_file_path, output_dir=output_dir
+                        )
+                        if df is not None:
+                            self.dataframe = df
+                            self.data_file_path = csv_path
+                            self.data_path = csv_path
+                            if self.data_profile is None:
+                                self.data_profile = self.analyzer.profile(df)
+                            self._report_progress(
+                                f"Extracted real data from Tableau file: "
+                                f"{len(df):,} rows x {len(df.columns)} columns"
+                            )
+                    except Exception as extract_err:
+                        print(f"[TWBX] Extract failed: {extract_err}")
 
+                # Step B: fall back to synthetic if extraction didn't produce data
+                if self.dataframe is None:
                     self._report_progress(
-                        f"Synthetic data generated: {len(df)} rows x "
-                        f"{len(df.columns)} columns ({len(schema)} fields "
-                        f"inferred from Tableau structure). "
-                        f"Saved to {os.path.basename(csv_path)}"
+                        "No extractable data found in the Tableau file "
+                        "(uses .hyper format). Generating synthetic data "
+                        "from the workbook structure..."
                     )
-                except Exception as synth_err:
-                    print(f"[SYNTH] Failed to generate synthetic data: {synth_err}")
-                    import traceback
-                    traceback.print_exc()
-                    self._report_progress(
-                        f"Synthetic data generation failed: {synth_err}. "
-                        "Upload a CSV or Excel file with your data to proceed."
-                    )
+                    try:
+                        from core.synthetic_data import generate_from_tableau_spec
+                        ws_count = len(self.tableau_spec.get("worksheets", []))
+                        cf_count = len(self.tableau_spec.get("calculated_fields", []))
+                        self._report_progress(
+                            f"Reading Tableau structure: {ws_count} worksheets, "
+                            f"{cf_count} calculated fields"
+                        )
+
+                        df, csv_path, schema = generate_from_tableau_spec(
+                            self.tableau_spec,
+                            num_rows=2000,
+                            output_dir=output_dir,
+                        )
+                        self.dataframe = df
+                        self.data_file_path = csv_path
+                        self.data_path = csv_path
+                        if self.data_profile is None:
+                            self.data_profile = self.analyzer.profile(df)
+
+                        self._report_progress(
+                            f"Synthetic data generated: {len(df)} rows x "
+                            f"{len(df.columns)} columns ({len(schema)} fields "
+                            f"inferred from Tableau structure). "
+                            f"Saved to {os.path.basename(csv_path)}"
+                        )
+                    except Exception as synth_err:
+                        print(f"[SYNTH] Failed to generate synthetic data: {synth_err}")
+                        import traceback
+                        traceback.print_exc()
+                        self._report_progress(
+                            f"Synthetic data generation failed: {synth_err}. "
+                            "Upload a CSV or Excel file with your data to proceed."
+                        )
 
             if self.dataframe is None:
                 return {
@@ -2873,6 +2899,25 @@ Output ONLY valid JSON. No markdown. No commentary."""
                     return
             except Exception as e:
                 print(f"[RECOVER] File load failed: {e}")
+
+        # 2.5 Real data from .twbx Hyper/CSV extract
+        if self.data_file_path and self.data_file_path.lower().endswith(".twbx"):
+            try:
+                from core.synthetic_data import extract_twbx_embedded_data
+                output_dir = str(PROJECT_ROOT / "output")
+                df, csv_path = extract_twbx_embedded_data(
+                    self.data_file_path, output_dir=output_dir
+                )
+                if df is not None:
+                    self.dataframe = df
+                    self.data_file_path = csv_path
+                    self.data_path = csv_path
+                    if self.data_profile is None:
+                        self.data_profile = self.analyzer.profile(df)
+                    print(f"[RECOVER] Extracted real TWBX data: {df.shape}")
+                    return
+            except Exception as e:
+                print(f"[RECOVER] TWBX extract failed: {e}")
 
         # 3. Synthetic from Tableau spec
         if self.tableau_spec:

@@ -422,10 +422,30 @@ def _build_page_from_dashboard(dashboard, worksheets_by_name, profile_col_names,
         zone_name = zone.get("name", "")
         zone_type = zone.get("type", "")
 
-        # Look up worksheet for this zone
+        # Look up worksheet for this zone -- try multiple matching strategies
         ws = worksheets_by_name.get(zone_name)
         if not ws:
-            # Zone might be a title, blank, or filter zone -- skip if no worksheet
+            # Try case-insensitive match
+            for ws_name, ws_obj in worksheets_by_name.items():
+                if ws_name.lower().strip() == zone_name.lower().strip():
+                    ws = ws_obj
+                    break
+        if not ws:
+            # Try partial/substring match (zone name contains ws name or vice versa)
+            zone_lower = zone_name.lower().strip()
+            for ws_name, ws_obj in worksheets_by_name.items():
+                ws_lower = ws_name.lower().strip()
+                if ws_lower in zone_lower or zone_lower in ws_lower:
+                    ws = ws_obj
+                    break
+        if not ws:
+            # Try matching by worksheets_used list order to zones order
+            ws_used = dashboard.get("worksheets_used", [])
+            zone_idx = zones.index(zone)
+            if zone_idx < len(ws_used):
+                ws = worksheets_by_name.get(ws_used[zone_idx])
+        if not ws:
+            # Zone is a title, blank, or layout container -- skip
             continue
 
         chart_type = translate_chart_type(ws.get("chart_type", "automatic"))
@@ -578,6 +598,25 @@ def build_pbip_config_from_tableau(tableau_spec, data_profile, table_name="Data"
         section = _build_page_from_dashboard(
             db, worksheets_by_name, profile_col_names, col_types, table_name
         )
+        # Safety: if zone matching produced 0 visuals but the dashboard
+        # has worksheets_used, create visuals from those worksheets directly
+        if (not section.get("visualContainers")
+                and db.get("worksheets_used")):
+            ws_list = [
+                worksheets_by_name[n]
+                for n in db.get("worksheets_used", [])
+                if n in worksheets_by_name
+            ]
+            if ws_list:
+                fallback = _build_page_for_orphan_worksheets(
+                    ws_list, profile_col_names, col_types, table_name
+                )
+                if fallback and fallback.get("visualContainers"):
+                    section["visualContainers"] = fallback["visualContainers"]
+                    print(f"    [DIRECT-MAPPER] Zone matching failed for "
+                          f"'{db.get('name','')}' -- used worksheets_used fallback "
+                          f"({len(section['visualContainers'])} visuals)")
+
         sections.append(section)
         used_ws_names.update(db.get("worksheets_used", []))
 

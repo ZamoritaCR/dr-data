@@ -1587,36 +1587,36 @@ class PBIPGenerator:
             if is_excel:
                 if sheet_name:
                     nav_line = (
-                        f'    Navigation = Source{{[Item="{sheet_name}",'
+                        f'\tNavigation = Source{{[Item="{sheet_name}",'
                         f'Kind="Sheet"]}}[Data],'
                     )
                 else:
-                    nav_line = '    Navigation = Source{0}[Data],'
+                    nav_line = '\tNavigation = Source{0}[Data],'
                 return [
                     "let",
-                    f'    Source = Excel.Workbook(File.Contents("{file_path_for_m}"), null, true),',
+                    f'\tSource = Excel.Workbook(File.Contents("{file_path_for_m}"), null, true),',
                     nav_line,
-                    f'    #"Promoted Headers" = Table.PromoteHeaders(Navigation, [PromoteAllScalars=true]),',
-                    f'    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{self._build_type_transforms(table_cfg)})',
+                    f'\t#"Promoted Headers" = Table.PromoteHeaders(Navigation, [PromoteAllScalars=true]),',
+                    f'\t#"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{self._build_type_transforms(table_cfg)})',
                     "in",
-                    '    #"Changed Type"',
+                    '\t#"Changed Type"',
                 ]
             else:
                 return [
                     "let",
-                    f'    Source = Csv.Document(File.Contents("{file_path_for_m}"),[Delimiter=",",Columns={len(table_cfg.get("columns", []))},Encoding=65001,QuoteStyle=QuoteStyle.None]),',
-                    f'    #"Promoted Headers" = Table.PromoteHeaders(Source, [PromoteAllScalars=true]),',
-                    f'    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{self._build_type_transforms(table_cfg)})',
+                    f'\tSource = Csv.Document(File.Contents("{file_path_for_m}"),[Delimiter=",",Columns={len(table_cfg.get("columns", []))},Encoding=65001,QuoteStyle=QuoteStyle.None]),',
+                    f'\t#"Promoted Headers" = Table.PromoteHeaders(Source, [PromoteAllScalars=true]),',
+                    f'\t#"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{self._build_type_transforms(table_cfg)})',
                     "in",
-                    '    #"Changed Type"',
+                    '\t#"Changed Type"',
                 ]
 
         # Last resort: empty table
         return [
             "let",
-            '    Source = #table({"Col"}, {})',
+            '\tSource = #table({"Col"}, {})',
             "in",
-            "    Source",
+            "\tSource",
         ]
 
     @staticmethod
@@ -1639,12 +1639,12 @@ class PBIPGenerator:
 
         return [
             "let",
-            f'    Source = Snowflake.Databases("{server}", "{wh}"),',
-            f'    Database = Source{{[Name="{db}"]}}[Data],',
-            f'    Schema = Database{{[Name="{schema}"]}}[Data],',
-            f'    Table = Schema{{[Name="{table_name}"]}}[Data]',
+            f'\tSource = Snowflake.Databases("{server}", "{wh}"),',
+            f'\tDatabase = Source{{[Name="{db}"]}}[Data],',
+            f'\tSchema = Database{{[Name="{schema}"]}}[Data],',
+            f'\tTable = Schema{{[Name="{table_name}"]}}[Data]',
             "in",
-            "    Table",
+            "\tTable",
         ]
 
     @staticmethod

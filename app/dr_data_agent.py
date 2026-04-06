@@ -3201,6 +3201,33 @@ Output ONLY valid JSON. No markdown. No commentary."""
                 if not os.path.exists(dst):
                     shutil.copy2(self.data_file_path, dst)
 
+            # -- Calculation Validation (Tableau vs DAX) --
+            calc_audit_result = None
+            if (self.tableau_spec
+                    and self.tableau_spec.get("calculated_fields")
+                    and self.dataframe is not None):
+                try:
+                    from core.calc_validator import (
+                        validate_calculations,
+                        extract_dax_measures_from_config,
+                        write_calculation_audit,
+                    )
+                    dax_measures = extract_dax_measures_from_config(config)
+                    calc_audit_result = validate_calculations(
+                        self.tableau_spec, dax_measures, self.dataframe,
+                    )
+                    audit_path = write_calculation_audit(
+                        calc_audit_result, result_path,
+                    )
+                    self.generated_files.append(audit_path)
+                    self._report_progress(
+                        f"Calculation audit: {calc_audit_result['validated']} "
+                        f"matched, {calc_audit_result['mismatched']} mismatched, "
+                        f"{calc_audit_result['skipped_tableau'] + calc_audit_result['skipped_dax']} skipped"
+                    )
+                except Exception as cv_err:
+                    print(f"[CALC-VALIDATOR] Audit failed (non-fatal): {cv_err}")
+
             zip_name = project_name.replace(" ", "_")
             zip_path = shutil.make_archive(
                 os.path.join(output_dir, zip_name), "zip", result_path
@@ -3278,6 +3305,7 @@ Output ONLY valid JSON. No markdown. No commentary."""
                 "tableau_calcs_found": tableau_calcs_found,
                 "tableau_calcs_converted": tableau_calcs_converted,
                 "tableau_calcs_failed": tableau_calcs_failed,
+                "calc_validation": calc_audit_result,
             }
 
             # Log the full build context to trace logger

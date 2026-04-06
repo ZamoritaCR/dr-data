@@ -7,6 +7,7 @@ import sys
 import io
 import os
 import json
+import re
 import time
 import html as html_module
 import tempfile
@@ -866,23 +867,36 @@ with st.sidebar:
                             label="No tables loaded", state="error"
                         )
 
-        # Custom SQL
+        # Custom SQL (read-only, with injection protection)
+        _SQL_BLOCKED = re.compile(
+            r"\b(DROP|DELETE|INSERT|UPDATE|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|EXEC|EXECUTE|MERGE|CALL)\b",
+            re.IGNORECASE,
+        )
         with st.expander("Custom SQL Query"):
-            sql = st.text_area("Enter SQL:", height=80, key="sf_sql")
+            sql = st.text_area("Enter SQL (SELECT only):", height=80, key="sf_sql")
             if st.button("Run Query", key="sf_run_sql"):
                 if sql.strip():
-                    with st.spinner("Running..."):
-                        try:
-                            df = st.session_state.snowflake.query_to_df(sql)
-                            if df is not None:
-                                st.success(f"{len(df)} rows returned")
-                                agent = st.session_state.get("agent")
-                                if agent:
-                                    agent.dataframe = df
-                                    agent.current_file_name = "SQL Query Result"
-                                st.rerun()
-                        except Exception as e:
-                            st.error(f"SQL error: {str(e)[:200]}")
+                    if _SQL_BLOCKED.search(sql):
+                        st.error("Blocked: only SELECT queries are allowed. DDL/DML statements are not permitted.")
+                    elif not sql.strip().upper().startswith("SELECT"):
+                        st.error("Query must start with SELECT.")
+                    else:
+                        # Force LIMIT to prevent runaway queries
+                        safe_sql = sql.rstrip().rstrip(";")
+                        if "LIMIT" not in safe_sql.upper():
+                            safe_sql += " LIMIT 1000"
+                        with st.spinner("Running..."):
+                            try:
+                                df = st.session_state.snowflake.query_to_df(safe_sql)
+                                if df is not None:
+                                    st.success(f"{len(df)} rows returned")
+                                    agent = st.session_state.get("agent")
+                                    if agent:
+                                        agent.dataframe = df
+                                        agent.current_file_name = "SQL Query Result"
+                                    st.rerun()
+                            except Exception as e:
+                                st.error(f"SQL error: {str(e)[:200]}")
 
         if st.button("Disconnect", key="sf_disconnect"):
             st.session_state.snowflake.disconnect()

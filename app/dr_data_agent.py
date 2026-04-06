@@ -3085,6 +3085,7 @@ Output ONLY valid JSON. No markdown. No commentary."""
                     "status": "success",
                     "method": "direct_tableau_mapper",
                     "project_path": result_path,
+                    "file_path": zip_path,
                     "zip_path": zip_path,
                     "data_file": data_file_name,
                     "data_shape": f"{row_count} rows x {col_count} columns",
@@ -3093,6 +3094,28 @@ Output ONLY valid JSON. No markdown. No commentary."""
                     "total_visuals": sum(visuals_per_page),
                     "measures": measure_names,
                     "field_audit": field_audit,
+                    "build_context": {
+                        "data_file": data_file_name,
+                        "row_count": row_count,
+                        "col_count": col_count,
+                        "table_name": table_name,
+                        "page_names": page_names,
+                        "visuals_per_page": visuals_per_page,
+                        "measures_created": measure_names,
+                        "measures_skipped": [],
+                        "fields_fixed": field_audit.get("fixed", 0),
+                        "fields_removed": field_audit.get("removed", 0),
+                        "numeric_count": n_measures,
+                        "categorical_count": n_dims,
+                        "tableau_file": os.path.basename(
+                            self.data_path or ""
+                        ) if self.data_path else "",
+                        "tableau_worksheets": [
+                            ws["name"] for ws in
+                            self.tableau_spec.get("worksheets", [])
+                        ],
+                        "method": "direct_tableau_mapper",
+                    },
                     "message": (
                         f"Power BI project built via direct Tableau mapper "
                         f"(deterministic, no AI interpretation). "

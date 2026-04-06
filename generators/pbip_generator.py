@@ -125,19 +125,10 @@ class PBIPGenerator:
             self._safe_remove(project_dir)
         project_dir.mkdir(parents=True, exist_ok=True)
 
-        # If a DataFrame is available, always embed it as Data.csv inside the
-        # project dir and use a bare filename in the M query. Server absolute
-        # paths (Linux /home/...) are not accessible on the user's Windows
-        # machine — relative filename is the only portable option.
-        if dataframe is not None:
-            table_nm = data_profile.get("table_name", "Data")
-            csv_filename = f"{table_nm}.csv"
-            csv_path = project_dir / csv_filename
-            dataframe.to_csv(csv_path, index=False, encoding="utf-8-sig")
-            # Use bare filename so M query is File.Contents("Data.csv") —
-            # portable on any machine without path patching.
-            data_file_path = csv_filename
-            print(f"    [CSV] Bundled {len(dataframe)} rows → {csv_filename}")
+        # When a DataFrame is available, data will be embedded inline in the
+        # TMDL partition as #table(type table [...], {...rows...}).
+        # This makes the PBIP self-contained — no external file dependency,
+        # works on any machine without path patching.
 
         # Create folder structure inside the clean project directory
         report_root = project_dir / f"{safe}.Report"
@@ -152,9 +143,15 @@ class PBIPGenerator:
         for d in [report_def, pages_dir, theme_dir, model_def, cultures_dir, tables_dir]:
             d.mkdir(parents=True, exist_ok=True)
 
-        # Gather info -- table_name must match what _write_tables_tmdl uses
-        # (data_profile table name = ground truth from the actual data)
-        table_name = data_profile.get("table_name", self._primary_table(config))
+        # Gather info -- table_name must match what _write_tables_tmdl uses.
+        # When a DataFrame is provided (Tableau migration), always use "Data" so
+        # the TMDL table name matches the Entity="Data" in all visual JSON files.
+        # data_profile.table_name may be "synthetic_tableau_data" or a CSV filename
+        # — those break the visual bindings.
+        if dataframe is not None:
+            table_name = "Data"
+        else:
+            table_name = data_profile.get("table_name", self._primary_table(config))
 
         # Column semantic types (dimension vs measure) from data profile
         col_types = {}
@@ -185,6 +182,7 @@ class PBIPGenerator:
         table_names, valid_measure_names = self._write_tables_tmdl(
             tables_dir, tm, data_profile, data_file_path, sheet_name,
             snowflake_config=snowflake_config,
+            dataframe=dataframe,
         )
 
         # 14. model.tmdl (with relationships if provided)
@@ -1306,7 +1304,7 @@ class PBIPGenerator:
 
     def _write_tables_tmdl(self, tables_dir, tmdl_model, data_profile,
                            data_file_path, sheet_name=None,
-                           snowflake_config=None):
+                           snowflake_config=None, dataframe=None):
         """Write one .tmdl file per table.
 
         Returns:
@@ -1456,9 +1454,13 @@ class PBIPGenerator:
                     for c in profile_columns
                 ],
             }
-            m_expr = self._build_m_expression(
-                profile_table_cfg, data_file_path, sheet_name
-            )
+            if dataframe is not None:
+                m_expr = self._build_inline_m_expression(dataframe, profile_table_cfg)
+                print(f"    [INLINE] Embedded {len(dataframe)} rows inline in TMDL")
+            else:
+                m_expr = self._build_m_expression(
+                    profile_table_cfg, data_file_path, sheet_name
+                )
             partition_mode = "import"
         lines.append(f"\tpartition {quoted_tbl} = m")
         lines.append(f"\t\tmode: {partition_mode}")
@@ -1476,6 +1478,71 @@ class PBIPGenerator:
         self._write_text(tables_dir / f"{tbl_name}.tmdl", tmdl_text)
 
         return table_names, valid_measure_names
+
+    def _build_inline_m_expression(self, df, table_cfg):
+        """Build an inline M expression embedding all rows as a typed #table.
+
+        Produces:
+            let
+                Source = #table(type table [Col1 = text, Col2 = number, ...],
+                    {{"val1", 123}, {"val2", 456}, ...})
+            in
+                Source
+
+        Self-contained — no external file reference, works on any machine.
+        """
+        import math
+
+        pbi_to_m = {
+            "string": "text",
+            "int64": "number",
+            "double": "number",
+            "dateTime": "datetime",
+            "boolean": "logical",
+        }
+
+        cols = table_cfg.get("columns", [])
+        col_names = [c["name"] for c in cols]
+        col_types = [pbi_to_m.get(c.get("dataType", "string"), "text") for c in cols]
+
+        # Build typed schema: [Col1 = text, Col2 = number, ...]
+        schema = ", ".join(f'"{n}" = {t}' for n, t in zip(col_names, col_types))
+
+        def _m_value(v, t):
+            """Serialize a single cell value for M inline table."""
+            if v is None or (isinstance(v, float) and math.isnan(v)):
+                return "null"
+            if t == "text":
+                return '"' + str(v).replace("\\", "\\\\").replace('"', '""') + '"'
+            if t in ("number",):
+                try:
+                    fv = float(v)
+                    return str(int(fv)) if fv == int(fv) else str(fv)
+                except (ValueError, TypeError):
+                    return "null"
+            if t == "logical":
+                return "true" if v else "false"
+            # datetime / other — wrap as text
+            return '"' + str(v).replace('"', '""') + '"'
+
+        rows = []
+        for _, row in df[col_names].iterrows():
+            cells = ", ".join(
+                _m_value(row[n], t) for n, t in zip(col_names, col_types)
+            )
+            rows.append(f"        {{{cells}}}")
+
+        rows_block = ",\n".join(rows)
+        return [
+            "let",
+            f"    Source = #table(",
+            f"        type table [{schema}],",
+            "        {",
+            rows_block,
+            "        })",
+            "in",
+            "    Source",
+        ]
 
     def _build_m_expression(self, table_cfg, data_file_path, sheet_name=None):
         """Build Power Query M expression lines for a table partition.

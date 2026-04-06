@@ -48,6 +48,7 @@ TABLEAU_GRAMMAR = r"""
         | atom
 
     ?atom: "(" expr ")"
+        | lod_expr
         | function_call
         | field_ref
         | number
@@ -67,7 +68,7 @@ TABLEAU_GRAMMAR = r"""
     CASE: /CASE/i
     WHEN: /WHEN/i
 
-    lod_expr: "{" lod_type field_ref_list ":" expr "}"
+    lod_expr: "{" lod_type [field_ref_list] ":" expr "}" | "{" expr "}"
     lod_type: /FIXED/i | /INCLUDE/i | /EXCLUDE/i
     field_ref_list: field_ref ("," field_ref)*
 
@@ -80,6 +81,8 @@ TABLEAU_GRAMMAR = r"""
 
     number: SIGNED_NUMBER
     string: ESCAPED_STRING
+          | "'" /[^']+/ "'"
+          | "''"
     boolean: TRUE | FALSE | NULL
     TRUE: /TRUE/i
     FALSE: /FALSE/i
@@ -174,6 +177,8 @@ FUNCTION_MAP = {
     "MOD": "MOD",
     "DIV": None,
 
+    "RANK_UNIQUE": "RANKX",
+
     # Table calculations (mostly untranslatable)
     "WINDOW_SUM": None,
     "WINDOW_AVG": None,
@@ -231,14 +236,17 @@ class DAXEmitter(Transformer):
     def number(self, n):
         return str(n)
 
-    def string(self, s):
-        # Lark ESCAPED_STRING includes the quotes
+    def string(self, s=None):
+        # ESCAPED_STRING includes surrounding double quotes; single-quote
+        # alternative passes only the inner content (quotes stripped by grammar);
+        # "''" alternative passes no children (s is None -> empty string)
+        if s is None:
+            return '""'
         val = str(s)
-        # DAX uses double quotes for strings
-        if val.startswith("'") and val.endswith("'"):
-            inner = val[1:-1]
-            return f'"{inner}"'
-        return val
+        if val.startswith('"') and val.endswith('"'):
+            return val  # already DAX-quoted
+        # single-quoted string: val is bare content, wrap in DAX double quotes
+        return f'"{val}"'
 
     def boolean(self, b):
         val = str(b).upper()
@@ -353,7 +361,13 @@ class DAXEmitter(Transformer):
         return f"SWITCH({switch_expr}, {', '.join(cases)}, {else_val})"
 
     def lod_expr(self, *args):
-        parts = [a for a in args if not isinstance(a, Token)]
+        parts = [a for a in args if a is not None and not isinstance(a, Token)]
+
+        # Bare LOD: {expr} -- no FIXED/INCLUDE/EXCLUDE keyword
+        # Treat as {FIXED : expr} => CALCULATE(expr, ALL(TableName))
+        if len(parts) == 1:
+            return f"CALCULATE({parts[0]}, ALL({self.table_name}))"
+
         if len(parts) < 2:
             self.warnings.append("LOD expression could not be fully parsed")
             self.confidence *= 0.7
@@ -371,8 +385,11 @@ class DAXEmitter(Transformer):
                 dim_fields.append(str(p))
 
         if lod_type == "FIXED":
-            dim_refs = ", ".join(dim_fields)
-            return f"CALCULATE({agg_expr}, ALLEXCEPT({self.table_name}, {dim_refs}))"
+            if dim_fields:
+                dim_refs = ", ".join(dim_fields)
+                return f"CALCULATE({agg_expr}, ALLEXCEPT({self.table_name}, {dim_refs}))"
+            # FIXED with no dimensions = grand total across all rows
+            return f"CALCULATE({agg_expr}, ALL({self.table_name}))"
         elif lod_type == "EXCLUDE":
             dim_refs = ", ".join(f"ALL({d})" for d in dim_fields)
             return f"CALCULATE({agg_expr}, {dim_refs})"
@@ -505,6 +522,25 @@ class DAXEmitter(Transformer):
             if len(call_args) >= 2:
                 return f"INT(DIVIDE({call_args[0]}, {call_args[1]}))"
             return "0"
+
+        # DATEDIFF: Tableau(interval, date1, date2) -> DAX(date1, date2, INTERVAL)
+        if fn == "DATEDIFF":
+            if len(call_args) >= 3:
+                interval = str(call_args[0]).strip('"\'').upper()
+                return f"DATEDIFF({call_args[1]}, {call_args[2]}, {interval})"
+            self.warnings.append("DATEDIFF requires 3 arguments")
+            return "/* DATEDIFF */ BLANK()"
+
+        # AVG/AVERAGE over an expression -> AVERAGEX; AVERAGE only accepts column refs in DAX
+        if fn in ("AVG", "AVERAGE"):
+            if len(call_args) == 1 and str(call_args[0]).startswith("DATEDIFF("):
+                return f"AVERAGEX({self.table_name}, {call_args[0]})"
+            # fall through to standard AVERAGE mapping
+
+        # RANK_UNIQUE -> RANKX over the full table, descending
+        if fn == "RANK_UNIQUE":
+            expr = call_args[0] if call_args else "BLANK()"
+            return f"RANKX(ALL({self.table_name}), {expr}, , DESC)"
 
         if fn == "LOG2":
             if call_args:

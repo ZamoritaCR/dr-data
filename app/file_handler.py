@@ -237,6 +237,16 @@ def parse_twb(file_path):
     return _enhanced_parse_twb(file_path)
 
 
+def _safe_extractall(z, dest):
+    """Extract ZIP with Zip Slip protection -- reject path traversal entries."""
+    real_dest = os.path.realpath(dest)
+    for member in z.namelist():
+        member_path = os.path.realpath(os.path.join(dest, member))
+        if not member_path.startswith(real_dest + os.sep) and member_path != real_dest:
+            raise ValueError(f"Zip Slip detected: {member}")
+    z.extractall(dest)
+
+
 def _extract_twbx_data(file_path):
     """Extract embedded data files (CSV/Excel) from a .twbx archive.
 
@@ -247,7 +257,7 @@ def _extract_twbx_data(file_path):
     with tempfile.TemporaryDirectory() as tmp:
         try:
             with zipfile.ZipFile(file_path, "r") as z:
-                z.extractall(tmp)
+                _safe_extractall(z, tmp)
             for root_dir, dirs, files in os.walk(tmp):
                 for f in files:
                     fpath = os.path.join(root_dir, f)
@@ -343,7 +353,7 @@ def ingest_zip(file_path):
     with tempfile.TemporaryDirectory() as tmp:
         try:
             with zipfile.ZipFile(file_path, "r") as z:
-                z.extractall(tmp)
+                _safe_extractall(z, tmp)
 
             for root_dir, dirs, files in os.walk(tmp):
                 for f in files:

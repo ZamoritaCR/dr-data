@@ -1064,10 +1064,10 @@ def build_pbip_config_from_tableau(tableau_spec, data_profile, table_name="Data"
                 except (json.JSONDecodeError, TypeError):
                     cfg = {}
             visuals.append({
-                "type": cfg.get("visualType", "unknown"),
+                "visualType": cfg.get("visualType", "unknown"),
                 "title": cfg.get("title", ""),
                 "source_worksheet": cfg.get("worksheet_name", ""),
-                "data_roles": cfg.get("dataRoles", {}),
+                "dataRoles": cfg.get("dataRoles", {}),
             })
         pages.append({
             "name": section["displayName"],

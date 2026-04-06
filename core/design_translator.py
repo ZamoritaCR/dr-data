@@ -6,10 +6,12 @@ No side effects, no AI calls, no file I/O. All functions are deterministic
 and operate only on the dicts passed in.
 """
 
-# Default professional color palette when no Tableau palette is available.
+# Professional categorical color palette (Tableau 10 inspired).
+# High contrast, colorblind-safe, visually appealing in Power BI.
 _DEFAULT_DATA_COLORS = [
-    "#118DFF", "#12239E", "#E66C37", "#6B007B",
-    "#E044A7", "#744EC2", "#D9B300", "#D64550",
+    "#4E79A7", "#F28E2B", "#E15759", "#76B7B2",
+    "#59A14F", "#EDC948", "#B07AA1", "#FF9DA7",
+    "#9C755F", "#BAB0AC",
 ]
 
 # Tableau font family -> Power BI font family mapping.
@@ -67,48 +69,24 @@ def translate_colors(tableau_design):
     global_fonts = tableau_design.get("global_fonts", {})
 
     # Extract colors from palettes.
-    # Prefer categorical/regular palettes (diverse colors) over sequential
-    # palettes (shades of one hue used for maps/heatmaps).
+    # ONLY use a Tableau palette if it is explicitly typed as "regular"
+    # (categorical). Sequential/diverging palettes are for maps/heatmaps
+    # and look terrible as bar chart colors in PBI.
+    # Most Tableau workbooks store categorical colors implicitly (not in XML),
+    # so the professional default palette is used in the vast majority of cases.
     data_colors = []
-    if palettes:
-        # Score palettes: prefer those labeled "regular" or with diverse hues
-        best_palette = None
-        best_score = -1
-        for p in palettes:
+    for p in palettes:
+        ptype = p.get("type", "").lower()
+        if ptype == "regular":
             raw = p.get("colors", [])
-            if len(raw) < 2:
-                continue
-            ptype = p.get("type", "").lower()
-            # Heuristic: count distinct hue families (first 2 chars of hex)
-            hue_prefixes = set()
-            for c in raw:
-                if isinstance(c, str) and len(c) >= 4:
-                    hue_prefixes.add(c.strip().lstrip("#")[:2].lower())
-            score = len(hue_prefixes)
-            if ptype == "regular":
-                score += 10  # strongly prefer regular/categorical
-            if ptype in ("ordered-sequential", "ordered-diverging"):
-                score -= 5  # penalize sequential
-            if score > best_score:
-                best_score = score
-                best_palette = p
-
-        if best_palette:
-            for c in best_palette.get("colors", []):
-                if c and isinstance(c, str):
-                    hex_color = c.strip()
-                    if not hex_color.startswith("#"):
-                        hex_color = "#" + hex_color
-                    data_colors.append(hex_color)
-
-        # If the best palette has 5+ colors but low hue diversity, it's
-        # sequential (e.g. all greens for a map). Use default instead.
-        if len(data_colors) >= 5:
-            hue_check = set()
-            for c in data_colors[:8]:
-                hue_check.add(c.lstrip("#")[:2].lower())
-            if len(hue_check) < 3:
-                data_colors = []
+            if len(raw) >= 3:
+                for c in raw:
+                    if c and isinstance(c, str):
+                        hex_color = c.strip()
+                        if not hex_color.startswith("#"):
+                            hex_color = "#" + hex_color
+                        data_colors.append(hex_color)
+                break  # use the first regular palette found
 
     # If no colors found from palettes, try datasource color maps
     if not data_colors:

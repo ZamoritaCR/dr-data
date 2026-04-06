@@ -75,11 +75,11 @@ class TestTranslateColors:
 
     def test_colors_without_hash_prefix(self):
         design = {
-            "color_palettes": [{"colors": ["FF6600", "0099FF"]}],
+            "color_palettes": [{"type": "regular", "colors": ["FF6600", "0099FF", "33CC33"]}],
             "global_fonts": {},
         }
         result = translate_colors(design)
-        assert result["dataColors"] == ["#FF6600", "#0099FF"]
+        assert result["dataColors"] == ["#FF6600", "#0099FF", "#33CC33"]
 
 
 # ------------------------------------------------------------------ #

@@ -209,15 +209,13 @@ class PBIPGenerator:
         # 7. pages.json
         self._write_pages_json(pages_dir, page_ids)
 
-        # 8. Theme file -- use translated Tableau design if available,
-        #    otherwise copy the default reference theme.
+        # 8. Theme file -- always write a custom theme with good colors.
+        # Tableau categorical colors are rarely stored in the TWB XML,
+        # so we use a professional palette that looks good in PBI.
+        from core.design_translator import build_pbi_theme
         tableau_design = dashboard_spec.get("design") or {}
-        if tableau_design.get("color_palettes"):
-            from core.design_translator import build_pbi_theme
-            custom_theme = build_pbi_theme(tableau_design, title)
-            self._write_json(theme_dir / "CY25SU12.json", custom_theme)
-        else:
-            self._write_theme(theme_dir)
+        custom_theme = build_pbi_theme(tableau_design, title)
+        self._write_json(theme_dir / "CY25SU12.json", custom_theme)
 
         # 15. Auto-launcher .bat (patches data path + opens .pbip)
         data_filename = ""

@@ -23,8 +23,11 @@ _FONT_MAP = {
 }
 
 # Tableau mark type -> Power BI visual type mapping.
+# Tableau mark types -> PBI visual types.
+# PBI naming: clusteredBarChart = HORIZONTAL bars, clusteredColumnChart = VERTICAL columns.
+# Tableau "bar" mark = HORIZONTAL bars by convention.
 _CHART_TYPE_MAP = {
-    "bar": "clusteredBarChart",
+    "bar": "clusteredBarChart",           # horizontal bars
     "line": "lineChart",
     "area": "areaChart",
     "circle": "scatterChart",
@@ -34,8 +37,8 @@ _CHART_TYPE_MAP = {
     "polygon": "filledMap",
     "multipolygon": "filledMap",
     "pie": "pieChart",
-    "gantt-bar": "treemap",
-    "automatic": "clusteredBarChart",
+    "gantt-bar": "clusteredBarChart",     # horizontal gantt -> horizontal bar
+    "automatic": "clusteredColumnChart",  # vertical columns (safe default)
     "shape": "scatterChart",
     "density": "scatterChart",
     "heatmap": "matrix",
@@ -63,18 +66,49 @@ def translate_colors(tableau_design):
     palettes = tableau_design.get("color_palettes", [])
     global_fonts = tableau_design.get("global_fonts", {})
 
-    # Extract colors from the primary (first) palette
+    # Extract colors from palettes.
+    # Prefer categorical/regular palettes (diverse colors) over sequential
+    # palettes (shades of one hue used for maps/heatmaps).
     data_colors = []
     if palettes:
-        primary = palettes[0]
-        raw_colors = primary.get("colors", [])
-        for c in raw_colors:
-            if c and isinstance(c, str):
-                # Normalize: ensure # prefix
-                hex_color = c.strip()
-                if not hex_color.startswith("#"):
-                    hex_color = "#" + hex_color
-                data_colors.append(hex_color)
+        # Score palettes: prefer those labeled "regular" or with diverse hues
+        best_palette = None
+        best_score = -1
+        for p in palettes:
+            raw = p.get("colors", [])
+            if len(raw) < 2:
+                continue
+            ptype = p.get("type", "").lower()
+            # Heuristic: count distinct hue families (first 2 chars of hex)
+            hue_prefixes = set()
+            for c in raw:
+                if isinstance(c, str) and len(c) >= 4:
+                    hue_prefixes.add(c.strip().lstrip("#")[:2].lower())
+            score = len(hue_prefixes)
+            if ptype == "regular":
+                score += 10  # strongly prefer regular/categorical
+            if ptype in ("ordered-sequential", "ordered-diverging"):
+                score -= 5  # penalize sequential
+            if score > best_score:
+                best_score = score
+                best_palette = p
+
+        if best_palette:
+            for c in best_palette.get("colors", []):
+                if c and isinstance(c, str):
+                    hex_color = c.strip()
+                    if not hex_color.startswith("#"):
+                        hex_color = "#" + hex_color
+                    data_colors.append(hex_color)
+
+        # If the best palette has 5+ colors but low hue diversity, it's
+        # sequential (e.g. all greens for a map). Use default instead.
+        if len(data_colors) >= 5:
+            hue_check = set()
+            for c in data_colors[:8]:
+                hue_check.add(c.lstrip("#")[:2].lower())
+            if len(hue_check) < 3:
+                data_colors = []
 
     # If no colors found from palettes, try datasource color maps
     if not data_colors:

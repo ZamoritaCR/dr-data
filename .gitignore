@@ -96,9 +96,12 @@ IMPLEMENTATION_PLAN.md
 SETUP.md
 .env.example
 MASTER_KEYS.env
+MASTER_KEYS*
 .env
+.env.*
+.env.backup
 *.key
-secrets/
+secrets*
 node_modules/
 nohup.out
 *.db

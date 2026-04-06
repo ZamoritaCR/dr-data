@@ -49,7 +49,7 @@ PBIP_TEMPLATE = _load_json(
     {
         "$schema": "https://developer.microsoft.com/json-schemas/fabric/pbip/pbipProperties/1.0.0/schema.json",
         "version": "1.0",
-        "artifacts": [{"report": {"path": None}}],
+        "artifacts": [{"report": {"path": None}}, {"semanticModel": {"path": None}}],
         "settings": {"enableAutoRecovery": True},
     },
 )

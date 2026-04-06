@@ -267,6 +267,7 @@ class PBIPGenerator:
     def _write_pbip(self, safe, project_dir):
         doc = deepcopy(PBIP_TEMPLATE)
         doc["artifacts"][0]["report"]["path"] = f"{safe}.Report"
+        doc["artifacts"][1]["semanticModel"]["path"] = f"{safe}.SemanticModel"
         self._write_json(project_dir / f"{safe}.pbip", doc)
         print(f"    [+] {safe}.pbip")
 

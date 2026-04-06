@@ -95,7 +95,8 @@ class PBIPGenerator:
     # ------------------------------------------------------------------ #
 
     def generate(self, config, data_profile, dashboard_spec, data_file_path=None,
-                 sheet_name=None, relationships=None, snowflake_config=None):
+                 sheet_name=None, relationships=None, snowflake_config=None,
+                 dataframe=None):
         """Create the full PBIP project.
 
         Args:
@@ -104,6 +105,10 @@ class PBIPGenerator:
             dashboard_spec:   dict from ClaudeInterpreter (for title/theme).
             data_file_path:   optional path to the source data file.
             sheet_name:       Excel sheet name that was loaded (for M expression).
+            dataframe:        optional pd.DataFrame — if provided and data_file_path
+                              is absent or points to a Tableau archive, the DataFrame
+                              is written as Data.csv inside the project and the M
+                              query is wired to it automatically.
             relationships:    optional list of relationship dicts for TMDL model.
             snowflake_config: optional dict with account/warehouse/database/schema
                               for Snowflake DirectQuery M expression.
@@ -119,6 +124,23 @@ class PBIPGenerator:
         if project_dir.exists():
             self._safe_remove(project_dir)
         project_dir.mkdir(parents=True, exist_ok=True)
+
+        # If a real DataFrame is available and no usable data_file_path exists,
+        # write the data as Data.csv inside the project so PBI Desktop can load it.
+        _needs_csv = (
+            dataframe is not None
+            and (
+                not data_file_path
+                or str(data_file_path).lower().endswith((".twbx", ".twb"))
+            )
+        )
+        if _needs_csv:
+            table_nm = data_profile.get("table_name", "Data")
+            csv_filename = f"{table_nm}.csv"
+            csv_path = project_dir / csv_filename
+            dataframe.to_csv(csv_path, index=False, encoding="utf-8-sig")
+            data_file_path = str(csv_path)
+            print(f"    [CSV] Bundled {len(dataframe)} rows → {csv_filename}")
 
         # Create folder structure inside the clean project directory
         report_root = project_dir / f"{safe}.Report"

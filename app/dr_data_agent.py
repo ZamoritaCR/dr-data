@@ -3060,6 +3060,7 @@ Output ONLY valid JSON. No markdown. No commentary."""
                     sheet_name=self.sheet_name,
                     relationships=relationships or None,
                     snowflake_config=self.snowflake_config,
+                    dataframe=self.dataframe,
                 )
                 result_path = gen_result["path"]
                 field_audit = gen_result.get("field_audit", {})

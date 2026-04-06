@@ -2958,6 +2958,159 @@ Output ONLY valid JSON. No markdown. No commentary."""
             f"quality score {pbi_profile.get('data_quality_score', '?')}/100"
         )
 
+        # --- DIRECT TABLEAU REPLICA PATH ---
+        # When we have a Tableau spec with dashboards, bypass AI for visual
+        # structure. This produces a faithful replica instead of an AI
+        # "interpretation". The existing AI path is preserved as fallback.
+        if self.tableau_spec and self.tableau_spec.get("dashboards"):
+            try:
+                from core.direct_mapper import build_pbip_config_from_tableau
+
+                ws_count = len(self.tableau_spec.get("worksheets", []))
+                db_count = len(self.tableau_spec.get("dashboards", []))
+                cf_count = len(self.tableau_spec.get("calculated_fields", []))
+                self._report_progress(
+                    f"Direct Tableau replica mode: mapping {ws_count} worksheets, "
+                    f"{db_count} dashboards, {cf_count} calculated fields "
+                    f"-- no AI for visual structure"
+                )
+
+                config, dashboard_spec = build_pbip_config_from_tableau(
+                    self.tableau_spec, pbi_profile, table_name
+                )
+
+                sections = config.get("report_layout", {}).get("sections", [])
+                total_vc = sum(
+                    len(s.get("visualContainers", [])) for s in sections
+                )
+                measure_count = len(
+                    config.get("tmdl_model", {}).get("tables", [{}])[0].get("measures", [])
+                )
+                self._report_progress(
+                    f"Direct layout built: {len(sections)} pages, "
+                    f"{total_vc} visuals, {measure_count} DAX measures "
+                    f"-- deterministic mapping (no AI interpretation)"
+                )
+
+                self.dashboard_spec = dashboard_spec
+
+                # Jump to PBIP generator (skip Claude + GPT-4 pipeline)
+                self._report_progress(
+                    "Writing Power BI project files: page layouts, "
+                    "visual.json, TMDL model, DAX measures, theme..."
+                )
+                from generators.pbip_generator import PBIPGenerator
+                output_dir = str(PROJECT_ROOT / "output")
+                generator = PBIPGenerator(output_dir)
+
+                relationships = []
+                if self.session and self.session.relationships:
+                    relationships.extend(self.session.relationships)
+                if self.tableau_spec.get("relationships"):
+                    relationships.extend(self.tableau_spec["relationships"])
+
+                gen_result = generator.generate(
+                    config, pbi_profile, dashboard_spec,
+                    data_file_path=self.data_file_path,
+                    sheet_name=self.sheet_name,
+                    relationships=relationships or None,
+                    snowflake_config=self.snowflake_config,
+                )
+                result_path = gen_result["path"]
+                field_audit = gen_result.get("field_audit", {})
+                valid_measures = gen_result.get("valid_measures", [])
+
+                valid_count = field_audit.get("valid", 0)
+                fixed_count = field_audit.get("fixed", 0)
+                removed_count = field_audit.get("removed", 0)
+                self._report_progress(
+                    f"PBIP project built (direct mapper): "
+                    f"{gen_result.get('file_count', '?')} files, "
+                    f"{len(valid_measures)} DAX measures validated. "
+                    f"Field audit: {valid_count} valid, {fixed_count} auto-fixed, "
+                    f"{removed_count} removed. Packaging ZIP..."
+                )
+
+                # Copy data file into project
+                data_filename = ""
+                if self.data_file_path and os.path.isfile(self.data_file_path):
+                    data_filename = os.path.basename(self.data_file_path)
+                    dst = os.path.join(result_path, data_filename)
+                    if not os.path.exists(dst):
+                        shutil.copy2(self.data_file_path, dst)
+
+                # Calculation validation
+                calc_audit_result = None
+                if (self.tableau_spec.get("calculated_fields")
+                        and self.dataframe is not None):
+                    try:
+                        from core.calc_validator import (
+                            validate_calculations,
+                            extract_dax_measures_from_config,
+                            write_calculation_audit,
+                        )
+                        dax_measures = extract_dax_measures_from_config(config)
+                        calc_audit_result = validate_calculations(
+                            self.tableau_spec, dax_measures, self.dataframe,
+                        )
+                        audit_path = write_calculation_audit(
+                            calc_audit_result, result_path,
+                        )
+                        self.generated_files.append(audit_path)
+                        self._report_progress(
+                            f"Calculation audit: {calc_audit_result['validated']} "
+                            f"matched, {calc_audit_result['mismatched']} mismatched, "
+                            f"{calc_audit_result['skipped_tableau'] + calc_audit_result['skipped_dax']} skipped"
+                        )
+                    except Exception as cv_err:
+                        print(f"[CALC-VALIDATOR] Audit failed (non-fatal): {cv_err}")
+
+                zip_name = project_name.replace(" ", "_")
+                zip_path = shutil.make_archive(
+                    os.path.join(output_dir, zip_name), "zip", result_path
+                )
+                self.generated_files.append(zip_path)
+                self._report_progress("Power BI project ready for download (direct Tableau replica)")
+
+                # Build context for summary
+                data_file_name = (os.path.basename(self.data_file_path)
+                                  if self.data_file_path else "unknown")
+                page_names = [p.get("name", f"Page {i+1}")
+                              for i, p in enumerate(dashboard_spec.get("pages", []))]
+                visuals_per_page = [len(p.get("visuals", []))
+                                    for p in dashboard_spec.get("pages", [])]
+                measure_names = [m["name"] for m in dashboard_spec.get("measures", [])]
+
+                return json.dumps({
+                    "status": "success",
+                    "method": "direct_tableau_mapper",
+                    "project_path": result_path,
+                    "zip_path": zip_path,
+                    "data_file": data_file_name,
+                    "data_shape": f"{row_count} rows x {col_count} columns",
+                    "pages": page_names,
+                    "visuals_per_page": visuals_per_page,
+                    "total_visuals": sum(visuals_per_page),
+                    "measures": measure_names,
+                    "field_audit": field_audit,
+                    "message": (
+                        f"Power BI project built via direct Tableau mapper "
+                        f"(deterministic, no AI interpretation). "
+                        f"{len(page_names)} pages, {sum(visuals_per_page)} visuals, "
+                        f"{len(measure_names)} DAX measures."
+                    ),
+                })
+
+            except Exception as dm_err:
+                # Direct mapper failed -- fall through to AI pipeline
+                print(f"[DIRECT-MAPPER] Failed (falling back to AI pipeline): {dm_err}")
+                import traceback
+                traceback.print_exc()
+                self._report_progress(
+                    f"Direct mapper encountered an issue -- "
+                    f"falling back to AI-assisted pipeline"
+                )
+
         try:
             # -- REQUIREMENTS CONTRACT (runs before any LLM calls) --
             from core.requirements_contract import (

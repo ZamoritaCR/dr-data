@@ -247,8 +247,37 @@ def _safe_extractall(z, dest):
     z.extractall(dest)
 
 
+def _read_hyper_file(hyper_path):
+    """Read a Tableau .hyper extract into a DataFrame using pantab.
+
+    Tries the 'Extract' schema first (standard Tableau export), then
+    falls back to scanning all available tables.
+    """
+    try:
+        import pantab
+        # Standard Tableau extract: schema='Extract', table='Extract'
+        try:
+            return pantab.frame_from_hyper(hyper_path, table=("Extract", "Extract"))
+        except Exception:
+            pass
+        # Fallback: try unqualified table name
+        try:
+            return pantab.frame_from_hyper(hyper_path, table="Extract")
+        except Exception:
+            pass
+        # Last resort: read first available table
+        tables = pantab.frames_from_hyper(hyper_path)
+        if tables:
+            return next(iter(tables.values()))
+    except ImportError:
+        pass
+    except Exception as e:
+        print(f"[HYPER] pantab read failed: {e}")
+    return None
+
+
 def _extract_twbx_data(file_path):
-    """Extract embedded data files (CSV/Excel) from a .twbx archive.
+    """Extract embedded data files (CSV/Excel/Hyper) from a .twbx archive.
 
     Returns (None, dataframes_dict). Structure parsing is handled by
     the enhanced parser which processes .twbx natively.
@@ -268,8 +297,14 @@ def _extract_twbx_data(file_path):
                             else:
                                 df = pd.read_excel(fpath)
                             dataframes[f] = df
+                            print(f"[TWBX] Extracted data: {f} ({df.shape})")
                         except Exception:
                             pass
+                    elif f.endswith(".hyper"):
+                        df = _read_hyper_file(fpath)
+                        if df is not None:
+                            dataframes[f] = df
+                            print(f"[TWBX] Extracted .hyper data: {f} ({df.shape})")
         except Exception:
             pass
     return None, dataframes

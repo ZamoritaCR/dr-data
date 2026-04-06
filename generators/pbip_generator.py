@@ -1640,7 +1640,7 @@ class PBIPGenerator:
         if f.count('"') % 2 != 0:
             return f"unbalanced double quotes ({f.count('\"')} found)"
 
-        # c. No Python/SQL syntax leaking through
+        # c. No Python/SQL/Tableau syntax leaking through
         import re
         foreign_patterns = [
             (r'\bdef\s+', "Python 'def' keyword"),
@@ -1649,6 +1649,9 @@ class PBIPGenerator:
             (r'\bFROM\s+\w+\s+WHERE\b', "SQL FROM...WHERE pattern"),
             (r'\blambda\s+', "Python 'lambda' keyword"),
             (r'\bclass\s+', "Python 'class' keyword"),
+            (r'\bTHEN\b', "Tableau IF/THEN syntax (not DAX)"),
+            (r'\bELSEIF\b', "Tableau ELSEIF syntax (not DAX)"),
+            (r'\bEND\b(?!\s*\))', "Tableau END keyword (not DAX)"),
         ]
         for pattern, desc in foreign_patterns:
             if re.search(pattern, f, re.IGNORECASE):

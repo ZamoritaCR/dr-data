@@ -27,12 +27,31 @@ from core.design_translator import (
 # ------------------------------------------------------------------ #
 
 # Tableau shelf prefixes: aggregation + dimension qualifiers.
+# Matches prefix:FieldName or prefix:FieldName:suffix or prefix:FieldName:suffix:N
 _SHELF_PREFIX_RE = re.compile(
     r'^(sum|avg|count|min|max|countd|median|attr|'
     r'none|usr|yr|mn|qr|tqr|tmn|twk|day|'
-    r'mdy|wk|md|qy|my)\:(.+?)(?:\:[a-z]+)?$',
+    r'mdy|wk|md|qy|my)\:(.+?)(?:\:[a-z]+(?:\:\d+)?)?$',
     re.IGNORECASE,
 )
+
+# Double-prefix pattern: e.g. pcto:sum:FieldName:suffix
+_DOUBLE_PREFIX_RE = re.compile(
+    r'^(pcto|pctd|pcti|pctf|ctd|ctds)\:'
+    r'(sum|avg|count|min|max|countd|median|attr|none|usr)\:'
+    r'(.+?)(?:\:[a-z]+(?:\:\d+)?)?$',
+    re.IGNORECASE,
+)
+
+# Tableau meta-fields that should never appear as visual fields.
+_TABLEAU_META_FIELDS = {
+    "multiple values",
+    "measure names",
+    "measure values",
+    "number of records",
+    "latitude (generated)",
+    "longitude (generated)",
+}
 
 # Simple Tableau aggregation formulas that can be converted to DAX
 # without AI assistance.
@@ -53,15 +72,52 @@ _DAX_AGG_MAP = {
 }
 
 
+def _is_datasource_name(name):
+    """Check if a string looks like a Tableau datasource/table name.
+
+    Datasource names appear in shelf fields as the first part of compound
+    references like [Sample - Superstore].[sum:Sales:qk]. They contain
+    no colons and are not actual data fields.
+
+    Heuristic: datasource names are typically multi-word strings with
+    spaces or dashes, or contain 'federated.' or ' - '.
+    """
+    if not name:
+        return False
+    # Definitely datasource IDs
+    if name.startswith("federated."):
+        return True
+    # Common Tableau datasource name patterns:
+    # "Sample - Superstore", "Sheet1 (my_file)", "Extract", etc.
+    # A datasource name has NO colon and is not a simple single-word field.
+    if ":" in name:
+        return False
+    # If it contains " - " it is almost certainly a datasource name
+    if " - " in name:
+        return True
+    # If the name ends with a parenthesized portion like "Sheet1 (my_file)"
+    # and the portion looks like a datasource qualifier (not "copy" or "generated")
+    if "(" in name and name.endswith(")") and name[0].isupper():
+        paren_content = name[name.rindex("(") + 1:-1].lower()
+        if paren_content not in ("generated", "copy"):
+            return True
+    return False
+
+
 def _clean_field_name(name):
     """Strip Tableau prefixes, brackets, quotes from a field reference.
 
     Handles patterns like:
-      federated.xxx   -> skip (datasource ID)
-      none:Region:nk  -> Region
-      sum:Sales:qk    -> Sales
-      "Region"        -> Region
-      [Region]        -> Region
+      federated.xxx                      -> skip (datasource ID)
+      Sample - Superstore                -> skip (datasource name)
+      none:Region:nk                     -> Region
+      sum:Sales:qk                       -> Sales
+      usr:Calculation_123:qk:1           -> Calculation_123
+      pcto:sum:Calculation_123:qk        -> Calculation_123
+      "Region"                           -> Region
+      [Region]                           -> Region
+      Multiple Values                    -> skip (Tableau meta-field)
+      Measure Names                      -> skip (Tableau meta-field)
     """
     if not name:
         return ""
@@ -75,16 +131,29 @@ def _clean_field_name(name):
     if name.startswith("[") and name.endswith("]") and name.count("[") == 1:
         name = name[1:-1]
 
-    # Parse prefix:FieldName:suffix pattern
-    m = _SHELF_PREFIX_RE.match(name)
+    # Skip Tableau meta-fields
+    if name.lower() in _TABLEAU_META_FIELDS:
+        return ""
+
+    # Skip datasource/table names (must check BEFORE prefix parsing)
+    if _is_datasource_name(name):
+        return ""
+
+    # Try double-prefix pattern first: pcto:sum:Field:suffix
+    m = _DOUBLE_PREFIX_RE.match(name)
     if m:
-        name = m.group(2)
-    elif ":" in name:
-        parts = name.split(":")
-        if len(parts) >= 2:
-            candidate = parts[1].strip().strip('"').strip("'")
-            if candidate:
-                name = candidate
+        name = m.group(3)
+    else:
+        # Parse prefix:FieldName:suffix pattern
+        m = _SHELF_PREFIX_RE.match(name)
+        if m:
+            name = m.group(2)
+        elif ":" in name:
+            parts = name.split(":")
+            if len(parts) >= 2:
+                candidate = parts[1].strip().strip('"').strip("'")
+                if candidate:
+                    name = candidate
 
     # Strip quotes
     name = name.strip()
@@ -96,11 +165,19 @@ def _clean_field_name(name):
     # Reject names that are only punctuation
     if not name or not re.search(r'[a-zA-Z0-9]', name):
         return ""
+
+    # Final check: reject Tableau meta-fields after cleaning
+    if name.lower() in _TABLEAU_META_FIELDS:
+        return ""
+
     return name
 
 
 def _clean_shelf_fields(field_refs):
-    """Clean a list of Tableau shelf field references to plain names."""
+    """Clean a list of Tableau shelf field references to plain names.
+
+    Filters out datasource names, Tableau meta-fields, and duplicates.
+    """
     result = []
     seen = set()
     for ref in field_refs:
@@ -109,6 +186,54 @@ def _clean_shelf_fields(field_refs):
             seen.add(name)
             result.append(name)
     return result
+
+
+def _detect_aggregated_fields(field_refs):
+    """Detect which field names appear with aggregation prefixes in shelf refs.
+
+    Returns a set of clean field names that were used with SUM/AVG/COUNT/etc.
+    This is important because the data profiler may classify a numeric column
+    as 'dimension' (low cardinality), but Tableau uses it as a measure.
+    """
+    agg_prefixes = {"sum", "avg", "count", "countd", "min", "max", "median"}
+    aggregated = set()
+    for ref in field_refs:
+        if not ref:
+            continue
+        ref = ref.strip()
+        m = _SHELF_PREFIX_RE.match(ref)
+        if m:
+            prefix = m.group(1).lower()
+            field = m.group(2)
+            if prefix in agg_prefixes and field:
+                aggregated.add(field)
+    return aggregated
+
+
+def _detect_aggregated_color(color_ref):
+    """Detect if color_field reference has an aggregation prefix.
+
+    Handles compound refs like [federated.xxx].[sum:Sales:qk].
+    Returns the clean field name if aggregated, else empty string.
+    """
+    if not color_ref:
+        return ""
+    # Handle compound pattern: [table].[prefix:field:suffix]
+    inner = color_ref
+    if "].[" in inner:
+        parts = inner.split("].[", 1)
+        if len(parts) == 2:
+            inner = parts[1].rstrip("]")
+    elif inner.startswith("[") and inner.endswith("]"):
+        inner = inner[1:-1]
+    m = _SHELF_PREFIX_RE.match(inner)
+    if m:
+        prefix = m.group(1).lower()
+        field = m.group(2)
+        agg_prefixes = {"sum", "avg", "count", "countd", "min", "max", "median"}
+        if prefix in agg_prefixes and field:
+            return field
+    return ""
 
 
 def _resolve_field_against_profile(field_name, profile_col_names):
@@ -133,10 +258,47 @@ def _resolve_field_against_profile(field_name, profile_col_names):
 #  Worksheet -> Visual mapping                                         #
 # ------------------------------------------------------------------ #
 
+def _is_generated_field(name):
+    """Check if a field is a Tableau-generated field (e.g. Latitude/Longitude (generated))."""
+    return bool(name and "(generated)" in name.lower())
+
+
+def _infer_fields_from_worksheet_name(ws_name, profile_col_names, col_types):
+    """Infer likely category and value fields from the worksheet name.
+
+    Parses worksheet titles like 'sales by region and sub regions' to find
+    matching profile columns.
+
+    Returns:
+        (category_fields, value_fields) -- lists of column names
+    """
+    ws_lower = ws_name.lower()
+    dims = [c for c in profile_col_names if col_types.get(c) != "measure"]
+    measures = [c for c in profile_col_names if col_types.get(c) == "measure"]
+
+    matched_dims = []
+    matched_measures = []
+
+    # Check which profile columns appear (case-insensitive) in the worksheet name
+    for col in dims:
+        col_words = col.lower().replace("-", " ").replace("_", " ")
+        if col_words in ws_lower or col.lower() in ws_lower:
+            matched_dims.append(col)
+
+    for col in measures:
+        col_words = col.lower().replace("-", " ").replace("_", " ")
+        if col_words in ws_lower or col.lower() in ws_lower:
+            matched_measures.append(col)
+
+    return matched_dims, matched_measures
+
+
 def _classify_fields_for_chart(ws, chart_type, profile_col_names, col_types):
     """Determine category, values, and series fields for a worksheet.
 
     Uses the worksheet shelf fields and chart type to assign PBI roles.
+    When shelf fields are empty or contain only Tableau-generated fields,
+    infers fields from the worksheet name and available profile columns.
 
     Args:
         ws: worksheet dict from the parser
@@ -147,22 +309,53 @@ def _classify_fields_for_chart(ws, chart_type, profile_col_names, col_types):
     Returns:
         dict with category, values, series lists
     """
-    rows = _clean_shelf_fields(ws.get("rows_fields", []))
-    cols = _clean_shelf_fields(ws.get("cols_fields", []))
-    color_field = _clean_field_name(ws.get("color_field", ""))
+    raw_rows = ws.get("rows_fields", [])
+    raw_cols = ws.get("cols_fields", [])
+    raw_color = ws.get("color_field", "")
+
+    rows = _clean_shelf_fields(raw_rows)
+    cols = _clean_shelf_fields(raw_cols)
+    color_field = _clean_field_name(raw_color)
+
+    # Detect fields that Tableau treats as measures (aggregation prefix)
+    # even if the profiler classifies them as dimensions (low cardinality).
+    tableau_agg_fields = _detect_aggregated_fields(raw_rows) | _detect_aggregated_fields(raw_cols)
+    agg_color = _detect_aggregated_color(raw_color)
+    if agg_color:
+        tableau_agg_fields.add(agg_color)
+
+    # Filter out Tableau-generated fields (Latitude/Longitude (generated))
+    # These don't exist in the actual data.
+    rows = [f for f in rows if not _is_generated_field(f)]
+    cols = [f for f in cols if not _is_generated_field(f)]
 
     # Resolve all fields against profile
     rows = [_resolve_field_against_profile(f, profile_col_names) for f in rows]
     cols = [_resolve_field_against_profile(f, profile_col_names) for f in cols]
     if color_field:
-        color_field = _resolve_field_against_profile(color_field, profile_col_names)
+        # Clean color field: handle compound refs like [federated.xxx].[sum:Sales:qk]
+        if _is_generated_field(color_field):
+            color_field = ""
+        else:
+            color_field = _resolve_field_against_profile(color_field, profile_col_names)
 
     # Classify each field as dimension or measure based on:
     # 1. Profile semantic type (most reliable)
-    # 2. Shelf position heuristic
+    # 2. Tableau aggregation prefix (if the profiler missed it)
     def is_measure(f):
         st = col_types.get(f, "")
-        return st == "measure"
+        if st == "measure":
+            return True
+        # If Tableau used this field with SUM/AVG/COUNT etc., treat as measure
+        # even if the profiler says dimension (common for low-cardinality numerics)
+        if f in tableau_agg_fields:
+            return True
+        # Also check case-insensitive match against tableau agg fields
+        f_lower = f.lower()
+        for taf in tableau_agg_fields:
+            if taf.lower() == f_lower:
+                return True
+        return False
 
     # Separate into dimensions and measures from both shelves
     all_dims = []
@@ -172,6 +365,10 @@ def _classify_fields_for_chart(ws, chart_type, profile_col_names, col_types):
             all_measures.append(f)
         else:
             all_dims.append(f)
+
+    # If color_field is a measure and not already captured, add it to measures
+    if color_field and color_field not in all_measures and is_measure(color_field):
+        all_measures.append(color_field)
 
     # Deduplicate while preserving order
     def dedup(lst):
@@ -185,6 +382,52 @@ def _classify_fields_for_chart(ws, chart_type, profile_col_names, col_types):
 
     all_dims = dedup(all_dims)
     all_measures = dedup(all_measures)
+
+    # ------------------------------------------------------------------ #
+    # FALLBACK: If we have no fields at all, try to infer from worksheet  #
+    # name and profile columns. This handles worksheets where Tableau     #
+    # shelf fields are empty or only had generated fields.                #
+    # ------------------------------------------------------------------ #
+    ws_name = ws.get("name", "")
+    if not all_dims and not all_measures and profile_col_names:
+        inferred_dims, inferred_measures = _infer_fields_from_worksheet_name(
+            ws_name, profile_col_names, col_types
+        )
+        if inferred_dims or inferred_measures:
+            all_dims = inferred_dims
+            all_measures = inferred_measures
+            print(f"    [DIRECT-MAPPER] Inferred fields from worksheet name "
+                  f"'{ws_name}': dims={all_dims}, measures={all_measures}")
+
+    # Second fallback: if STILL no fields, pick the first dimension and
+    # first measure from the profile. Every visual should show *something*.
+    if not all_dims and not all_measures and profile_col_names:
+        profile_dims = [c for c in profile_col_names
+                        if col_types.get(c) != "measure"
+                        and col_types.get(c) != "date"]
+        profile_measures = [c for c in profile_col_names
+                            if col_types.get(c) == "measure"]
+        if profile_dims:
+            all_dims = [sorted(profile_dims)[0]]
+        if profile_measures:
+            all_measures = [sorted(profile_measures)[0]]
+        if all_dims or all_measures:
+            print(f"    [DIRECT-MAPPER] Auto-assigned fallback fields for "
+                  f"'{ws_name}': dims={all_dims}, measures={all_measures}")
+
+    # For map visuals with no geographic dims, pick a geographic-looking
+    # column (state, region, country, city, etc.) from the profile
+    if chart_type in ("map", "filledMap") and not all_dims and profile_col_names:
+        geo_keywords = ["state", "region", "country", "city", "province",
+                        "county", "zip", "postal", "location", "area", "territory"]
+        for col in sorted(profile_col_names):
+            if col_types.get(col) != "measure":
+                col_lower = col.lower()
+                if any(kw in col_lower for kw in geo_keywords):
+                    all_dims = [col]
+                    print(f"    [DIRECT-MAPPER] Auto-assigned geographic field "
+                          f"'{col}' for map visual '{ws_name}'")
+                    break
 
     category = []
     values = []
@@ -284,11 +527,12 @@ def _build_measures_from_spec(tableau_spec, table_name, profile_col_names):
             })
             measure_names.add(cf_name)
         else:
-            # Complex formula -- generate placeholder, flag for AI
-            dax = _translate_formula_heuristic(formula, table_name, profile_col_names)
+            # Complex formula -- use BLANK() placeholder to avoid invalid
+            # TMDL syntax (Tableau IF/THEN/ELSE/END is not valid DAX).
+            # The original formula is preserved for AI translation later.
             measures.append({
                 "name": cf_name,
-                "dax": dax,
+                "dax": "BLANK()",
                 "format": "#,0",
                 "needs_ai": True,
                 "original_formula": formula,
@@ -396,6 +640,10 @@ def _build_page_from_dashboard(dashboard, worksheets_by_name, profile_col_names,
                                col_types, table_name):
     """Build a PBI page (section) from a Tableau dashboard.
 
+    Uses worksheets_used as the authoritative list of which worksheets belong
+    on this dashboard page. Zones are only used for spatial layout (position).
+    Each worksheet appears at most once per page (deduplication).
+
     Args:
         dashboard: dashboard dict from parser
         worksheets_by_name: dict mapping ws name -> ws dict
@@ -408,53 +656,57 @@ def _build_page_from_dashboard(dashboard, worksheets_by_name, profile_col_names,
     """
     canvas = dashboard.get("canvas", {})
     zones = dashboard.get("zones", [])
+    ws_used = dashboard.get("worksheets_used", [])
 
-    # Scale zone positions to PBI canvas
+    # Build zone position lookup (zone name -> scaled PBI position)
     pbi_positions = {}
     if zones and canvas.get("width") and canvas.get("height"):
         scaled = translate_positions(zones, canvas)
         for p in scaled:
             pbi_positions[p["name"]] = p
 
+    # Build case-insensitive zone name lookup for position matching
+    zone_positions_lower = {}
+    for zname, pos in pbi_positions.items():
+        zone_positions_lower[zname.lower().strip()] = pos
+
     visual_containers = []
+    added_ws_names = set()  # Track worksheets already added to this page
 
-    for zone in zones:
-        zone_name = zone.get("name", "")
-        zone_type = zone.get("type", "")
+    # Use worksheets_used as the authoritative source of which worksheets
+    # belong on this page. This avoids the dangerous substring/index matching
+    # that was causing duplicate and incorrect visual assignments.
+    for ws_name in ws_used:
+        # Skip if already added (deduplication)
+        if ws_name in added_ws_names:
+            continue
 
-        # Look up worksheet for this zone -- try multiple matching strategies
-        ws = worksheets_by_name.get(zone_name)
+        # Look up the worksheet
+        ws = worksheets_by_name.get(ws_name)
         if not ws:
             # Try case-insensitive match
-            for ws_name, ws_obj in worksheets_by_name.items():
-                if ws_name.lower().strip() == zone_name.lower().strip():
-                    ws = ws_obj
+            for k, v in worksheets_by_name.items():
+                if k.lower().strip() == ws_name.lower().strip():
+                    ws = v
                     break
         if not ws:
-            # Try partial/substring match (zone name contains ws name or vice versa)
-            zone_lower = zone_name.lower().strip()
-            for ws_name, ws_obj in worksheets_by_name.items():
-                ws_lower = ws_name.lower().strip()
-                if ws_lower in zone_lower or zone_lower in ws_lower:
-                    ws = ws_obj
-                    break
-        if not ws:
-            # Try matching by worksheets_used list order to zones order
-            ws_used = dashboard.get("worksheets_used", [])
-            zone_idx = zones.index(zone)
-            if zone_idx < len(ws_used):
-                ws = worksheets_by_name.get(ws_used[zone_idx])
-        if not ws:
-            # Zone is a title, blank, or layout container -- skip
+            # Worksheet not found in spec -- skip
             continue
+
+        added_ws_names.add(ws_name)
 
         chart_type = translate_chart_type(ws.get("chart_type", "automatic"))
         data_roles = _classify_fields_for_chart(
             ws, chart_type, profile_col_names, col_types
         )
 
-        # Position from scaled zones
-        pos = pbi_positions.get(zone_name, {})
+        # Position: look up from zones by exact name, then case-insensitive
+        pos = pbi_positions.get(ws_name)
+        if not pos:
+            pos = zone_positions_lower.get(ws_name.lower().strip())
+        if not pos:
+            pos = {}
+
         x = pos.get("x", 0)
         y = pos.get("y", 0)
         w = pos.get("width", 300)
@@ -462,7 +714,7 @@ def _build_page_from_dashboard(dashboard, worksheets_by_name, profile_col_names,
 
         config = {
             "visualType": chart_type,
-            "title": ws.get("name", zone_name),
+            "title": ws.get("name", ws_name),
             "dataRoles": data_roles,
             "worksheet_name": ws.get("name", ""),
         }
@@ -474,20 +726,6 @@ def _build_page_from_dashboard(dashboard, worksheets_by_name, profile_col_names,
             "height": h,
             "config": config,
         })
-
-    # Handle filters from the dashboard zones that are categorical
-    # (create slicer visuals for them)
-    filter_zones = []
-    for zone in zones:
-        zone_name = zone.get("name", "")
-        zone_type = zone.get("type", "")
-        if zone_type in ("filter", "quick-filter"):
-            ws = worksheets_by_name.get(zone_name)
-            if ws and ws.get("filters"):
-                for filt in ws["filters"]:
-                    field = _clean_field_name(filt.get("field", ""))
-                    if field:
-                        filter_zones.append(field)
 
     return {
         "displayName": dashboard.get("name", "Dashboard"),

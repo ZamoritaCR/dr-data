@@ -13,7 +13,6 @@ replacement for the OpenAI engine output.
 
 import json
 import logging
-import os
 import re
 
 from core.design_translator import (
@@ -488,29 +487,20 @@ def _classify_fields_for_chart(ws, chart_type, profile_col_names, col_types):
 
 
 # ------------------------------------------------------------------ #
-#  AI formula translation                                              #
+#  Deterministic formula transpilation                                  #
 # ------------------------------------------------------------------ #
 
 _logger = logging.getLogger(__name__)
 
 
-def _ai_translate_formulas(measures, table_name, columns):
-    """Translate complex Tableau formulas to DAX using Claude.
+def _transpile_formulas(measures, table_name, field_resolution_map=None):
+    """Deterministic Tableau-to-DAX transpilation using AST parser.
 
-    Only called for measures where needs_ai=True and original_formula is set.
-    Sends a single batch prompt for all formulas to minimize API calls.
-    Falls back to BLANK() if translation fails -- safe for TMDL output.
+    Uses core.formula_transpiler (Lark grammar + DAXEmitter) for every
+    measure that has needs_ai=True and an original_formula. No AI, no
+    randomness -- same input always produces same output.
     """
-    try:
-        import anthropic
-    except ImportError:
-        _logger.warning("[AI-TRANSLATE] anthropic not installed -- skipping")
-        return measures
-
-    api_key = os.getenv("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        _logger.warning("[AI-TRANSLATE] ANTHROPIC_API_KEY not set -- skipping")
-        return measures
+    from core.formula_transpiler import TableauFormulaTranspiler
 
     needs_translation = [
         m for m in measures
@@ -519,55 +509,35 @@ def _ai_translate_formulas(measures, table_name, columns):
     if not needs_translation:
         return measures
 
-    formula_list = "\n".join(
-        f"- {m['name']}: {m['original_formula']}"
-        for m in needs_translation
-    )
-    column_list = ", ".join(sorted(columns)[:50])
-
-    prompt = (
-        f"You are a Tableau-to-DAX formula translator. Target table: '{table_name}'.\n"
-        f"Available columns: {column_list}\n\n"
-        "RULES:\n"
-        "- Output ONLY valid DAX syntax. No Tableau syntax.\n"
-        "- DAX IF: IF(condition, true_value, false_value) -- no THEN, no END\n"
-        "- DAX SWITCH: SWITCH(expression, value1, result1, ..., default)\n"
-        "- DATEDIFF: DATEDIFF(start, end, DAY) -- uppercase unit\n"
-        "- LOD FIXED: CALCULATE(SUM('T'[F]), ALLEXCEPT('T', 'T'[Dim]))\n"
-        "- Column refs: 'TableName'[ColumnName] format\n"
-        "- If untranslatable, output BLANK()\n\n"
-        f"Translate each Tableau formula to DAX:\n{formula_list}\n\n"
-        'Respond as JSON array: [{"name": "measure_name", "dax": "DAX_EXPRESSION"}]\n'
-        "Only the JSON array, nothing else."
+    transpiler = TableauFormulaTranspiler(
+        field_resolution_map=field_resolution_map,
+        table_name=table_name,
     )
 
-    try:
-        client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=4096,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = response.content[0].text.strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-        translations = json.loads(text)
+    translated = 0
+    unsupported = 0
+    for m in needs_translation:
+        result = transpiler.transpile(m["original_formula"])
+        dax = result.get("dax", "").strip()
 
-        translation_map = {t["name"]: t["dax"] for t in translations if t.get("dax")}
-        translated_count = 0
-        for m in measures:
-            if m["name"] in translation_map and translation_map[m["name"]] != "BLANK()":
-                m["dax"] = translation_map[m["name"]]
-                m["needs_ai"] = False
-                m["translation_method"] = "claude_sonnet"
-                translated_count += 1
+        if dax and dax != "BLANK()" and result.get("confidence", 0) > 0:
+            m["dax"] = dax
+            m["needs_ai"] = False
+            m["confidence"] = result["confidence"]
+            m["translation_method"] = "deterministic_transpiler"
+            if result.get("warnings"):
+                m["warnings"] = result["warnings"]
+            translated += 1
+            print(f"    [TRANSPILE OK] {m['name']}: {dax[:80]}")
+        else:
+            reason = "; ".join(result.get("warnings", ["unknown"]))
+            m["dax"] = "BLANK()"
+            m["unsupported_reason"] = reason
+            unsupported += 1
+            print(f"    [TRANSPILE SKIP] {m['name']}: {reason[:80]}")
 
-        _logger.info("[AI-TRANSLATE] Translated %d/%d complex formulas", translated_count, len(needs_translation))
-        print(f"    [AI-TRANSLATE] {translated_count}/{len(needs_translation)} complex formulas translated by Claude")
-
-    except Exception as e:
-        _logger.warning("[AI-TRANSLATE] Failed: %s", e)
-        print(f"    [AI-TRANSLATE] Failed: {e}")
+    _logger.info("[TRANSPILE] %d translated, %d unsupported out of %d", translated, unsupported, len(needs_translation))
+    print(f"    [TRANSPILE] {translated}/{len(needs_translation)} deterministic, {unsupported} unsupported")
 
     return measures
 
@@ -967,8 +937,8 @@ def build_pbip_config_from_tableau(tableau_spec, data_profile, table_name="Data"
     # -- AI translate complex formulas (needs_ai=True) --
     blank_count = sum(1 for m in measures if m.get("needs_ai"))
     if blank_count > 0:
-        print(f"    [DIRECT-MAPPER] {blank_count} complex formulas need AI translation...")
-        measures = _ai_translate_formulas(measures, table_name, list(profile_col_names))
+        print(f"    [DIRECT-MAPPER] {blank_count} complex formulas need transpilation...")
+        measures = _transpile_formulas(measures, table_name)
 
     # -- Build pages from dashboards --
     sections = []

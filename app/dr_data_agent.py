@@ -3398,6 +3398,7 @@ Output ONLY valid JSON. No markdown. No commentary."""
                 sheet_name=self.sheet_name,
                 relationships=relationships or None,
                 snowflake_config=self.snowflake_config,
+                dataframe=self.dataframe,
             )
             # generator.generate() returns a dict with path + audit info
             result_path = gen_result["path"]

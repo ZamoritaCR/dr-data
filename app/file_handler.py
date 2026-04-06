@@ -248,24 +248,21 @@ def _safe_extractall(z, dest):
 
 
 def _read_hyper_file(hyper_path):
-    """Read a Tableau .hyper extract into a DataFrame using pantab.
+    """Read a Tableau .hyper extract into a DataFrame.
 
-    Tries the 'Extract' schema first (standard Tableau export), then
-    falls back to scanning all available tables.
+    Tries pantab first (if installed), then falls back to tableauhyperapi.
     """
+    # --- pantab path (preferred, faster) ---
     try:
         import pantab
-        # Standard Tableau extract: schema='Extract', table='Extract'
         try:
             return pantab.frame_from_hyper(hyper_path, table=("Extract", "Extract"))
         except Exception:
             pass
-        # Fallback: try unqualified table name
         try:
             return pantab.frame_from_hyper(hyper_path, table="Extract")
         except Exception:
             pass
-        # Last resort: read first available table
         tables = pantab.frames_from_hyper(hyper_path)
         if tables:
             return next(iter(tables.values()))
@@ -273,6 +270,55 @@ def _read_hyper_file(hyper_path):
         pass
     except Exception as e:
         print(f"[HYPER] pantab read failed: {e}")
+
+    # --- tableauhyperapi fallback ---
+    try:
+        from tableauhyperapi import HyperProcess, Telemetry, Connection
+        with HyperProcess(
+            telemetry=Telemetry.DO_NOT_SEND_USAGE_DATA_TO_TABLEAU
+        ) as hyper:
+            with Connection(hyper.endpoint, hyper_path) as conn:
+                schemas = conn.catalog.get_schema_names()
+                # Prefer Extract schema
+                ordered = sorted(schemas, key=lambda s: (str(s) != "Extract", str(s)))
+                for schema in ordered:
+                    for tbl in conn.catalog.get_table_names(schema):
+                        try:
+                            count = conn.execute_scalar_query(
+                                f"SELECT COUNT(*) FROM {tbl}"
+                            )
+                            if not count:
+                                continue
+                            rows = []
+                            with conn.execute_query(
+                                f"SELECT * FROM {tbl} LIMIT 50000"
+                            ) as result:
+                                cols = [c.name.unescaped for c in result.schema.columns]
+                                for row in result:
+                                    rows.append(list(row))
+                            if rows:
+                                import pandas as pd
+                                df = pd.DataFrame(rows, columns=cols)
+                                # Convert Tableau Date objects to strings
+                                for col in df.columns:
+                                    sample = df[col].dropna().head(1)
+                                    if not sample.empty:
+                                        val = sample.iloc[0]
+                                        if hasattr(val, "year") and hasattr(val, "month"):
+                                            df[col] = df[col].apply(
+                                                lambda v: (
+                                                    f"{v.year}-{v.month:02d}-{v.day:02d}"
+                                                    if v is not None else None
+                                                )
+                                            )
+                                return df
+                        except Exception:
+                            continue
+    except ImportError:
+        pass
+    except Exception as e:
+        print(f"[HYPER] tableauhyperapi read failed: {e}")
+
     return None
 
 

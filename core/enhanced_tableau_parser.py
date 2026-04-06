@@ -516,6 +516,19 @@ def parse_twb(path):
                 elif attr == "tooltip":
                     ws_info["tooltip_fields"].append(field)
 
+            # Fallback for BAN/KPI worksheets: rows, cols, and encodings are all
+            # empty.  Measures live in datasource-dependencies/column-instance
+            # elements with type="quantitative" (suffix :qk in the name).
+            if not ws_info["measures"] and not ws_info["rows_fields"] and not ws_info["cols_fields"]:
+                for dep in ws.iter("datasource-dependencies"):
+                    for ci in dep.findall("column-instance"):
+                        if ci.get("type") == "quantitative":
+                            col_ref = ci.get("column", "")
+                            # strip brackets
+                            col_name = col_ref.strip("[]") if col_ref else ""
+                            if col_name:
+                                ws_info["measures"].append(col_name)
+
             # Sort field
             for sort_el in ws.iter("sort"):
                 sort_field = sort_el.get("column", sort_el.get("field", ""))

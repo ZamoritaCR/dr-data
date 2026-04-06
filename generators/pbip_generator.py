@@ -1497,7 +1497,7 @@ class PBIPGenerator:
             "string": "text",
             "int64": "number",
             "double": "number",
-            "dateTime": "datetime",
+            "dateTime": "text",   # M inline #table schema requires text for dates
             "boolean": "logical",
         }
 
@@ -1505,8 +1505,8 @@ class PBIPGenerator:
         col_names = [c["name"] for c in cols]
         col_types = [pbi_to_m.get(c.get("dataType", "string"), "text") for c in cols]
 
-        # Build typed schema: [Col1 = text, Col2 = number, ...]
-        schema = ", ".join(f'"{n}" = {t}' for n, t in zip(col_names, col_types))
+        # Build untyped schema: {"Col1", "Col2", ...} — PBI infers types, avoids M schema errors
+        schema = "{" + ", ".join(f'"{n}"' for n in col_names) + "}"
 
         def _m_value(v, t):
             """Serialize a single cell value for M inline table."""
@@ -1539,7 +1539,7 @@ class PBIPGenerator:
         result_lines = [
             "let",
             "\tSource = #table(",
-            f"\t\ttype table [{schema}],",
+            f"\t\t{schema},",
             "\t\t{",
         ]
         last = len(row_strings) - 1

@@ -759,8 +759,10 @@ class PBIPGenerator:
         value_roles = {"Y", "Values"}
         category_roles = {"Category", "X", "Series", "Rows", "Columns"}
         # Max unique values allowed on a category axis before PBI throws
-        # DataViewMappingError_ConditionRangeTooLarge
-        MAX_CATEGORY_CARDINALITY = 200
+        # DataViewMappingError_ConditionRangeTooLarge.
+        # Date columns are exempted because PBI auto-hierarchies handle them.
+        # String dimensions with extreme cardinality (>30000) are still blocked.
+        MAX_CATEGORY_CARDINALITY = 30000
         col_card = getattr(self, "_col_cardinality", {})
 
         query_state = {}
@@ -777,8 +779,12 @@ class PBIPGenerator:
                     print(f"    [SKIP] visual field '{field_name}': "
                           f"not in dataset columns or valid measures")
                     continue
-                # Block high-cardinality dimensions on category axes
-                if is_category and field_name in col_card:
+                # Block extremely high-cardinality string dimensions on
+                # category axes. Date columns are never blocked because
+                # PBI handles date hierarchies natively.
+                sem_type = (col_types or {}).get(field_name, "dimension")
+                if (is_category and sem_type == "dimension"
+                        and field_name in col_card):
                     card = col_card[field_name]
                     if card > MAX_CATEGORY_CARDINALITY:
                         print(f"    [SKIP] visual field '{field_name}': "
@@ -793,6 +799,67 @@ class PBIPGenerator:
 
             if projections:
                 query_state[pbi_role] = {"projections": projections}
+
+        # Fallback: if ALL requested fields were invalid and query_state is
+        # empty, assign a default dimension + measure from the profile so the
+        # visual is never blank. This handles Tableau Calculation_* IDs that
+        # do not exist in the synthetic dataset.
+        if not query_state and profile_col_names:
+            dims = sorted([c for c in profile_col_names
+                           if col_types.get(c) not in ("measure", "date")])
+            measures = sorted([c for c in profile_col_names
+                               if col_types.get(c) == "measure"])
+            fallback_fields = []
+            fallback_role = None
+
+            if visual_type in ("card", "cardVisual", "multiRowCard", "kpi"):
+                # Cards need a single value
+                fallback_role = "Values"
+                if measures:
+                    fallback_fields = [measures[0]]
+                elif dims:
+                    fallback_fields = [dims[0]]
+            elif visual_type in ("tableEx", "pivotTable", "table"):
+                fallback_role = "Values"
+                fallback_fields = (dims[:1] + measures[:1]) or dims[:1] or measures[:1]
+            else:
+                # Charts: assign category + Y
+                if dims:
+                    cat_proj = self._build_field_projection(
+                        dims[0], table_name, measure_names,
+                        aggregate=False, col_types=col_types,
+                    )
+                    query_state["Category"] = {"projections": [cat_proj]}
+                if measures:
+                    val_proj = self._build_field_projection(
+                        measures[0], table_name, measure_names,
+                        aggregate=True, col_types=col_types,
+                    )
+                    query_state["Y"] = {"projections": [val_proj]}
+                elif dims and len(dims) > 1:
+                    val_proj = self._build_field_projection(
+                        dims[1], table_name, measure_names,
+                        aggregate=False, col_types=col_types,
+                    )
+                    query_state["Y"] = {"projections": [val_proj]}
+
+            if fallback_role and fallback_fields:
+                projs = []
+                agg = fallback_role in value_roles
+                for fn in fallback_fields:
+                    projs.append(self._build_field_projection(
+                        fn, table_name, measure_names,
+                        aggregate=agg, col_types=col_types,
+                    ))
+                query_state[fallback_role] = {"projections": projs}
+
+            if query_state:
+                used = []
+                for role_data in query_state.values():
+                    for p in role_data.get("projections", []):
+                        used.append(p.get("nativeQueryRef", "?"))
+                print(f"    [FALLBACK] Assigned default fields for empty visual: "
+                      f"{', '.join(used)}")
 
         return query_state
 

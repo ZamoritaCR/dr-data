@@ -1497,7 +1497,8 @@ class PBIPGenerator:
             "string": "text",
             "int64": "number",
             "double": "number",
-            "dateTime": "text",   # M inline #table schema requires text for dates
+            "dateTime": "date",   # Use proper M #datetime() literals
+            "date": "date",
             "boolean": "logical",
         }
 
@@ -1514,6 +1515,14 @@ class PBIPGenerator:
                 return "null"
             if t == "text":
                 return '"' + str(v).replace("\\", "\\\\").replace('"', '""') + '"'
+            if t == "date":
+                try:
+                    import pandas as pd
+                    dt = pd.to_datetime(v)
+                    return (f"#datetime({dt.year}, {dt.month}, {dt.day}, "
+                            f"{dt.hour}, {dt.minute}, {dt.second})")
+                except Exception:
+                    return '"' + str(v).replace('"', '""') + '"'
             if t in ("number",):
                 try:
                     fv = float(v)
@@ -1522,7 +1531,7 @@ class PBIPGenerator:
                     return "null"
             if t == "logical":
                 return "true" if v else "false"
-            # datetime / other — wrap as text
+            # other — wrap as text
             return '"' + str(v).replace('"', '""') + '"'
 
         row_strings = []

@@ -474,15 +474,30 @@ def _classify_fields_for_chart(ws, chart_type, profile_col_names, col_types):
         if not values and len(all_dims) > 1:
             values = all_dims[1:]
 
+        # When Tableau has multiple dimensions on one shelf (e.g. cols=[Category, Branch]),
+        # the second dimension acts as the legend/series (stacked or grouped bar).
+        # Promote all_dims[1:] to series so the chart breaks down by that dimension.
+        if len(all_dims) >= 2 and not series:
+            series = all_dims[1:2]  # first extra dim becomes the series/legend
+
     # Series: color field if it's a dimension and not already used
-    used = set(category + values)
+    used = set(category + values + series)
     if color_field and color_field not in used and not is_measure(color_field):
         series = [color_field]
+
+    # Upgrade clustered chart to stacked when there's a series field.
+    # In Tableau, a categorical color field on a bar = stacked bars.
+    if series:
+        if chart_type == "clusteredBarChart":
+            chart_type = "stackedBarChart"
+        elif chart_type == "clusteredColumnChart":
+            chart_type = "stackedColumnChart"
 
     return {
         "category": category,
         "values": values,
         "series": series,
+        "chart_type": chart_type,  # may be upgraded to stacked
     }
 
 
@@ -803,6 +818,8 @@ def _build_page_from_dashboard(dashboard, worksheets_by_name, profile_col_names,
         data_roles = _classify_fields_for_chart(
             ws, chart_type, profile_col_names, col_types
         )
+        # _classify_fields_for_chart may upgrade chart_type (e.g. clustered → stacked)
+        chart_type = data_roles.pop("chart_type", chart_type)
 
         # Position: look up from zones by exact name, then case-insensitive
         pos = pbi_positions.get(ws_name)
@@ -872,6 +889,7 @@ def _build_page_for_orphan_worksheets(worksheets, profile_col_names,
         data_roles = _classify_fields_for_chart(
             ws, chart_type, profile_col_names, col_types
         )
+        chart_type = data_roles.pop("chart_type", chart_type)
 
         config = {
             "visualType": chart_type,

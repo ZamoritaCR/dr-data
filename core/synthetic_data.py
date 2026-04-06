@@ -25,12 +25,20 @@ _DIMENSION_POOLS = {
     "city": ["New York", "Los Angeles", "Chicago", "Houston", "Phoenix",
              "Philadelphia", "San Antonio", "San Diego", "Dallas", "Austin"],
     "country": ["United States", "Canada", "United Kingdom", "Germany", "France"],
+    "branch": ["Branch Alpha", "Branch Beta", "Branch Gamma", "Branch Delta",
+               "Branch Epsilon", "Branch Zeta", "Branch Eta", "Branch Theta",
+               "Branch Iota", "Branch Kappa"],
+    "store": ["Store A", "Store B", "Store C", "Store D", "Store E",
+              "Store F", "Store G", "Store H"],
+    "office": ["Head Office", "Regional Office North", "Regional Office South",
+               "East Office", "West Office", "Central Office"],
     "category": ["Technology", "Furniture", "Office Supplies"],
     "sub-category": ["Phones", "Chairs", "Storage", "Tables", "Accessories",
                      "Copiers", "Bookcases", "Appliances", "Binders", "Paper"],
     "segment": ["Consumer", "Corporate", "Home Office"],
     "ship mode": ["Standard Class", "Second Class", "First Class", "Same Day"],
     "status": ["Won", "Lost", "Open", "Pending", "Closed"],
+    "salestatus": ["Sold", "Reserved", "Available", "Cancelled", "Pending"],
     "stage": ["Lead", "Qualified", "Proposal", "Negotiation", "Closed Won", "Closed Lost"],
     "priority": ["Low", "Medium", "High", "Critical"],
     "department": ["Sales", "Marketing", "Engineering", "Finance", "Operations"],
@@ -41,6 +49,11 @@ _DIMENSION_POOLS = {
     "year": ["2022", "2023", "2024", "2025"],
     "type": ["Type A", "Type B", "Type C"],
     "channel": ["Direct", "Online", "Partner", "Retail"],
+    "saleschannel": ["Direct", "Online", "Dealer", "Distributor", "Partner"],
+    "paymentmethod": ["Cash", "Credit Card", "Debit Card", "Bank Transfer", "Installment"],
+    "customersegment": ["Individual", "SME", "Corporate", "Government", "Education"],
+    "carmodel": ["Model A", "Model B", "Model C", "Model D", "Model E",
+                 "Model F", "Model G", "Model H", "Model X", "Model Y"],
 }
 
 _NAME_POOLS = {
@@ -156,13 +169,19 @@ def extract_schema_from_tableau(tableau_spec: dict) -> List[dict]:
     columns = {}  # name -> {datatype, role, source}
 
     # 1. Explicit columns from datasources
+    # IMPORTANT: Use RAW column name (col["name"]) as the primary key, NOT caption.
+    # The Tableau shelf expressions always reference the RAW name (e.g. sum:NetSales:qk).
+    # The TMDL and CSV must use the same raw names so Power BI field refs resolve.
     for ds in tableau_spec.get("datasources", []):
         for col in ds.get("columns", []):
-            raw_name = col.get("caption") or col.get("name", "")
-            # Skip internal Tableau fields
-            if raw_name.startswith(":") or raw_name.startswith("["):
+            raw_name = col.get("name", "") or col.get("caption", "")
+            # Skip internal Tableau fields (start with [ or : indicates internal ref)
+            if not raw_name or raw_name.startswith(":") or raw_name.startswith("["):
                 continue
-            if not raw_name or raw_name == "Number of Records":
+            # Skip Tableau-generated internal object ID columns
+            if "__tableau_internal_object_id__" in raw_name:
+                continue
+            if raw_name == "Number of Records":
                 continue
 
             name = _clean_field_name(raw_name)

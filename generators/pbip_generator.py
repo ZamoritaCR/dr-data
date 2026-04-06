@@ -508,18 +508,24 @@ class PBIPGenerator:
         if dashboard_spec is None:
             dashboard_spec = {}
 
-        # Pre-compute Tableau zone positions if available
-        tableau_positions = {}
+        # Pre-build per-page zone position lookups from tableau_dashboards.
+        # Each section (page) corresponds to one dashboard in order.
+        # Positions are computed per-page so pages with canvas=0 fall back gracefully.
         tableau_dashboards = dashboard_spec.get("tableau_dashboards", [])
-        if tableau_dashboards:
-            from core.design_translator import translate_positions
-            db = tableau_dashboards[0]  # primary dashboard
+        per_page_positions = []  # list of dicts (may be empty for pages with no valid zones)
+        for db in tableau_dashboards:
+            positions = {}
             zones = db.get("zones", [])
             canvas = db.get("canvas", {})
             if zones and canvas.get("width") and canvas.get("height"):
-                pbi_positions = translate_positions(zones, canvas)
-                for p in pbi_positions:
-                    tableau_positions[p["name"]] = p
+                try:
+                    from core.design_translator import translate_positions
+                    pbi_pos = translate_positions(zones, canvas)
+                    for p in pbi_pos:
+                        positions[p["name"]] = p
+                except Exception:
+                    pass
+            per_page_positions.append(positions)
 
         # Pre-compute worksheet designs for visual formatting
         ws_designs = dashboard_spec.get("worksheet_designs", {})
@@ -549,12 +555,13 @@ class PBIPGenerator:
             containers = list(raw.get("visualContainers", []))
 
             # --- Layout pass ---
-            # If Tableau zone positions are available, apply them by matching
-            # zone names to visual titles. Otherwise use deterministic grid.
+            # Use per-page zone positions (matched by dashboard index).
+            # Fall back to deterministic grid when positions are not available.
             applied_tableau_layout = False
-            if tableau_positions:
+            page_positions = per_page_positions[idx] if idx < len(per_page_positions) else {}
+            if page_positions:
                 applied_tableau_layout = self._apply_tableau_positions(
-                    containers, tableau_positions
+                    containers, page_positions
                 )
 
             if not applied_tableau_layout:
@@ -664,13 +671,25 @@ class PBIPGenerator:
         else:
             cfg_obj = raw_cfg
 
-        # Chart type: prefer Tableau-translated type over GPT-4 guess
+        # Chart type: prefer Tableau-translated type over GPT-4 guess,
+        # but do NOT let a generic "automatic" mark override an already-correct
+        # stacked/upgraded type that direct_mapper set via dataRoles["chart_type"].
         tableau_mark = cfg_obj.get("tableau_mark_type", "")
+        cfg_visual_type = cfg_obj.get("visualType", "card")
         if tableau_mark:
             from core.design_translator import translate_chart_type
-            visual_type = translate_chart_type(tableau_mark)
+            translated = translate_chart_type(tableau_mark)
+            # If the config already carries a more specific (stacked) type,
+            # keep it — "automatic" → clusteredXxx should not win.
+            stacked_types = {"stackedColumnChart", "stackedBarChart",
+                             "hundredPercentStackedBarChart",
+                             "hundredPercentStackedColumnChart"}
+            if cfg_visual_type in stacked_types:
+                visual_type = cfg_visual_type
+            else:
+                visual_type = translated
         else:
-            visual_type = cfg_obj.get("visualType", "card")
+            visual_type = cfg_visual_type
 
         title_text = cfg_obj.get("title", "")
         data_roles = cfg_obj.get("dataRoles", {})

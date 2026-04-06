@@ -125,21 +125,18 @@ class PBIPGenerator:
             self._safe_remove(project_dir)
         project_dir.mkdir(parents=True, exist_ok=True)
 
-        # If a real DataFrame is available and no usable data_file_path exists,
-        # write the data as Data.csv inside the project so PBI Desktop can load it.
-        _needs_csv = (
-            dataframe is not None
-            and (
-                not data_file_path
-                or str(data_file_path).lower().endswith((".twbx", ".twb"))
-            )
-        )
-        if _needs_csv:
+        # If a DataFrame is available, always embed it as Data.csv inside the
+        # project dir and use a bare filename in the M query. Server absolute
+        # paths (Linux /home/...) are not accessible on the user's Windows
+        # machine — relative filename is the only portable option.
+        if dataframe is not None:
             table_nm = data_profile.get("table_name", "Data")
             csv_filename = f"{table_nm}.csv"
             csv_path = project_dir / csv_filename
             dataframe.to_csv(csv_path, index=False, encoding="utf-8-sig")
-            data_file_path = str(csv_path)
+            # Use bare filename so M query is File.Contents("Data.csv") —
+            # portable on any machine without path patching.
+            data_file_path = csv_filename
             print(f"    [CSV] Bundled {len(dataframe)} rows → {csv_filename}")
 
         # Create folder structure inside the clean project directory
@@ -1578,12 +1575,18 @@ class PBIPGenerator:
     def _windows_path_for_m(data_file_path, filename):
         """Return a valid Windows absolute path for PBI M expressions.
 
+        - Bare filename (no directory): return as-is — CSV is bundled alongside
+          the report, File.Contents("Data.csv") is portable on any machine.
         - On Windows with a real local path: use as-is (resolved).
         - On Linux / temp paths / Streamlit Cloud: use C:\\PBI_Data\\{filename}
           so PBI Desktop can open the file (user updates path once).
         """
         import sys
         raw = str(data_file_path)
+
+        # Bare filename — bundled CSV, use relative reference
+        if raw == filename:
+            return filename
 
         if sys.platform == "win32":
             try:

@@ -526,6 +526,9 @@ class PBIPGenerator:
         # Pre-compute worksheet designs for visual formatting
         ws_designs = dashboard_spec.get("worksheet_designs", {})
 
+        # Pre-compute Tableau chart type mapping (worksheet name -> mark type)
+        ws_chart_types = dashboard_spec.get("worksheet_chart_types", {})
+
         page_ids = []
         audit_totals = {"valid": 0, "fixed": 0, "removed": 0}
 
@@ -558,6 +561,27 @@ class PBIPGenerator:
 
             if not applied_tableau_layout:
                 containers = self._deterministic_layout(containers)
+
+            # Inject Tableau mark types into visual containers
+            if ws_chart_types:
+                for vc in containers:
+                    raw_cfg = vc.get("config", "{}")
+                    if isinstance(raw_cfg, str):
+                        try:
+                            cfg_obj = json.loads(raw_cfg)
+                        except (json.JSONDecodeError, TypeError):
+                            cfg_obj = {}
+                    else:
+                        cfg_obj = raw_cfg if isinstance(raw_cfg, dict) else {}
+                    # Match by title or name to worksheet chart type
+                    title = cfg_obj.get("title", "").lower().strip()
+                    ws_name = cfg_obj.get("worksheet_name", "").lower().strip()
+                    for ws, ct in ws_chart_types.items():
+                        ws_lower = ws.lower().strip()
+                        if ws_lower in (title, ws_name) or ws_lower in title:
+                            cfg_obj["tableau_mark_type"] = ct
+                            vc["config"] = cfg_obj
+                            break
 
             # Visuals
             visuals_root = page_dir / "visuals"

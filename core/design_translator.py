@@ -329,8 +329,8 @@ def translate_chart_type(tableau_mark_type):
         PBI visual type string.
     """
     if not tableau_mark_type or not isinstance(tableau_mark_type, str):
-        return "clusteredBarChart"
-    return _CHART_TYPE_MAP.get(tableau_mark_type.lower().strip(), "clusteredBarChart")
+        return "clusteredColumnChart"
+    return _CHART_TYPE_MAP.get(tableau_mark_type.lower().strip(), "clusteredColumnChart")
 
 
 def build_pbi_theme(tableau_design, dashboard_title="Dashboard"):

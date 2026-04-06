@@ -271,13 +271,13 @@ class TestTranslateChartType:
         assert translate_chart_type(tableau) == expected
 
     def test_unknown_type_default(self):
-        assert translate_chart_type("unknown_type_xyz") == "clusteredBarChart"
+        assert translate_chart_type("unknown_type_xyz") == "clusteredColumnChart"
 
     def test_none_input(self):
-        assert translate_chart_type(None) == "clusteredBarChart"
+        assert translate_chart_type(None) == "clusteredColumnChart"
 
     def test_empty_string(self):
-        assert translate_chart_type("") == "clusteredBarChart"
+        assert translate_chart_type("") == "clusteredColumnChart"
 
     def test_case_insensitive(self):
         assert translate_chart_type("Bar") == "clusteredBarChart"

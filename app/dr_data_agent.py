@@ -3093,10 +3093,14 @@ Output ONLY valid JSON. No markdown. No commentary."""
                 # Attach design metadata for visual replication
                 dashboard_spec["design"] = self.tableau_spec.get("design", {})
                 ws_designs = {}
+                ws_chart_types = {}
                 for ws in self.tableau_spec.get("worksheets", []):
                     if ws.get("design"):
                         ws_designs[ws["name"]] = ws["design"]
+                    if ws.get("chart_type"):
+                        ws_chart_types[ws["name"]] = ws["chart_type"]
                 dashboard_spec["worksheet_designs"] = ws_designs
+                dashboard_spec["worksheet_chart_types"] = ws_chart_types
             else:
                 # --- FRESH DESIGN PATH (CSV / Excel) ---
                 self._report_progress(

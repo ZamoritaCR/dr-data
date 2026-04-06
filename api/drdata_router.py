@@ -33,7 +33,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+
 import anthropic
+import google.generativeai as genai
 import pandas as pd
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
@@ -61,7 +65,15 @@ SUPPORTED_EXTENSIONS = {
     "pdf", "docx", "pptx", "parquet", "tsv",
 }
 
+# -- LLM Config --
+LLM_PROVIDER = "gemini"  # "gemini" or "claude"
+GEMINI_MODEL = "gemini-2.5-flash"
 CLAUDE_MODEL = "claude-opus-4-20250514"
+
+# Init Gemini
+_google_api_key = os.environ.get("GOOGLE_API_KEY", "")
+if _google_api_key:
+    genai.configure(api_key=_google_api_key)
 
 
 def _prune_jobs():
@@ -95,6 +107,28 @@ def _get_claude() -> anthropic.Anthropic:
     if not api_key:
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
     return anthropic.Anthropic(api_key=api_key)
+
+
+def _get_gemini():
+    if not _google_api_key:
+        raise HTTPException(status_code=503, detail="GOOGLE_API_KEY not configured")
+    return genai.GenerativeModel(GEMINI_MODEL)
+
+
+def _llm_generate(prompt: str, max_tokens: int = 2000) -> str:
+    """Generate text with the configured LLM provider."""
+    if LLM_PROVIDER == "gemini":
+        model = _get_gemini()
+        resp = model.generate_content(prompt)
+        return resp.text
+    else:
+        client = _get_claude()
+        msg = client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return msg.content[0].text
 
 
 # ============================================================
@@ -324,8 +358,9 @@ async def analyze(job_id: str, req: AnalyzeRequest = AnalyzeRequest()):
         else:
             analysis["error"] = f"No analyzer for .{ext}"
 
-        # -- Claude Opus proposal --
-        _log(job, "Generating dashboard proposal with Claude Opus...")
+        # -- LLM proposal --
+        llm_label = "Gemini 2.5 Flash" if LLM_PROVIDER == "gemini" else "Claude Opus"
+        _log(job, f"Generating dashboard proposal with {llm_label}...")
         job["stage"] = "proposing"
         job["progress_pct"] = 50
 
@@ -335,39 +370,33 @@ async def analyze(job_id: str, req: AnalyzeRequest = AnalyzeRequest()):
             indent=2,
         )[:8000]
 
-        client = _get_claude()
-        msg = client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=2000,
-            messages=[{
-                "role": "user",
-                "content": (
-                    "You are Dr. Data, an expert BI analyst AI.\n"
-                    "Analyze this data schema and propose a Power BI dashboard.\n\n"
-                    f"File type: {ext}\n"
-                    f"Schema/Content summary:\n{summary}\n\n"
-                    "Return ONLY valid JSON with this exact structure:\n"
-                    "{\n"
-                    '  "domain": "what this data is about (1 sentence)",\n'
-                    '  "business_questions": ["question 1", "question 2", "question 3"],\n'
-                    '  "proposed_visuals": [\n'
-                    '    {"type": "lineChart|barChart|scatterChart|pieChart|card|treemap|filledMap|matrix", '
-                    '"title": "...", "x_field": "...", "y_field": "...", "color_field": "...", "why": "..."}\n'
-                    "  ],\n"
-                    '  "data_model": {\n'
-                    '    "fact_table": "...",\n'
-                    '    "dimensions": ["..."],\n'
-                    '    "key_measures": [{"name": "...", "dax": "...", "description": "..."}],\n'
-                    '    "relationships": [{"from": "...", "to": "...", "type": "many-to-one"}]\n'
-                    "  },\n"
-                    '  "needs_synthetic_data": true/false,\n'
-                    '  "layout_suggestion": "describe the layout"\n'
-                    "}"
-                ),
-            }],
+        prompt = (
+            "You are Dr. Data, an expert BI analyst AI.\n"
+            "Analyze this data schema and propose a Power BI dashboard.\n\n"
+            f"File type: {ext}\n"
+            f"Schema/Content summary:\n{summary}\n\n"
+            "Return ONLY valid JSON with this exact structure:\n"
+            "{\n"
+            '  "domain": "what this data is about (1 sentence)",\n'
+            '  "business_questions": ["question 1", "question 2", "question 3"],\n'
+            '  "proposed_visuals": [\n'
+            '    {"type": "lineChart|barChart|scatterChart|pieChart|card|treemap|filledMap|matrix", '
+            '"title": "...", "x_field": "...", "y_field": "...", "color_field": "...", "why": "..."}\n'
+            "  ],\n"
+            '  "data_model": {\n'
+            '    "fact_table": "...",\n'
+            '    "dimensions": ["..."],\n'
+            '    "key_measures": [{"name": "...", "dax": "...", "description": "..."}],\n'
+            '    "relationships": [{"from": "...", "to": "...", "type": "many-to-one"}]\n'
+            "  },\n"
+            '  "needs_synthetic_data": true/false,\n'
+            '  "layout_suggestion": "describe the layout"\n'
+            "}"
         )
 
-        proposal_text = msg.content[0].text
+        proposal_text = await asyncio.get_event_loop().run_in_executor(
+            None, _llm_generate, prompt
+        )
         # Parse JSON from response (handle markdown code fences)
         proposal_text = proposal_text.strip()
         if proposal_text.startswith("```"):
@@ -434,26 +463,18 @@ async def generate_synthetic(job_id: str, req: SyntheticRequest = SyntheticReque
     rows_count = min(req.rows, 10000)
 
     if req.mode == "deep":
-        # Claude generates coherent business data
-        client = _get_claude()
-        msg = client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=4096,
-            messages=[{
-                "role": "user",
-                "content": (
-                    f"Generate exactly {rows_count} rows of realistic CSV data with these columns:\n"
-                    f"{', '.join(columns)}\n\n"
-                    f"Domain: {job.get('proposal', {}).get('domain', 'business data')}\n\n"
-                    "Requirements:\n"
-                    "- Data should tell a coherent business story with trends\n"
-                    "- Include some outliers and null values for realism\n"
-                    "- Use realistic names, dates, and values\n"
-                    "- Return ONLY the CSV with header row, no explanation\n"
-                ),
-            }],
+        # LLM generates coherent business data
+        synth_prompt = (
+            f"Generate exactly {rows_count} rows of realistic CSV data with these columns:\n"
+            f"{', '.join(columns)}\n\n"
+            f"Domain: {job.get('proposal', {}).get('domain', 'business data')}\n\n"
+            "Requirements:\n"
+            "- Data should tell a coherent business story with trends\n"
+            "- Include some outliers and null values for realism\n"
+            "- Use realistic names, dates, and values\n"
+            "- Return ONLY the CSV with header row, no explanation\n"
         )
-        csv_text = msg.content[0].text.strip()
+        csv_text = _llm_generate(synth_prompt, max_tokens=4096).strip()
         if csv_text.startswith("```"):
             csv_text = csv_text.split("\n", 1)[1]
             if csv_text.endswith("```"):
@@ -624,14 +645,253 @@ async def build(job_id: str, req: BuildRequest):
             ],
         }
 
-        # Generate PBIP config with Claude
-        _log(job, "Claude generating Power BI layout and TMDL model...")
+        # --- DIRECT TABLEAU REPLICA PATH ---
+        # When we have a Tableau spec with dashboards, use the direct mapper
+        # for deterministic visual structure (no AI interpretation).
+        report_structure = analysis.get("report_structure")
+        if report_structure and report_structure.get("dashboards"):
+            _log(job, "Direct Tableau replica: mapping worksheets, zones, "
+                 "chart types deterministically (no AI for layout)...")
+            job["progress_pct"] = 50
+            job["stage"] = "generating_pbip"
+
+            from core.direct_mapper import build_pbip_config_from_tableau
+            from core.data_analyzer import DataAnalyzer
+            pbi_analyzer = DataAnalyzer()
+            pbi_profile = pbi_analyzer.analyze(df, table_name=project_name)
+
+            pbip_config, dashboard_spec = build_pbip_config_from_tableau(
+                report_structure, pbi_profile, project_name
+            )
+
+            # Attach design for theme generation
+            dashboard_spec["design"] = report_structure.get("design", {})
+            dashboard_spec["dashboard_title"] = project_name
+
+            sections = pbip_config.get("report_layout", {}).get("sections", [])
+            total_vc = sum(len(s.get("visualContainers", [])) for s in sections)
+            _log(job, f"Direct layout: {len(sections)} pages, {total_vc} visuals")
+
+            # Write PBIP
+            _log(job, "Writing PBIP project files...")
+            job["progress_pct"] = 70
+
+            out_dir = OUTPUT_DIR / job_id
+            out_dir.mkdir(parents=True, exist_ok=True)
+
+            from generators.pbip_generator import PBIPGenerator
+            generator = PBIPGenerator(str(out_dir))
+            gen_result = generator.generate(
+                config=pbip_config,
+                data_profile=pbi_profile,
+                dashboard_spec=dashboard_spec,
+                data_file_path=df_path,
+            )
+
+            result_path = gen_result["path"]
+
+            # Copy data file into project
+            if df_path and os.path.isfile(df_path):
+                dst = os.path.join(result_path, os.path.basename(df_path))
+                if not os.path.exists(dst):
+                    shutil.copy2(df_path, dst)
+
+            # ZIP it
+            _log(job, "Packaging ZIP...")
+            job["progress_pct"] = 90
+            job["stage"] = "packaging"
+            zip_path = shutil.make_archive(str(out_dir / project_name), "zip", result_path)
+
+            job["output_zip"] = zip_path
+            job["build_result"] = {
+                "project_name": project_name,
+                "path": result_path,
+                "zip_path": zip_path,
+                "file_count": gen_result.get("file_count", 0),
+                "pages": len(sections),
+                "visuals": total_vc,
+                "method": "direct_tableau_mapper",
+            }
+            job["status"] = "done"
+            job["stage"] = "done"
+            job["progress_pct"] = 100
+            _log(job, f"Power BI project ready: {gen_result.get('file_count', 0)} files, "
+                 f"{total_vc} visuals (direct Tableau replica)")
+
+            return {
+                "job_id": job_id,
+                "status": "done",
+                "build": job["build_result"],
+                "download_url": f"/drdata/download/{job_id}",
+            }
+
+        # --- FALLBACK: AI-assisted build for non-Tableau files ---
+        _log(job, "Generating Power BI layout and TMDL model...")
         job["progress_pct"] = 50
         job["stage"] = "generating_pbip"
 
-        from core.openai_engine import OpenAIEngine
-        engine = OpenAIEngine()
-        pbip_config = engine.generate_pbip_config(dashboard_spec, data_profile)
+        # Map proposal visual types to PBI visual types
+        _VIS_TYPE_MAP = {
+            "barChart": "clusteredBarChart", "bar": "clusteredBarChart",
+            "lineChart": "lineChart", "line": "lineChart",
+            "pieChart": "pieChart", "pie": "pieChart",
+            "donutChart": "pieChart", "donut": "pieChart",
+            "scatterChart": "scatterChart", "scatter": "scatterChart",
+            "card": "card", "kpi": "card",
+            "treemap": "treemap", "filledMap": "filledMap", "map": "filledMap",
+            "matrix": "pivotTable", "table": "tableEx",
+        }
+
+        # Collect all valid field names (columns from analysis + measure names)
+        all_columns = set(analysis.get("columns", []))
+        measure_names_set = {m["name"] for m in measures}
+        # Map measure names to find matches for cards
+        measure_by_lower = {m["name"].lower(): m["name"] for m in measures}
+
+        # Build visual containers directly from proposal visuals
+        canvas_w, canvas_h = 1280, 720
+        visual_containers = []
+        # Layout: cards in top row, charts below
+        cards = [v for v in visuals if v.get("type") in ("card", "kpi")]
+        charts = [v for v in visuals if v.get("type") not in ("card", "kpi")]
+
+        # Place cards across top row
+        card_w = min(250, (canvas_w - 10) // max(len(cards), 1) - 10) if cards else 200
+        card_h = 120
+        for ci, v in enumerate(cards):
+            pbi_type = "card"
+            x = 10 + ci * (card_w + 10)
+            y = 10
+
+            # For cards: find the measure or column to display
+            data_roles = {}
+            yf = v.get("y_field") or ""
+            title = v.get("title", "")
+
+            # Try to match title to a measure name
+            matched_measure = None
+            title_lower = title.lower()
+            for mn_lower, mn in measure_by_lower.items():
+                if mn_lower in title_lower or title_lower in mn_lower:
+                    matched_measure = mn
+                    break
+
+            if matched_measure:
+                data_roles["values"] = [matched_measure]
+            elif yf and (yf in all_columns or yf in measure_names_set):
+                data_roles["values"] = [yf]
+            elif yf:
+                for col in all_columns:
+                    if col.lower() == yf.lower():
+                        data_roles["values"] = [col]
+                        break
+
+            config_obj = {
+                "visualType": pbi_type,
+                "title": title,
+                "dataRoles": data_roles,
+            }
+            visual_containers.append({
+                "x": x, "y": y, "width": card_w, "height": card_h,
+                "config": json.dumps(config_obj),
+            })
+
+        def _clean_field(raw, valid_set):
+            """Clean a field reference from LLM output.
+            Handles: 'Sales, Profit' -> ['Sales', 'Profit']
+                     'Category (Columns)' -> ['Category']
+                     'SUM(Sales)' -> ['Sales']
+            Returns list of valid field names."""
+            if not raw:
+                return []
+            import re
+            # Strip aggregation wrappers like SUM(...), AVG(...)
+            raw = re.sub(r'(?:SUM|AVG|COUNT|MIN|MAX)\(([^)]+)\)', r'\1', raw)
+            # Split on comma
+            parts = [p.strip() for p in raw.split(',')]
+            result = []
+            for p in parts:
+                # Strip parenthetical annotations like "(Columns)", "(Rows)", "(Values)"
+                p = re.sub(r'\s*\([^)]*\)\s*$', '', p).strip()
+                if p in valid_set:
+                    result.append(p)
+                else:
+                    # Try case-insensitive match
+                    for v in valid_set:
+                        if v.lower() == p.lower():
+                            result.append(v)
+                            break
+            return result
+
+        # Place charts in grid below cards
+        chart_top = card_h + 30 if cards else 10
+        cols_per_row = min(3, max(1, len(charts)))
+        margin = 10
+        chart_w = (canvas_w - margin * (cols_per_row + 1)) // cols_per_row if cols_per_row else 400
+        chart_h = 300
+
+        for ci, v in enumerate(charts):
+            pbi_type = _VIS_TYPE_MAP.get(v.get("type", ""), "clusteredBarChart")
+            row = ci // cols_per_row
+            col = ci % cols_per_row
+            x = margin + col * (chart_w + margin)
+            y = chart_top + row * (chart_h + margin)
+
+            valid_set = all_columns | measure_names_set
+            x_fields = _clean_field(v.get("x_field") or "", valid_set)
+            y_fields = _clean_field(v.get("y_field") or "", valid_set)
+            c_fields = _clean_field(v.get("color_field") or "", valid_set)
+
+            data_roles = {}
+            if pbi_type in ("pivotTable", "tableEx"):
+                all_f = x_fields + y_fields + c_fields
+                if all_f:
+                    data_roles["values"] = all_f
+            else:
+                if x_fields:
+                    data_roles["category"] = x_fields
+                if y_fields:
+                    data_roles["values"] = y_fields
+                if c_fields:
+                    data_roles["series"] = c_fields
+
+            config_obj = {
+                "visualType": pbi_type,
+                "title": v.get("title", ""),
+                "dataRoles": data_roles,
+            }
+
+            visual_containers.append({
+                "x": x, "y": y, "width": chart_w, "height": chart_h,
+                "config": json.dumps(config_obj),
+            })
+
+        # Build the report_layout that the PBIP generator expects
+        pbip_config = {
+            "report_layout": {
+                "sections": [{
+                    "displayName": "Page 1",
+                    "width": canvas_w,
+                    "height": canvas_h,
+                    "visualContainers": visual_containers,
+                }],
+            },
+            "tmdl_model": {},
+        }
+
+        # Still use OpenAI for TMDL model if available (measures, relationships)
+        try:
+            from core.openai_engine import OpenAIEngine
+            engine = OpenAIEngine()
+            full_config = await asyncio.get_event_loop().run_in_executor(
+                None, engine.generate_pbip_config, dashboard_spec, data_profile
+            )
+            # Take ONLY the tmdl_model from OpenAI, keep our visuals
+            if full_config.get("tmdl_model"):
+                pbip_config["tmdl_model"] = full_config["tmdl_model"]
+            _log(job, "TMDL model generated via OpenAI")
+        except Exception as e:
+            _log(job, f"OpenAI TMDL generation failed ({e}), using basic model", "warning")
 
         # Build PBIP
         _log(job, "Writing PBIP project files...")
@@ -943,20 +1203,25 @@ async def chat(req: ChatRequest):
 
     context_block = "\n\n".join(context_parts) if context_parts else "No job context loaded."
 
+    llm_name = GEMINI_MODEL if LLM_PROVIDER == "gemini" else CLAUDE_MODEL
     system_prompt = (
-        "You are Dr. Data -- the AI intelligence layer of the Dr. Data migration tool "
-        "built by The Art of the Possible (TAOP).\n\n"
-        "Your personality: Direct, expert, zero fluff. You think like a senior BI architect "
-        "who has migrated hundreds of Tableau workbooks to Power BI. You genuinely understand "
-        "the user's data and their specific job.\n\n"
+        "You are Dr. Data -- an AI-powered data engineering and BI migration advisor "
+        "built by The Art of the Possible (TAOP). You are powered by " + llm_name + ".\n\n"
+        "Your expertise: Tableau, Power BI, DAX, TMDL, data modeling, ETL, data quality, "
+        "SQL, Python, and enterprise BI architecture. You have migrated hundreds of Tableau "
+        "workbooks to Power BI.\n\n"
+        "Your personality: Direct, knowledgeable, conversational, helpful. You answer ANY "
+        "question the user asks -- whether it's about their specific migration job, general "
+        "BI concepts, your own architecture, or anything else. You are NOT restricted to "
+        "only migration topics. If someone asks what LLM you are, tell them honestly: "
+        "you are Dr. Data powered by " + llm_name + ".\n\n"
         f"Current job context:\n{context_block}\n\n"
-        "Rules:\n"
-        "- NEVER give canned or generic responses. Always reference the specific job, "
-        "specific fields, specific visuals.\n"
+        "Guidelines:\n"
+        "- When a job is loaded, reference the specific fields, visuals, and data.\n"
+        "- When no job is loaded, still be helpful and conversational.\n"
         "- If asked about a translation decision, explain exactly what you did and why.\n"
-        "- If something was flagged for review, explain the specific DAX limitation and the best fix.\n"
-        "- You have expert-level knowledge of Tableau, Power BI, DAX, TMDL, and data modeling.\n"
-        "- Be concise. Enterprise users don't want essays."
+        "- Be concise but not robotic. Sound like a real expert, not a template.\n"
+        "- Never refuse to answer a question by saying 'load a job first'."
     )
 
     messages = []
@@ -965,16 +1230,42 @@ async def chat(req: ChatRequest):
     messages.append({"role": "user", "content": req.message})
 
     async def stream():
-        client = _get_claude()
         try:
-            with client.messages.stream(
-                model=CLAUDE_MODEL,
-                max_tokens=2048,
-                system=system_prompt,
-                messages=messages,
-            ) as s:
-                for text in s.text_stream:
+            if LLM_PROVIDER == "gemini":
+                model = _get_gemini()
+                # Gemini uses a single content string with system instruction prepended
+                full_prompt = system_prompt + "\n\n"
+                for m in messages:
+                    role_label = "User" if m["role"] == "user" else "Assistant"
+                    full_prompt += f"{role_label}: {m['content']}\n\n"
+
+                def _gemini_stream():
+                    return model.generate_content(full_prompt, stream=True)
+
+                response = await asyncio.get_event_loop().run_in_executor(None, _gemini_stream)
+
+                # Gemini streaming: iterate chunks in a thread
+                def _iter_chunks(resp):
+                    chunks = []
+                    for chunk in resp:
+                        if chunk.text:
+                            chunks.append(chunk.text)
+                    return chunks
+
+                chunks = await asyncio.get_event_loop().run_in_executor(None, _iter_chunks, response)
+                for text in chunks:
                     yield f"data: {json.dumps({'type': 'token', 'text': text})}\n\n"
+            else:
+                client = _get_claude()
+                with client.messages.stream(
+                    model=CLAUDE_MODEL,
+                    max_tokens=2048,
+                    system=system_prompt,
+                    messages=messages,
+                ) as s:
+                    for text in s.text_stream:
+                        yield f"data: {json.dumps({'type': 'token', 'text': text})}\n\n"
+
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
         except Exception as e:
             logger.exception("Dr. Data chat error")
@@ -1024,10 +1315,13 @@ async def health():
     disk = _shutil.disk_usage("/tmp")
     disk_free_gb = round(disk.free / (1024**3), 1)
 
-    all_ok = all(v is True for v in checks.values()) and api_keys["anthropic"]
+    required_key = "google" if LLM_PROVIDER == "gemini" else "anthropic"
+    all_ok = all(v is True for v in checks.values()) and api_keys[required_key]
     return {
         "status": "ok" if all_ok else "degraded",
         "service": "dr-data-v2",
+        "llm_provider": LLM_PROVIDER,
+        "llm_model": GEMINI_MODEL if LLM_PROVIDER == "gemini" else CLAUDE_MODEL,
         "engines": checks,
         "api_keys": api_keys,
         "disk_free_gb": disk_free_gb,

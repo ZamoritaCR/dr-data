@@ -1050,11 +1050,38 @@ async def results(job_id: str):
                 "flagged": False,
             })
 
-    # Build quality report
+    # Build quality report -- multi-factor confidence scoring
     total_fields = len(analysis.get("columns", []))
     resolved = total_fields
     flagged_count = sum(1 for t in translations if t.get("flagged"))
-    conf_avg = round(sum(t["confidence"] for t in translations) / max(len(translations), 1))
+
+    # Factor 1: formula translation ratio (0-1)
+    formula_ratio = (len(translations) - flagged_count) / max(len(translations), 1)
+    # Factor 2: chart accuracy -- 1.0 if no "automatic" marks, 0.5 otherwise
+    ws_list = rs.get("worksheets", [])
+    has_automatic = any(
+        w.get("chart_type", w.get("mark_type", "")).lower() == "automatic"
+        for w in ws_list
+    )
+    chart_accuracy = 0.5 if has_automatic else 1.0
+    # Factor 3: field accuracy -- 1.0 if columns found, 0.6 if fallback
+    field_accuracy = 1.0 if total_fields > 0 else 0.6
+    # Factor 4: layout accuracy -- 1.0 if canvas dimensions parsed, 0.7 otherwise
+    dashboards = rs.get("dashboards", [])
+    has_canvas = any(
+        d.get("size", {}).get("width") or d.get("canvas", {}).get("width")
+        for d in dashboards
+    )
+    layout_accuracy = 1.0 if has_canvas else 0.7
+
+    # Weighted confidence: formula 40%, chart 30%, field 20%, layout 10%
+    raw_confidence = (
+        formula_ratio * 0.4
+        + chart_accuracy * 0.3
+        + field_accuracy * 0.2
+        + layout_accuracy * 0.1
+    )
+    conf_avg = max(10, min(100, round(raw_confidence * 100)))
 
     quality = {
         "overall": conf_avg,

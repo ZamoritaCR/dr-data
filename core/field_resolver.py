@@ -9,6 +9,7 @@ import re
 import os
 import shutil
 from rapidfuzz import fuzz, process
+from core.utils import remove_tableau_brackets
 
 
 class TableauFieldResolver:
@@ -283,7 +284,7 @@ class TableauFieldResolver:
                     continue
 
                 for col in ds.findall("column"):
-                    name = col.get("name", "").strip("[]")
+                    name = remove_tableau_brackets(col.get("name", ""))
                     caption = col.get("caption", "")
                     formula = ""
                     calc = col.find("calculation")

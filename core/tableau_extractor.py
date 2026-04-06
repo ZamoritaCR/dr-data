@@ -17,6 +17,8 @@ import re
 import defusedxml.ElementTree as ET
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Tuple
+
+from core.utils import remove_tableau_brackets
 from enum import Enum
 
 
@@ -288,7 +290,7 @@ def parse_column_instance(name_attr: str, column_attr: str = "",
                           derivation_attr: str = "", type_attr: str = "") -> ColumnRef:
     """Parse a Tableau column-instance element into a ColumnRef."""
     # Try parsing the encoded name like [sum:Sales:qk]
-    clean_name = name_attr.strip("[]")
+    clean_name = remove_tableau_brackets(name_attr)
     m = _DERIVATION_RE.match(clean_name)
 
     if m:
@@ -302,7 +304,7 @@ def parse_column_instance(name_attr: str, column_attr: str = "",
         )
 
     # Fallback: use column attribute and derivation
-    col_name = column_attr.strip("[]") if column_attr else clean_name
+    col_name = remove_tableau_brackets(column_attr) if column_attr else clean_name
     return ColumnRef(
         name=col_name,
         raw_ref=name_attr,
@@ -417,7 +419,7 @@ def _extract_datasources(root) -> List[DatasourceSpec]:
 
         # Columns
         for col_el in ds_el.findall("column"):
-            col_name = col_el.get("caption", "") or col_el.get("name", "").strip("[]")
+            col_name = remove_tableau_brackets(col_el.get("caption", "") or col_el.get("name", ""))
             if not col_name or col_name.startswith(":"):
                 continue
             ds.columns.append(ColumnRef(
@@ -545,7 +547,7 @@ def _extract_worksheets(root) -> List[VisualSpec]:
 
             for col_el in dep.findall("column"):
                 cr = ColumnRef(
-                    name=col_el.get("caption", "") or col_el.get("name", "").strip("[]"),
+                    name=remove_tableau_brackets(col_el.get("caption", "") or col_el.get("name", "")),
                     raw_ref=col_el.get("name", ""),
                     datatype=col_el.get("datatype", "string"),
                     role=col_el.get("role", "dimension"),
@@ -573,7 +575,7 @@ def _extract_worksheets(root) -> List[VisualSpec]:
                 col_attr = enc.get("column", "")
                 if not col_attr:
                     continue
-                ref = parse_column_instance(col_attr.split(".")[-1].strip("[]"))
+                ref = parse_column_instance(remove_tableau_brackets(col_attr.split(".")[-1]))
 
                 tag = enc.tag.lower()
                 if tag == "color":
@@ -618,8 +620,8 @@ def _extract_worksheets(root) -> List[VisualSpec]:
             dim_ref = sort_el.get("dimension-to-sort", "")
             meas_ref = sort_el.get("measure-to-sort-by", "")
             vs.sorts.append(SortSpec(
-                dimension=dim_ref.split(".")[-1].strip("[]") if dim_ref else "",
-                measure=meas_ref.split(".")[-1].strip("[]") if meas_ref else "",
+                dimension=remove_tableau_brackets(dim_ref.split(".")[-1]) if dim_ref else "",
+                measure=remove_tableau_brackets(meas_ref.split(".")[-1]) if meas_ref else "",
                 direction=sort_el.get("direction", "DESC"),
                 shelf=sort_el.get("shelf", ""),
             ))

@@ -17,6 +17,8 @@ import sys
 import pandas as pd
 import zipfile
 import tempfile
+
+from core.utils import remove_tableau_brackets
 import defusedxml.ElementTree as ET
 
 sys.path.insert(0, str(os.path.join(os.path.dirname(__file__), "..")))
@@ -435,7 +437,7 @@ class MultiFileSession:
                 # Columns
                 for col in ds.findall("column"):
                     col_info = {
-                        "name": col.get("name", "").strip("[]"),
+                        "name": remove_tableau_brackets(col.get("name", "")),
                         "caption": col.get("caption", ""),
                         "datatype": col.get("datatype", ""),
                         "role": col.get("role", ""),
@@ -655,7 +657,7 @@ class MultiFileSession:
             # Match by column overlap
             ds_cols = set()
             for col in ds.get("columns", []):
-                ds_cols.add(col.get("name", "").lower().strip("[]"))
+                ds_cols.add(remove_tableau_brackets(col.get("name", "")).lower())
                 ds_cols.add(col.get("caption", "").lower())
 
             if ds_cols and df_cols:

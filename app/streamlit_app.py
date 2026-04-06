@@ -52,6 +52,25 @@ from app.chatbots import (
 from app.ui_constants import GLOBAL_CSS, tab_header, badge
 
 
+def _reset_session_state():
+    """Targeted session reset -- clears known app keys while preserving widget state.
+
+    This is safer than nuking all keys, which breaks Streamlit's widget
+    tracking and causes uploader_key, theme, and user_prefs to be lost.
+    """
+    _CLEAR_KEYS = {
+        "agent", "dataframe", "messages", "chat_history", "data_profile",
+        "tableau_spec", "dashboard_spec", "snowflake", "sf_tables",
+        "uploaded_files", "multi_session", "audit_engine", "dq_engine",
+        "dq_results", "trust_scores", "compliance_summary", "stewardship_stats",
+        "copdq_result", "incident_stats", "catalog", "rules_engine",
+        "dq_history", "rationalization_engine", "generated_files",
+    }
+    for key in list(st.session_state.keys()):
+        if key in _CLEAR_KEYS:
+            del st.session_state[key]
+
+
 def _safe_html(html_str, fallback_text=""):
     """Render HTML via st.markdown with fallback to st.write on error."""
     try:
@@ -642,10 +661,7 @@ with st.sidebar:
     # If uploader is empty but we have tracked files, full session wipe
     if not uploaded_files_list and st.session_state.uploaded_files:
         next_key = st.session_state.get("uploader_key", 0) + 1
-        _preserve = {"uploader_key", "theme", "user_prefs"}
-        for key in list(st.session_state.keys()):
-            if key not in _preserve:
-                del st.session_state[key]
+        _reset_session_state()
         st.session_state.uploader_key = next_key
         st.rerun()
 
@@ -912,19 +928,13 @@ with st.sidebar:
             # retains its files -- they'll be re-ingested into a fresh
             # MultiFileSession since uploaded_files dict is cleared.
             cur_key = st.session_state.get("uploader_key", 0)
-            _preserve = {"uploader_key", "theme", "user_prefs"}
-            for key in list(st.session_state.keys()):
-                if key not in _preserve:
-                    del st.session_state[key]
+            _reset_session_state()
             st.session_state.uploader_key = cur_key
             st.rerun()
     with col_new:
         if st.button("New Session", width="stretch"):
             next_key = st.session_state.get("uploader_key", 0) + 1
-            _preserve = {"uploader_key", "theme", "user_prefs"}
-            for key in list(st.session_state.keys()):
-                if key not in _preserve:
-                    del st.session_state[key]
+            _reset_session_state()
             st.session_state.uploader_key = next_key
             st.rerun()
 

@@ -1,3 +1,4 @@
+from core.utils import remove_tableau_brackets
 """
 Sprint 3 -- Tableau Formula to DAX Transpiler.
 
@@ -213,7 +214,7 @@ class DAXEmitter(Transformer):
 
     def _resolve_field(self, field_name):
         """Resolve a Tableau field name to a DAX field reference."""
-        clean = field_name.strip("[]")
+        clean = remove_tableau_brackets(field_name)
         # Check resolution map
         if self.field_map:
             entry = self.field_map.get(field_name) or self.field_map.get(clean)
@@ -657,7 +658,7 @@ class TableauFormulaTranspiler:
         if lod_match:
             dims_raw = lod_match.group(1)
             agg = lod_match.group(2)
-            dims = [d.strip().strip("[]") for d in dims_raw.split(",")]
+            dims = [remove_tableau_brackets(d.strip()) for d in dims_raw.split(",")]
             dim_refs = ", ".join(f"{self.table_name}[{d}]" for d in dims)
             replacement = f"CALCULATE({agg}, ALLEXCEPT({self.table_name}, {dim_refs}))"
             dax = dax[:lod_match.start()] + replacement + dax[lod_match.end():]
@@ -670,7 +671,7 @@ class TableauFormulaTranspiler:
         if lod_excl:
             dims_raw = lod_excl.group(1)
             agg = lod_excl.group(2)
-            dims = [d.strip().strip("[]") for d in dims_raw.split(",")]
+            dims = [remove_tableau_brackets(d.strip()) for d in dims_raw.split(",")]
             dim_refs = ", ".join(f"ALL({self.table_name}[{d}])" for d in dims)
             replacement = f"CALCULATE({agg}, {dim_refs})"
             dax = dax[:lod_excl.start()] + replacement + dax[lod_excl.end():]

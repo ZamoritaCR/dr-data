@@ -1525,24 +1525,33 @@ class PBIPGenerator:
             # datetime / other — wrap as text
             return '"' + str(v).replace('"', '""') + '"'
 
-        rows = []
+        row_strings = []
         for _, row in df[col_names].iterrows():
             cells = ", ".join(
                 _m_value(row[n], t) for n, t in zip(col_names, col_types)
             )
-            rows.append(f"        {{{cells}}}")
+            row_strings.append(f"{{{cells}}}")
 
-        rows_block = ",\n".join(rows)
-        return [
+        # Return ONE list item per line — the caller prefixes each with \t\t\t\t.
+        # Using tabs for internal indentation to satisfy TMDL parser requirements.
+        # rows_block as a single joined string caused only the first row to receive
+        # the tab prefix; all subsequent rows had spaces only → TMDL parse error.
+        result_lines = [
             "let",
-            f"    Source = #table(",
-            f"        type table [{schema}],",
-            "        {",
-            rows_block,
-            "        })",
-            "in",
-            "    Source",
+            "\tSource = #table(",
+            f"\t\ttype table [{schema}],",
+            "\t\t{",
         ]
+        last = len(row_strings) - 1
+        for i, r in enumerate(row_strings):
+            comma = "," if i < last else ""
+            result_lines.append(f"\t\t\t{r}{comma}")
+        result_lines.extend([
+            "\t\t})",
+            "in",
+            "\tSource",
+        ])
+        return result_lines
 
     def _build_m_expression(self, table_cfg, data_file_path, sheet_name=None):
         """Build Power Query M expression lines for a table partition.

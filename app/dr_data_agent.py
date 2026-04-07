@@ -2997,7 +2997,15 @@ Output ONLY valid JSON. No markdown. No commentary."""
         # When we have a Tableau spec with dashboards, bypass AI for visual
         # structure. This produces a faithful replica instead of an AI
         # "interpretation". The existing AI path is preserved as fallback.
-        if self.tableau_spec and self.tableau_spec.get("dashboards"):
+        # Use direct mapper whenever we have Tableau structure — dashboards OR
+        # bare worksheets. Never fall through to AI for Tableau files.
+        _has_tableau_structure = bool(
+            self.tableau_spec and (
+                self.tableau_spec.get("dashboards") or
+                self.tableau_spec.get("worksheets")
+            )
+        )
+        if _has_tableau_structure:
             try:
                 from core.direct_mapper import build_pbip_config_from_tableau
 

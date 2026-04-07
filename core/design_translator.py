@@ -33,7 +33,7 @@ _CHART_TYPE_MAP = {
     "line": "lineChart",
     "area": "areaChart",
     "circle": "scatterChart",
-    "square": "matrix",
+    "square": "matrix",                   # Tableau filled-square grid → PBI matrix
     "text": "tableEx",
     "map": "map",
     "polygon": "filledMap",
@@ -44,6 +44,9 @@ _CHART_TYPE_MAP = {
     "shape": "scatterChart",
     "density": "scatterChart",
     "heatmap": "matrix",
+    # Inferred from empty shelf bindings (BAN/KPI single aggregate)
+    "ban": "cardVisual",
+    "kpi": "cardVisual",
 }
 
 
@@ -88,9 +91,24 @@ def translate_colors(tableau_design):
                         data_colors.append(hex_color)
                 break  # use the first regular palette found
 
-    # Datasource color maps contain per-value colors from Tableau but they
-    # are often muted pastels that look washed out in PBI. Skip them and
-    # fall through to the professional default palette instead.
+    # Datasource color maps store per-value color assignments defined in the
+    # Tableau workbook (via Edit Colors dialog). These are the REAL colors the
+    # workbook author chose. Use them when no explicit regular palette was found.
+    if not data_colors:
+        ds_maps = tableau_design.get("datasource_color_maps", [])
+        if ds_maps:
+            seen_ds = set()
+            ds_colors = []
+            for dsm in ds_maps:
+                for mapping in dsm.get("mappings", []):
+                    color = mapping.get("color", "").strip()
+                    if color and color not in seen_ds:
+                        seen_ds.add(color)
+                        if not color.startswith("#"):
+                            color = "#" + color
+                        ds_colors.append(color)
+            if len(ds_colors) >= 3:
+                data_colors = ds_colors
 
     if not data_colors:
         data_colors = list(_DEFAULT_DATA_COLORS)

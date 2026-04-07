@@ -526,6 +526,44 @@ def parse_twb(path):
             # Per-worksheet design metadata
             ws_info["design"] = _extract_ws_design(ws)
 
+            # -- Chart type inference from shelf bindings --
+            # When the mark class is "automatic", infer a better chart type
+            # from the actual row/col shelf composition rather than defaulting
+            # to clusteredColumnChart for everything.
+            if ws_info["chart_type"] == "automatic":
+                rows_f = ws_info["rows_fields"]
+                cols_f = ws_info["cols_fields"]
+
+                # BAN/KPI: both shelves empty → single aggregate card
+                has_rows_content = any(
+                    ":" in f and not f.startswith("federated")
+                    for f in rows_f
+                )
+                has_cols_content = any(
+                    ":" in f and not f.startswith("federated")
+                    for f in cols_f
+                )
+                # Date/time field: `:ok` suffix (ordinal) or `tyr:` prefix
+                cols_has_date = any(
+                    f.endswith(":ok") or f.startswith("tyr:")
+                    for f in cols_f
+                )
+                rows_has_measure = any(
+                    f.endswith(":qk") or f.startswith("sum:")
+                    or f.startswith("avg:") or f.startswith("cnt:")
+                    for f in rows_f
+                )
+
+                if not has_rows_content and not has_cols_content:
+                    # Empty shelves: BAN/KPI single-aggregate card
+                    ws_info["chart_type"] = "ban"
+                    ws_info["mark_type"] = "ban"
+                elif cols_has_date and rows_has_measure:
+                    # Date on X + measure on Y → line chart
+                    ws_info["chart_type"] = "line"
+                    ws_info["mark_type"] = "line"
+                # else: keep "automatic" → clusteredColumnChart (safe default)
+
             spec["worksheets"].append(ws_info)
 
         # --- Dashboards (with zone deduplication) ---

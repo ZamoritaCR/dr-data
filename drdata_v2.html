@@ -1045,7 +1045,27 @@ function buildPBIP(workbookName, tableName, fields) {
   // report.json
   const wb=appState.workbookData;
   const sheets=wb&&wb.sheets&&wb.sheets.length?wb.sheets:['Sheet 1'];
-  rFolder.file('report.json',JSON.stringify({config:JSON.stringify({version:'5.17',themeCollection:{baseTheme:{name:'CY24SU03',version:'5.120',type:2}},activeSectionIndex:0,defaultDrillFilterOtherVisuals:true,filterConfig:{type:2}}),filters:'[]',sections:[],version:'5.0'},null,2));
+  // report.json — MUST have at least 1 section or PBI Desktop fires IsJsonLegallyEmpty
+  // One page per Tableau sheet (or a default page if no sheets detected)
+  const wb2=appState.workbookData;
+  const sheets2=wb2&&wb2.sheets&&wb2.sheets.length?wb2.sheets:['Migration Results'];
+  const rSections=sheets2.slice(0,10).map((sheetName,idx)=>({
+    displayName:sheetName.substring(0,50),
+    name:`ReportSection${idx+1}`,
+    displayOption:0,
+    width:1280,
+    height:720,
+    visualContainers:[],
+    config:JSON.stringify({relationships:[],deviceLayout:{}}),
+    filters:'[]',
+    ordinal:idx
+  }));
+  rFolder.file('report.json',JSON.stringify({
+    config:JSON.stringify({version:'5.17',themeCollection:{baseTheme:{name:'CY24SU03',version:'5.120',type:2}},activeSectionIndex:0,defaultDrillFilterOtherVisuals:true,filterConfig:{type:2}}),
+    filters:'[]',
+    sections:rSections,
+    version:'5.0'
+  },null,2));
 
   // Semantic model folder
   const mFolder=zip.folder(`${safeName}.SemanticModel`);

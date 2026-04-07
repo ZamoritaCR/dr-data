@@ -2977,6 +2977,10 @@ Output ONLY valid JSON. No markdown. No commentary."""
         else:
             table_name = project_name.replace(" ", "_")
 
+        # Never expose the internal synthetic extraction filename as PBI table name
+        if table_name == "synthetic_tableau_data":
+            table_name = "Data"
+
         pbi_profile = pbi_analyzer.analyze(self.dataframe, table_name=table_name)
 
         n_measures = sum(

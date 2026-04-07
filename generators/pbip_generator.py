@@ -141,6 +141,14 @@ class PBIPGenerator:
             table_name = "Data"
         else:
             table_name = data_profile.get("table_name", self._primary_table(config))
+            # Defensive: never allow internal synthetic filename through
+            if table_name == "synthetic_tableau_data":
+                table_name = "Data"
+
+        # Propagate normalized name back into the profile so _write_tables_tmdl
+        # and all other downstream readers agree on the table name.
+        if data_profile.get("table_name") != table_name:
+            data_profile = {**data_profile, "table_name": table_name}
 
         # Column semantic types (dimension vs measure) from data profile
         col_types = {}

@@ -23,6 +23,13 @@ sys.path.insert(0, str(os.path.join(os.path.dirname(__file__), "..")))
 from app.file_handler import load_excel_smart
 from core.relationship_detector import RelationshipDetector
 
+# Enhanced Tableau parser -- provides chart types, shelf fields, colors.
+# Imported lazily to avoid circular imports; falls back to None on failure.
+try:
+    from core.enhanced_tableau_parser import parse_twb as _enhanced_parse_twb
+except Exception:
+    _enhanced_parse_twb = None
+
 
 # File type classification
 STRUCTURE_FILES = {"twb", "twbx", "yxmd", "yxwz", "yxmc", "yxzp", "wid"}
@@ -348,7 +355,16 @@ class MultiFileSession:
                     twb_path = os.path.join(self._temp_dir, "extracted.twb")
                     with open(twb_path, "wb") as f:
                         f.write(twb_data)
-                    spec = self._parse_twb(twb_path)
+                    # Use the enhanced parser (chart types, shelf fields, colors).
+                    # Falls back to the simple parser if enhanced is unavailable.
+                    if _enhanced_parse_twb is not None:
+                        try:
+                            spec = _enhanced_parse_twb(twb_path)
+                        except Exception as _enh_err:
+                            print(f"[WARN] Enhanced parser failed, falling back: {_enh_err}")
+                            spec = self._parse_twb(twb_path)
+                    else:
+                        spec = self._parse_twb(twb_path)
 
                 # Find data files inside
                 data_exts = (".csv", ".xlsx", ".xls", ".hyper", ".tde", ".tsv")
@@ -379,7 +395,19 @@ class MultiFileSession:
         return spec, dfs
 
     def _parse_twb(self, path):
-        """Parse a Tableau workbook XML."""
+        """Parse a Tableau workbook XML.
+
+        Delegates to the enhanced parser when available so chart types,
+        shelf field bindings, and design colors are extracted.
+        Falls back to the simple XML walk if the enhanced parser fails.
+        """
+        if _enhanced_parse_twb is not None:
+            try:
+                return _enhanced_parse_twb(path)
+            except Exception as _enh_err:
+                print(f"[WARN] Enhanced parser failed for .twb, falling back: {_enh_err}")
+
+        # Simple fallback parser -- no chart types or shelf fields.
         spec = {
             "type": "tableau",
             "datasources": [],

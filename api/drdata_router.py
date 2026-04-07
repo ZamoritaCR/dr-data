@@ -379,7 +379,42 @@ async def analyze(job_id: str, req: AnalyzeRequest = AnalyzeRequest()):
         else:
             analysis["error"] = f"No analyzer for .{ext}"
 
-        # -- LLM proposal --
+        # -- Fast path: Tableau files with known structure skip LLM entirely --
+        # The direct mapper in /build handles these deterministically.
+        _rs = analysis.get("report_structure") or {}
+        if ext in ("twb", "twbx") and (_rs.get("dashboards") or _rs.get("worksheets")):
+            ws_n = len(_rs.get("worksheets", []))
+            db_n = len(_rs.get("dashboards", []))
+            proposal = {
+                "domain": f"Tableau workbook — {ws_n} worksheets, {db_n} dashboards",
+                "business_questions": [],
+                "proposed_visuals": [],
+                "data_model": {
+                    "fact_table": "Data",
+                    "dimensions": [],
+                    "key_measures": [],
+                    "relationships": analysis.get("relationships", []),
+                },
+                "needs_synthetic_data": analysis.get("needs_synthetic_data", False),
+                "layout_suggestion": "Direct Tableau replica — deterministic mapping, no AI",
+                "direct_mapper": True,
+            }
+            job["analysis"] = analysis
+            job["proposal"] = proposal
+            job["status"] = "analyzed"
+            job["stage"] = "analyzed"
+            job["progress_pct"] = 100
+            _log(job, f"Tableau fast-path: {ws_n} worksheets, {db_n} dashboards — skipping LLM")
+            return {
+                "job_id": job_id,
+                "analysis": analysis,
+                "proposal": proposal,
+                "needs_synthetic_data": analysis.get("needs_synthetic_data", False),
+                "status": "analyzed",
+                "direct_mapper": True,
+            }
+
+        # -- LLM proposal (non-Tableau files) --
         llm_label = "Gemini 2.5 Flash" if LLM_PROVIDER == "gemini" else "Claude Opus"
         _log(job, f"Generating dashboard proposal with {llm_label}...")
         job["stage"] = "proposing"

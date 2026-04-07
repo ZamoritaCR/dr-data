@@ -60,6 +60,27 @@ if str(DR_DATA_ROOT) not in sys.path:
 JOBS: dict[str, dict[str, Any]] = {}
 MAX_JOBS = 100
 
+# -- CSV endpoint for Web.Contents M queries --
+_CSV_ENDPOINT = "https://joao.theartofthepossible.io/drdata-csv"
+_CSV_NAME_MAP = {
+    "AF_Berliana": "AF_Berliana",
+    "Berliana": "AF_Berliana",
+    "COVID19": "COVID19",
+    "COVID-19": "COVID19",
+    "Coronavirus": "COVID19",
+    "DigitalAds": "DigitalAds",
+    "Digital": "DigitalAds",
+    "Superstore": "Superstore",
+}
+
+def _get_csv_url(filename: str) -> str | None:
+    """Map uploaded TWBX filename to live CSV URL, or None if not found."""
+    stem = Path(filename).stem
+    for key, csv_name in _CSV_NAME_MAP.items():
+        if key.lower() in stem.lower():
+            return f"{_CSV_ENDPOINT}/{csv_name}.csv"
+    return None
+
 SUPPORTED_EXTENSIONS = {
     "twb", "twbx", "csv", "xlsx", "xls", "json", "txt",
     "pdf", "docx", "pptx", "parquet", "tsv",
@@ -686,6 +707,7 @@ async def build(job_id: str, req: BuildRequest):
                 data_profile=pbi_profile,
                 dashboard_spec=dashboard_spec,
                 data_file_path=df_path,
+                csv_url=_get_csv_url(job.get("filename", "")),
             )
 
             result_path = gen_result["path"]
@@ -907,6 +929,7 @@ async def build(job_id: str, req: BuildRequest):
             data_profile=data_profile,
             dashboard_spec=dashboard_spec,
             data_file_path=df_path,
+            csv_url=_get_csv_url(job.get("filename", "")),
         )
 
         result_path = gen_result["path"]

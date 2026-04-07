@@ -842,6 +842,37 @@ class DrDataAgent:
         if df is not None:
             self.dataframe = df
 
+    _CSV_ENDPOINT = "https://joao.theartofthepossible.io/drdata-csv"
+    _CSV_NAME_MAP = {
+        "AF_Berliana": "AF_Berliana",
+        "Berliana": "AF_Berliana",
+        "COVID19": "COVID19",
+        "COVID-19": "COVID19",
+        "Coronavirus": "COVID19",
+        "DigitalAds": "DigitalAds",
+        "Digital": "DigitalAds",
+        "Superstore": "Superstore",
+    }
+
+    def _get_csv_url(self):
+        """Derive the live CSV URL from the uploaded TWBX filename.
+
+        Returns None if the source is not a known TWBX, so the generator
+        falls back to the local-file M expression.
+        """
+        source = ""
+        if self.tableau_spec and self.tableau_spec.get("file_name"):
+            source = self.tableau_spec["file_name"]
+        elif self.data_file_path:
+            source = os.path.basename(self.data_file_path)
+        if not source:
+            return None
+        stem = os.path.splitext(os.path.basename(source))[0]
+        for key, csv_name in self._CSV_NAME_MAP.items():
+            if key.lower() in stem.lower():
+                return f"{self._CSV_ENDPOINT}/{csv_name}.csv"
+        return None
+
     # ------------------------------------------------------------------ #
     #  OpenAI secondary engine                                             #
     # ------------------------------------------------------------------ #
@@ -3015,6 +3046,7 @@ Output ONLY valid JSON. No markdown. No commentary."""
                     sheet_name=self.sheet_name,
                     relationships=relationships or None,
                     snowflake_config=self.snowflake_config,
+                    csv_url=self._get_csv_url(),
                 )
                 result_path = gen_result["path"]
                 field_audit = gen_result.get("field_audit", {})
@@ -3352,6 +3384,7 @@ Output ONLY valid JSON. No markdown. No commentary."""
                 sheet_name=self.sheet_name,
                 relationships=relationships or None,
                 snowflake_config=self.snowflake_config,
+                csv_url=self._get_csv_url(),
             )
             # generator.generate() returns a dict with path + audit info
             result_path = gen_result["path"]

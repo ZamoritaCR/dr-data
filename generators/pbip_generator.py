@@ -95,7 +95,8 @@ class PBIPGenerator:
     # ------------------------------------------------------------------ #
 
     def generate(self, config, data_profile, dashboard_spec, data_file_path=None,
-                 sheet_name=None, relationships=None, snowflake_config=None):
+                 sheet_name=None, relationships=None, snowflake_config=None,
+                 csv_url=None):
         """Create the full PBIP project.
 
         Args:
@@ -133,9 +134,13 @@ class PBIPGenerator:
         for d in [report_def, pages_dir, theme_dir, model_def, cultures_dir, tables_dir]:
             d.mkdir(parents=True, exist_ok=True)
 
-        # Gather info -- table_name must match what _write_tables_tmdl uses
-        # (data_profile table name = ground truth from the actual data)
-        table_name = data_profile.get("table_name", self._primary_table(config))
+        # Gather info -- table_name must match what _write_tables_tmdl uses.
+        # Force "Data" when csv_url provided so TMDL table name
+        # matches Entity="Data" in all visual JSON files.
+        if csv_url is not None:
+            table_name = "Data"
+        else:
+            table_name = data_profile.get("table_name", self._primary_table(config))
 
         # Column semantic types (dimension vs measure) from data profile
         col_types = {}
@@ -166,6 +171,7 @@ class PBIPGenerator:
         table_names, valid_measure_names = self._write_tables_tmdl(
             tables_dir, tm, data_profile, data_file_path, sheet_name,
             snowflake_config=snowflake_config,
+            csv_url=csv_url,
         )
 
         # 14. model.tmdl (with relationships if provided)
@@ -1268,7 +1274,7 @@ class PBIPGenerator:
 
     def _write_tables_tmdl(self, tables_dir, tmdl_model, data_profile,
                            data_file_path, sheet_name=None,
-                           snowflake_config=None):
+                           snowflake_config=None, csv_url=None):
         """Write one .tmdl file per table.
 
         Returns:
@@ -1418,9 +1424,13 @@ class PBIPGenerator:
                     for c in profile_columns
                 ],
             }
-            m_expr = self._build_m_expression(
-                profile_table_cfg, data_file_path, sheet_name
-            )
+            if csv_url is not None:
+                m_expr = self._build_web_contents_m_expression(csv_url, profile_table_cfg)
+                print(f"    [WEB] M query → Web.Contents({csv_url})")
+            else:
+                m_expr = self._build_m_expression(
+                    profile_table_cfg, data_file_path, sheet_name
+                )
             partition_mode = "import"
         lines.append(f"\tpartition {quoted_tbl} = m")
         lines.append(f"\t\tmode: {partition_mode}")
@@ -1438,6 +1448,42 @@ class PBIPGenerator:
         self._write_text(tables_dir / f"{tbl_name}.tmdl", tmdl_text)
 
         return table_names, valid_measure_names
+
+    def _build_web_contents_m_expression(self, csv_url, table_cfg):
+        """Build M expression that fetches data from a live CSV URL via Web.Contents().
+
+        Produces:
+            let
+                Source = Csv.Document(Web.Contents("https://..."), [...]),
+                #"Promoted Headers" = Table.PromoteHeaders(Source, [...]),
+                #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers", {...})
+            in
+                #"Changed Type"
+        """
+        pbi_to_m_type = {
+            "string": "type text",
+            "int64": "type number",
+            "double": "type number",
+            "dateTime": "type datetime",
+            "date": "type datetime",
+            "boolean": "type logical",
+        }
+        cols = table_cfg.get("columns", [])
+        n_cols = len(cols) if cols else None
+        cols_arg = str(n_cols) if n_cols else "null"
+        type_list = ", ".join(
+            '{{"' + c["name"] + '", ' + pbi_to_m_type.get(c.get("dataType", "string"), "type text") + "}}"
+            for c in cols
+        )
+        return [
+            "let",
+            f'\tSource = Csv.Document(Web.Contents("{csv_url}"),',
+            f'\t\t[Delimiter=",", Columns={cols_arg}, Encoding=65001, QuoteStyle=QuoteStyle.None]),',
+            '\t#"Promoted Headers" = Table.PromoteHeaders(Source, [PromoteAllScalars=true]),',
+            f'\t#"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers", {{{type_list}}})',
+            "in",
+            '\t#"Changed Type"',
+        ]
 
     def _build_m_expression(self, table_cfg, data_file_path, sheet_name=None):
         """Build Power Query M expression lines for a table partition.

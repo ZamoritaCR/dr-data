@@ -1456,14 +1456,17 @@ with tab1:
 
                         _has_data = ws.get("data_preview") is not None
                         _data_status = "Embedded data found" if _has_data else "No embedded CSV/Excel -- synthetic data will be generated"
+                        _is_vision = _spec.get("source") == "vision_screenshot"
+                        _source_note = "Extracted from screenshot via GPT-4o Vision" if _is_vision else ""
 
                         st.markdown(
                             f"**{_ext}** | {name_str} | {_size_str}\n\n"
-                            f"| | |\n|---|---|\n"
-                            f"| **Worksheets** | {len(_ws_list)} -- {_ws_display} |\n"
+                            + (f"*{_source_note}*\n\n" if _source_note else "")
+                            + f"| | |\n|---|---|\n"
+                            f"| **Visuals Detected** | {len(_ws_list)} -- {_ws_display} |\n"
                             f"| **Dashboards** | {len(_db_list)} -- {_db_display} |\n"
-                            f"| **Calculated Fields** | {len(_cf_list)} ({_complex_count} complex) |\n"
-                            f"| **Data Sources** | {len(_ds_list)} -- {_ds_display} |\n"
+                            + (f"| **Calculated Fields** | {len(_cf_list)} ({_complex_count} complex) |\n" if _cf_list else "")
+                            + f"| **Data Sources** | {len(_ds_list)} -- {_ds_display} |\n"
                             + (f"| **Parameters** | {len(_params)} |\n" if _params else "")
                             + f"| **Data** | {_data_status} |"
                         )
@@ -1500,9 +1503,10 @@ with tab1:
             # Save intelligence card as a message
             _card_msg = f"Loaded {name_str}."
             if _is_tableau:
+                _vision_tag = " (from screenshot)" if _is_vision else ""
                 _card_msg = (
-                    f"Loaded {name_str}: "
-                    f"{len(_ws_list)} worksheets, {len(_db_list)} dashboards, "
+                    f"Loaded {name_str}{_vision_tag}: "
+                    f"{len(_ws_list)} visuals, {len(_db_list)} dashboards, "
                     f"{len(_cf_list)} calculated fields."
                 )
             elif ws.get("data_preview") is not None:
@@ -1515,25 +1519,32 @@ with tab1:
                 "timestamp": time.time(),
             })
 
-            # Intent buttons for Tableau files
+            # Intent buttons for Tableau / vision-extracted files
             if _is_tableau:
+                _btn1_label = "Build Power BI Wireframe" if _is_vision else "Replicate in Power BI"
+                _btn1_msg = (
+                    "Build a Power BI wireframe from this screenshot."
+                    if _is_vision
+                    else "Replicate this Tableau workbook in Power BI."
+                )
                 with chat_container:
                     with st.chat_message("assistant"):
                         _btn_col1, _btn_col2 = st.columns(2)
                         with _btn_col1:
-                            if st.button("Replicate in Power BI",
+                            if st.button(_btn1_label,
                                          key="intent_replicate",
                                          use_container_width=True,
                                          type="primary"):
                                 st.session_state["user_intent"] = "replicate"
                                 st.session_state.messages.append({
                                     "role": "user",
-                                    "content": "Replicate this Tableau workbook in Power BI.",
+                                    "content": _btn1_msg,
                                     "timestamp": time.time(),
                                 })
                                 st.rerun()
                         with _btn_col2:
-                            if st.button("Reimagine as Modern Dashboard",
+                            _btn2_label = "Reimagine Layout" if _is_vision else "Reimagine as Modern Dashboard"
+                            if st.button(_btn2_label,
                                          key="intent_reimagine",
                                          use_container_width=True):
                                 st.session_state["user_intent"] = "reimagine"

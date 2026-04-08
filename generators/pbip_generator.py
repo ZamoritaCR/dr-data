@@ -96,22 +96,36 @@ class PBIPGenerator:
 
     def generate(self, config, data_profile, dashboard_spec, data_file_path=None,
                  sheet_name=None, relationships=None, snowflake_config=None,
-                 csv_url=None):
+                 csv_url=None, dataframe=None):
         """Create the full PBIP project.
 
         Args:
             config:           dict from OpenAIEngine (report_layout + tmdl_model).
-            data_profile:     dict from DataAnalyzer.
+            data_profile:     dict from DataAnalyzer (auto-generated if None + dataframe).
             dashboard_spec:   dict from ClaudeInterpreter (for title/theme).
             data_file_path:   optional path to the source data file.
             sheet_name:       Excel sheet name that was loaded (for M expression).
             relationships:    optional list of relationship dicts for TMDL model.
             snowflake_config: optional dict with account/warehouse/database/schema
                               for Snowflake DirectQuery M expression.
+            dataframe:        optional pandas DataFrame. When provided with no
+                              data_file_path/csv_url/snowflake, data is embedded
+                              inline in TMDL via #table() M expression.
 
         Returns:
-            str: path to the clean project directory containing ONLY the PBIP files.
+            dict with path, field_audit, table_names, valid_measures, etc.
         """
+        # Auto-profile DataFrame if data_profile not provided
+        if data_profile is None and dataframe is not None:
+            from core.deep_analyzer import DeepAnalyzer
+            analyzer = DeepAnalyzer()
+            data_profile = analyzer.profile(dataframe)
+            table_name_hint = config.get("table_name", "Data")
+            data_profile["table_name"] = table_name_hint
+
+        # Store dataframe for inline embedding if no external data source
+        self._inline_dataframe = dataframe
+
         title = dashboard_spec.get("dashboard_title", "Dashboard")
         safe = self._safe_name(title)
 
@@ -1434,7 +1448,16 @@ class PBIPGenerator:
             }
             if csv_url is not None:
                 m_expr = self._build_web_contents_m_expression(csv_url, profile_table_cfg)
-                print(f"    [WEB] M query → Web.Contents({csv_url})")
+                print(f"    [WEB] M query -> Web.Contents({csv_url})")
+            elif (self._inline_dataframe is not None
+                  and data_file_path is None
+                  and snowflake_config is None):
+                # Embed data directly in TMDL via #table() -- no external file
+                m_expr = self._build_inline_m_table(
+                    self._inline_dataframe, profile_table_cfg
+                )
+                print(f"    [INLINE] M query -> #table() with "
+                      f"{len(self._inline_dataframe)} rows embedded")
             else:
                 m_expr = self._build_m_expression(
                     profile_table_cfg, data_file_path, sheet_name
@@ -1560,6 +1583,91 @@ class PBIPGenerator:
             "in",
             "    Source",
         ]
+
+    def _build_inline_m_table(self, df, table_cfg):
+        """Build a #table() M expression with data rows embedded inline.
+
+        Produces a complete M let/in expression that creates a typed table
+        from literal values. No external file reference needed.
+
+        Args:
+            df: pandas DataFrame with the actual data.
+            table_cfg: dict with columns[{name, dataType}] for type schema.
+
+        Returns:
+            list of M expression lines (tab-indented, no leading spaces).
+        """
+        import pandas as pd
+        import numpy as np
+
+        columns = table_cfg.get("columns", [])
+        col_names = [c["name"] for c in columns]
+
+        # Build type schema: {"ColName", type number}, ...
+        pbi_to_m = {
+            "string": "type text",
+            "int64": "type number",
+            "double": "type number",
+            "dateTime": "type date",
+            "boolean": "type logical",
+        }
+        type_pairs = []
+        for c in columns:
+            m_type = pbi_to_m.get(c.get("dataType", "string"), "type text")
+            type_pairs.append(f'{{"{c["name"]}", {m_type}}}')
+        type_schema = "{" + ", ".join(type_pairs) + "}"
+
+        # Build data rows -- limit to 500 rows to keep TMDL size reasonable
+        max_rows = min(len(df), 500)
+        row_lines = []
+        for idx in range(max_rows):
+            vals = []
+            for c in columns:
+                col_name = c["name"]
+                if col_name not in df.columns:
+                    vals.append('""')
+                    continue
+                raw = df[col_name].iloc[idx]
+
+                # Handle null/NaN
+                if pd.isna(raw):
+                    vals.append("null")
+                    continue
+
+                dt = c.get("dataType", "string")
+                if dt in ("double", "int64"):
+                    vals.append(str(raw))
+                elif dt == "dateTime":
+                    # M date literal: #date(year, month, day)
+                    try:
+                        ts = pd.Timestamp(raw)
+                        vals.append(
+                            f"#date({ts.year}, {ts.month}, {ts.day})"
+                        )
+                    except Exception:
+                        vals.append(f'"{raw}"')
+                elif dt == "boolean":
+                    vals.append("true" if raw else "false")
+                else:
+                    # String -- escape double quotes
+                    s = str(raw).replace('"', '""')
+                    vals.append(f'"{s}"')
+
+            row_lines.append("\t{" + ", ".join(vals) + "}")
+
+        rows_block = ",\n".join(row_lines)
+
+        # Build the M expression using tabs (not spaces) throughout
+        lines = [
+            "let",
+            f"\tSource = #table({type_schema},",
+            "\t{",
+            rows_block,
+            "\t})",
+            "in",
+            "\tSource",
+        ]
+        return lines
 
     @staticmethod
     def _build_snowflake_m_expression(sf_config, table_name):

@@ -1038,6 +1038,17 @@ def build_pbip_config_from_tableau(tableau_spec, data_profile, table_name="Data"
     # -- Translate complex measures (heuristic + AI) --
     measures = _translate_complex_measures(measures, table_name, profile_col_names)
 
+    # -- Post-process: syntax validation + column name reconciliation --
+    try:
+        from core.dax_postprocess import postprocess_measures
+        pp_stats = postprocess_measures(measures, table_name, profile_col_names)
+        if pp_stats["syntax_fixed"] or pp_stats["columns_fixed"]:
+            print(f"    [DAX-POSTPROCESS] {pp_stats['syntax_fixed']} syntax fixes, "
+                  f"{pp_stats['columns_fixed']} column name fixes "
+                  f"({pp_stats['total_processed']} measures processed)")
+    except Exception as _pp_err:
+        print(f"    [DAX-POSTPROCESS] Skipped (non-fatal): {_pp_err}")
+
     # -- Build pages from dashboards --
     sections = []
     dashboards = tableau_spec.get("dashboards", [])

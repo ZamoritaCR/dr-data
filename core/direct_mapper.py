@@ -1101,14 +1101,39 @@ def build_pbip_config_from_tableau(tableau_spec, data_profile, table_name="Data"
                       f"{len(orphan_ws)} worksheet(s)")
             sections.append(orphan_section)
 
-    # If no dashboards and no worksheets, create an empty page
+    # If no dashboards and no worksheets, create a placeholder page
+    # with at least one visual so the PBI file is never empty.
     if not sections:
         sections.append({
             "displayName": "Dashboard",
             "width": 1280,
             "height": 720,
-            "visualContainers": [],
+            "visualContainers": [{
+                "x": 12, "y": 12, "width": 1256, "height": 696,
+                "config": {
+                    "visualType": "tableEx",
+                    "title": "Data",
+                    "dataRoles": {"Values": list(profile_col_names)[:10] if profile_col_names else []},
+                    "worksheet_name": "",
+                },
+            }],
         })
+        print("    [MAPPER] No dashboards or worksheets -- created placeholder table visual")
+
+    # Safety: strip out any sections with 0 visuals and rebuild them as tables
+    for section in sections:
+        if not section.get("visualContainers"):
+            section["visualContainers"] = [{
+                "x": 12, "y": 12, "width": 1256, "height": 696,
+                "config": {
+                    "visualType": "tableEx",
+                    "title": section.get("displayName", "Data"),
+                    "dataRoles": {"Values": list(profile_col_names)[:10] if profile_col_names else []},
+                    "worksheet_name": "",
+                },
+            }]
+            print(f"    [MAPPER] Page '{section.get('displayName', '?')}' had 0 visuals"
+                  f" -- injected table visual as fallback")
 
     # -- Build the config dict matching PBIPGenerator.generate() expectations --
     config = {

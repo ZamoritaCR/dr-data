@@ -262,6 +262,9 @@ class PBIPGenerator:
         print(f"[OK] PBIP project generated: {project_dir}")
         print(f"     {total} files created")
 
+        if not page_ids:
+            print("[ERROR] PBIP has 0 pages -- output will be empty in Power BI")
+
         return {
             "path": str(project_dir),
             "field_audit": field_audit,
@@ -628,7 +631,10 @@ class PBIPGenerator:
                 vc_count += 1
 
             layout_src = "Tableau zones" if applied_tableau_layout else "deterministic grid"
-            print(f"    [+] page '{display_name}': {vc_count} visuals ({layout_src})")
+            if vc_count == 0:
+                print(f"    [WARNING] page '{display_name}': 0 visuals -- page will be empty in Power BI")
+            else:
+                print(f"    [+] page '{display_name}': {vc_count} visuals ({layout_src})")
 
         return page_ids, audit_totals
 

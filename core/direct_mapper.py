@@ -1090,6 +1090,15 @@ def build_pbip_config_from_tableau(tableau_spec, data_profile, table_name="Data"
             orphan_ws, profile_col_names, col_types, table_name
         )
         if orphan_section:
+            # When there are no dashboards, these worksheets ARE the pages --
+            # give the section a proper name instead of "Additional Worksheets"
+            if not dashboards:
+                if len(orphan_ws) == 1:
+                    orphan_section["displayName"] = orphan_ws[0].get("name", "Sheet")
+                else:
+                    orphan_section["displayName"] = "Dashboard"
+                print(f"    [MAPPER] No dashboards found -- built page from "
+                      f"{len(orphan_ws)} worksheet(s)")
             sections.append(orphan_section)
 
     # If no dashboards and no worksheets, create an empty page

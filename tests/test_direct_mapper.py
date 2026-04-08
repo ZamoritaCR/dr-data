@@ -534,7 +534,7 @@ class TestNoDashboards:
         config, _ = build_pbip_config_from_tableau(spec, sample_data_profile, "TestData")
         sections = config["report_layout"]["sections"]
         assert len(sections) == 1
-        assert sections[0]["displayName"] == "Additional Worksheets"
+        assert sections[0]["displayName"] == "WS1"
 
 
 class TestEmptySpec:

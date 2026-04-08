@@ -1449,9 +1449,7 @@ class PBIPGenerator:
             if csv_url is not None:
                 m_expr = self._build_web_contents_m_expression(csv_url, profile_table_cfg)
                 print(f"    [WEB] M query -> Web.Contents({csv_url})")
-            elif (self._inline_dataframe is not None
-                  and data_file_path is None
-                  and snowflake_config is None):
+            elif self._inline_dataframe is not None:
                 # Embed data directly in TMDL via #table() -- no external file
                 m_expr = self._build_inline_m_table(
                     self._inline_dataframe, profile_table_cfg

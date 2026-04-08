@@ -3002,8 +3002,11 @@ Output ONLY valid JSON. No markdown. No commentary."""
         # user_intent from the intelligence card buttons overrides:
         #   "replicate" -> force direct mapper path
         #   "reimagine" -> force full AI pipeline path
-        import streamlit as _st_intent
-        _user_intent = _st_intent.session_state.get("user_intent", "")
+        try:
+            import streamlit as _st_intent
+            _user_intent = _st_intent.session_state.get("user_intent", "")
+        except Exception:
+            _user_intent = ""
         _has_tableau_structure = bool(
             self.tableau_spec and (
                 self.tableau_spec.get("dashboards") or

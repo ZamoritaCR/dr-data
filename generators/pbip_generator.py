@@ -1444,7 +1444,9 @@ class PBIPGenerator:
         lines.append(f"\t\tmode: {partition_mode}")
         lines.append("\t\tsource =")
         for m_line in m_expr:
-            lines.append(f"\t\t\t\t{m_line}")
+            # Replace leading spaces with tabs for TMDL compliance
+            _cleaned = m_line.replace("    ", "\t")
+            lines.append(f"\t\t\t\t{_cleaned}")
         lines.append("")
 
         lines.append("\tannotation PBI_ResultType = Table")
@@ -1614,7 +1616,7 @@ class PBIPGenerator:
         """Build the type transform list for Table.TransformColumnTypes."""
         type_map = {
             "string": "type text",
-            "int64": "Int64.Type",
+            "int64": "type number",
             "double": "type number",
             "dateTime": "type date",
             "boolean": "type logical",

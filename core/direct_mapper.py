@@ -943,6 +943,7 @@ def build_pbip_config_from_tableau(tableau_spec, data_profile, table_name="Data"
                               "measures": [...], "design": {...}, ...}
     """
     # Build lookup structures
+    data_profile = data_profile or {}
     worksheets_by_name = {}
     for ws in tableau_spec.get("worksheets", []):
         worksheets_by_name[ws["name"]] = ws

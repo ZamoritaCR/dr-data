@@ -1377,8 +1377,153 @@ with tab1:
             ws["phase"] = "analyzed"
             ws["progress_messages"].append(f"Loaded {name_str}")
 
-            # Build data context for Claude's first reaction
+            # ======================================================
+            # FILE INTELLIGENCE CARD -- structured metadata display
+            # ======================================================
             _agent = st.session_state.agent
+            _is_tableau = bool(_agent and _agent.tableau_spec)
+
+            with chat_container:
+                with st.chat_message("assistant"):
+                    if _is_tableau:
+                        _spec = _agent.tableau_spec
+                        _ws_list = [w.get("name", "") for w in _spec.get("worksheets", [])]
+                        _db_list = [d.get("name", "") for d in _spec.get("dashboards", [])]
+                        _cf_list = _spec.get("calculated_fields", [])
+                        _ds_list = [d.get("caption", d.get("name", "")) for d in _spec.get("datasources", [])]
+                        _params = _spec.get("parameters", [])
+                        _has_hyper = _spec.get("has_hyper", False)
+
+                        # Count complex calcs
+                        _complex_count = sum(
+                            1 for cf in _cf_list
+                            if cf.get("formula", "") and not re.match(
+                                r'^\s*(SUM|AVG|COUNT|COUNTD|MIN|MAX|MEDIAN)\s*\(\s*\[',
+                                cf.get("formula", ""), re.IGNORECASE
+                            )
+                        )
+
+                        _ext = names[0].rsplit(".", 1)[-1].upper() if names else "TWB"
+                        _file_size = sum(
+                            info.get("size", 0)
+                            for info in st.session_state.uploaded_files.values()
+                        )
+                        _size_str = (
+                            f"{_file_size / 1024:.0f} KB"
+                            if _file_size < 1024 * 1024
+                            else f"{_file_size / 1024 / 1024:.1f} MB"
+                        )
+
+                        # Worksheet names (max 5)
+                        _ws_display = ", ".join(_ws_list[:5])
+                        if len(_ws_list) > 5:
+                            _ws_display += f" + {len(_ws_list) - 5} more"
+
+                        # Dashboard names
+                        _db_display = ", ".join(_db_list[:5]) if _db_list else "None"
+                        if len(_db_list) > 5:
+                            _db_display += f" + {len(_db_list) - 5} more"
+
+                        # Datasource names
+                        _ds_display = ", ".join(_ds_list[:4]) if _ds_list else "None"
+                        if len(_ds_list) > 4:
+                            _ds_display += f" + {len(_ds_list) - 4} more"
+
+                        _has_data = ws.get("data_preview") is not None
+                        _data_status = "Embedded data found" if _has_data else "No embedded CSV/Excel -- synthetic data will be generated"
+
+                        st.markdown(
+                            f"**{_ext}** | {name_str} | {_size_str}\n\n"
+                            f"| | |\n|---|---|\n"
+                            f"| **Worksheets** | {len(_ws_list)} -- {_ws_display} |\n"
+                            f"| **Dashboards** | {len(_db_list)} -- {_db_display} |\n"
+                            f"| **Calculated Fields** | {len(_cf_list)} ({_complex_count} complex) |\n"
+                            f"| **Data Sources** | {len(_ds_list)} -- {_ds_display} |\n"
+                            + (f"| **Parameters** | {len(_params)} |\n" if _params else "")
+                            + f"| **Data** | {_data_status} |"
+                        )
+                    else:
+                        # Non-Tableau file (CSV, Excel, etc.)
+                        _preview_df = ws.get("data_preview")
+                        if _preview_df is not None:
+                            _ext = names[0].rsplit(".", 1)[-1].upper() if names else "FILE"
+                            _file_size = sum(
+                                info.get("size", 0)
+                                for info in st.session_state.uploaded_files.values()
+                            )
+                            _size_str = (
+                                f"{_file_size / 1024:.0f} KB"
+                                if _file_size < 1024 * 1024
+                                else f"{_file_size / 1024 / 1024:.1f} MB"
+                            )
+                            _cols = list(_preview_df.columns)
+                            _col_display = ", ".join(_cols[:8])
+                            if len(_cols) > 8:
+                                _col_display += f" + {len(_cols) - 8} more"
+
+                            _dtypes = _preview_df.dtypes.value_counts()
+                            _dtype_str = ", ".join(f"{v} {k}" for k, v in _dtypes.items())
+
+                            st.markdown(
+                                f"**{_ext}** | {name_str} | {_size_str}\n\n"
+                                f"| | |\n|---|---|\n"
+                                f"| **Rows** | {len(_preview_df):,} |\n"
+                                f"| **Columns** | {len(_cols)} -- {_col_display} |\n"
+                                f"| **Types** | {_dtype_str} |"
+                            )
+
+            # Save intelligence card as a message
+            _card_msg = f"Loaded {name_str}."
+            if _is_tableau:
+                _card_msg = (
+                    f"Loaded {name_str}: "
+                    f"{len(_ws_list)} worksheets, {len(_db_list)} dashboards, "
+                    f"{len(_cf_list)} calculated fields."
+                )
+            elif ws.get("data_preview") is not None:
+                _pdf = ws["data_preview"]
+                _card_msg = f"Loaded {name_str}: {len(_pdf):,} rows, {len(_pdf.columns)} columns."
+
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": _card_msg,
+                "timestamp": time.time(),
+            })
+
+            # Intent buttons for Tableau files
+            if _is_tableau:
+                with chat_container:
+                    with st.chat_message("assistant"):
+                        _btn_col1, _btn_col2 = st.columns(2)
+                        with _btn_col1:
+                            if st.button("Replicate in Power BI",
+                                         key="intent_replicate",
+                                         use_container_width=True,
+                                         type="primary"):
+                                st.session_state["user_intent"] = "replicate"
+                                st.session_state.messages.append({
+                                    "role": "user",
+                                    "content": "Replicate this Tableau workbook in Power BI.",
+                                    "timestamp": time.time(),
+                                })
+                                st.rerun()
+                        with _btn_col2:
+                            if st.button("Reimagine as Modern Dashboard",
+                                         key="intent_reimagine",
+                                         use_container_width=True):
+                                st.session_state["user_intent"] = "reimagine"
+                                st.session_state.messages.append({
+                                    "role": "user",
+                                    "content": "Reimagine this as a modern Power BI dashboard.",
+                                    "timestamp": time.time(),
+                                })
+                                st.rerun()
+
+            # Skip the Claude reaction -- the intelligence card IS the reaction
+            st.rerun()
+
+            # Build data context for Claude's first reaction (kept for non-card fallback)
+            # _agent already assigned above
             _data_ctx = ""
             if ws.get("data_preview") is not None:
                 _df = ws["data_preview"]

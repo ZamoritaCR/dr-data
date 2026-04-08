@@ -632,6 +632,137 @@ def _guess_format(dax_agg):
     return "#,0"
 
 
+def _translate_complex_measures(measures, table_name, profile_col_names):
+    """Translate complex Tableau formulas to DAX via heuristic + AI fallback.
+
+    1. Run heuristic translation on each needs_ai measure
+    2. If heuristic produces a non-BLANK result, use it
+    3. Remaining measures get sent to Claude API in a single batch
+    4. Falls back to BLANK() if anything fails (never crashes)
+
+    Mutates the measures list in-place and returns it.
+    """
+    needs_ai = [m for m in measures if m.get("needs_ai") and m.get("original_formula")]
+    if not needs_ai:
+        return measures
+
+    # Phase 1: heuristic pre-filter
+    still_needs_ai = []
+    for m in needs_ai:
+        heuristic_dax = _translate_formula_heuristic(
+            m["original_formula"], table_name, profile_col_names
+        )
+        # If heuristic returned something different from the raw formula
+        # and it doesn't look like untranslated Tableau syntax
+        if (heuristic_dax
+                and heuristic_dax != m["original_formula"]
+                and "THEN" not in heuristic_dax
+                and "ELSEIF" not in heuristic_dax
+                and "END" not in heuristic_dax.split("(")[0]):
+            m["dax"] = heuristic_dax
+            m["needs_ai"] = False
+            m["translation_method"] = "heuristic"
+            print(f"    [DAX-HEURISTIC] {m['name']}: heuristic translation applied")
+        else:
+            still_needs_ai.append(m)
+
+    if not still_needs_ai:
+        return measures
+
+    # Phase 2: AI translation via Claude
+    print(f"    [DAX-AI] Sending {len(still_needs_ai)} complex measures to Claude for translation")
+    try:
+        import os
+        api_key = os.getenv("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            print("    [DAX-AI] No ANTHROPIC_API_KEY -- skipping AI translation")
+            return measures
+
+        from anthropic import Anthropic
+        client = Anthropic(api_key=api_key)
+
+        # Batch up to 20 measures
+        batch = still_needs_ai[:20]
+        payload = [
+            {
+                "name": m["name"],
+                "formula": m["original_formula"],
+                "table_name": table_name,
+            }
+            for m in batch
+        ]
+
+        system_prompt = (
+            "You are a DAX expert. Translate Tableau calculated field formulas to DAX.\n"
+            "Return ONLY a JSON array: [{\"name\": \"field_name\", \"dax\": \"DAX_EXPRESSION\"}].\n"
+            "Rules:\n"
+            "- {FIXED [dim] : AGG([field])} -> CALCULATE(AGG(Table[field]), ALLEXCEPT(Table, Table[dim]))\n"
+            "- {FIXED : AGG([field])} -> CALCULATE(AGG(Table[field]), ALL(Table))\n"
+            "- IF condition THEN x ELSE y END -> IF(condition, x, y)\n"
+            "- IIF(cond, x, y) -> IF(cond, x, y)\n"
+            "- CASE WHEN -> SWITCH(TRUE(), ...)\n"
+            "- ZN(expr) -> IF(ISBLANK(expr), 0, expr)\n"
+            "- ISNULL(expr) -> ISBLANK(expr)\n"
+            "- IFNULL(expr, val) -> IF(ISBLANK(expr), val, expr)\n"
+            "- COUNTD -> DISTINCTCOUNT\n"
+            "- STR(x) -> FORMAT(x, \"0\")\n"
+            "- CONTAINS(str, sub) -> NOT(ISERROR(SEARCH(sub, str)))\n"
+            "- DATEDIFF('unit', start, end) -> DATEDIFF(start, end, UNIT)\n"
+            "- DATEPART('unit', date) -> YEAR/MONTH/DAY/QUARTER(date)\n"
+            "- RUNNING_SUM -> use CALCULATE with window functions\n"
+            "- RANK -> RANKX(ALL(Table), expression)\n"
+            f"- Use table name '{table_name}' for all column references.\n"
+            "- [FieldName] becomes 'TableName'[FieldName].\n"
+            "- If you cannot translate, return BLANK() for that field.\n"
+            "- Return ONLY the JSON array, no explanation."
+        )
+
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=4096,
+            system=system_prompt,
+            messages=[{"role": "user", "content": json.dumps(payload)}],
+        )
+
+        response_text = response.content[0].text.strip()
+
+        # Parse JSON from response (handle markdown code blocks)
+        if response_text.startswith("```"):
+            lines = response_text.split("\n")
+            lines = [l for l in lines if not l.startswith("```")]
+            response_text = "\n".join(lines)
+
+        ai_results = json.loads(response_text)
+        if not isinstance(ai_results, list):
+            ai_results = []
+
+        # Apply AI translations
+        ai_lookup = {r["name"]: r["dax"] for r in ai_results if r.get("name") and r.get("dax")}
+        applied = 0
+        for m in batch:
+            ai_dax = ai_lookup.get(m["name"], "")
+            if ai_dax and ai_dax.strip() and ai_dax.strip() != "BLANK()":
+                m["dax"] = ai_dax
+                m["needs_ai"] = False
+                m["translation_method"] = "ai_claude"
+                applied += 1
+                print(f"    [DAX-AI] {m['name']}: AI translation applied")
+            else:
+                m["translation_method"] = "ai_failed"
+                print(f"    [DAX-AI] {m['name']}: AI returned BLANK or no result, keeping BLANK()")
+
+        print(f"    [DAX-AI] Applied {applied}/{len(batch)} AI translations")
+
+    except ImportError:
+        print("    [DAX-AI] anthropic package not installed -- skipping AI translation")
+    except json.JSONDecodeError as e:
+        print(f"    [DAX-AI] Failed to parse AI response as JSON: {e}")
+    except Exception as e:
+        print(f"    [DAX-AI] AI translation failed (non-fatal): {e}")
+
+    return measures
+
+
 # ------------------------------------------------------------------ #
 #  Dashboard -> Page mapping                                           #
 # ------------------------------------------------------------------ #
@@ -826,6 +957,9 @@ def build_pbip_config_from_tableau(tableau_spec, data_profile, table_name="Data"
     measures = _build_measures_from_spec(
         tableau_spec, table_name, profile_col_names
     )
+
+    # -- Translate complex measures (heuristic + AI) --
+    measures = _translate_complex_measures(measures, table_name, profile_col_names)
 
     # -- Build pages from dashboards --
     sections = []

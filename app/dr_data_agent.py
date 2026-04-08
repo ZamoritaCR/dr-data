@@ -2999,12 +2999,23 @@ Output ONLY valid JSON. No markdown. No commentary."""
         # "interpretation". The existing AI path is preserved as fallback.
         # Use direct mapper whenever we have Tableau structure — dashboards OR
         # bare worksheets. Never fall through to AI for Tableau files.
+        # user_intent from the intelligence card buttons overrides:
+        #   "replicate" -> force direct mapper path
+        #   "reimagine" -> force full AI pipeline path
+        import streamlit as _st_intent
+        _user_intent = _st_intent.session_state.get("user_intent", "")
         _has_tableau_structure = bool(
             self.tableau_spec and (
                 self.tableau_spec.get("dashboards") or
                 self.tableau_spec.get("worksheets")
             )
         )
+        # If user chose "reimagine", skip direct mapper -- fall through to AI
+        if _user_intent == "reimagine":
+            _has_tableau_structure = False
+            self._report_progress(
+                "Reimagine mode: using full AI pipeline for creative dashboard design"
+            )
         if _has_tableau_structure:
             try:
                 from core.direct_mapper import build_pbip_config_from_tableau

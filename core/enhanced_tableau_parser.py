@@ -530,39 +530,104 @@ def parse_twb(path):
             # When the mark class is "automatic", infer a better chart type
             # from the actual row/col shelf composition rather than defaulting
             # to clusteredColumnChart for everything.
+            # Uses a priority chain: first match wins.
             if ws_info["chart_type"] == "automatic":
                 rows_f = ws_info["rows_fields"]
                 cols_f = ws_info["cols_fields"]
+                all_f = rows_f + cols_f
 
-                # BAN/KPI: both shelves empty → single aggregate card
-                has_rows_content = any(
+                # Helper: check if a shelf field is a measure (aggregated)
+                _agg_prefixes = ("sum:", "avg:", "cnt:", "count:", "countd:",
+                                 "min:", "max:", "median:", "attr:")
+                _date_prefixes = ("yr:", "mn:", "qr:", "tqr:", "tmn:",
+                                  "twk:", "day:", "mdy:", "wk:", "md:")
+                _geo_keywords = ("latitude", "longitude", "country", "state",
+                                 "city", "zip", "geo", "region", "province",
+                                 "county", "postal", "location")
+
+                def _is_measure_ref(f):
+                    fl = f.lower()
+                    return (fl.endswith(":qk") or
+                            any(fl.startswith(p) for p in _agg_prefixes))
+
+                def _is_date_ref(f):
+                    fl = f.lower()
+                    return (fl.endswith(":ok") or
+                            any(fl.startswith(p) for p in _date_prefixes))
+
+                def _is_geo_ref(f):
+                    fl = f.lower()
+                    return any(kw in fl for kw in _geo_keywords)
+
+                def _is_dim_ref(f):
+                    return (not f.startswith("federated.")
+                            and ":" in f
+                            and not _is_measure_ref(f)
+                            and not _is_date_ref(f))
+
+                # Count field types across both shelves
+                has_real_fields = any(
                     ":" in f and not f.startswith("federated")
-                    for f in rows_f
+                    for f in all_f
                 )
-                has_cols_content = any(
-                    ":" in f and not f.startswith("federated")
-                    for f in cols_f
-                )
-                # Date/time field: `:ok` suffix (ordinal) or `tyr:` prefix
-                cols_has_date = any(
-                    f.endswith(":ok") or f.startswith("tyr:")
-                    for f in cols_f
-                )
-                rows_has_measure = any(
-                    f.endswith(":qk") or f.startswith("sum:")
-                    or f.startswith("avg:") or f.startswith("cnt:")
-                    for f in rows_f
+                measure_refs = [f for f in all_f if _is_measure_ref(f)]
+                date_refs = [f for f in all_f if _is_date_ref(f)]
+                geo_refs = [f for f in all_f if _is_geo_ref(f)]
+                dim_refs = [f for f in all_f if _is_dim_ref(f)]
+
+                rows_measures = [f for f in rows_f if _is_measure_ref(f)]
+                cols_measures = [f for f in cols_f if _is_measure_ref(f)]
+                rows_dates = [f for f in rows_f if _is_date_ref(f)]
+                cols_dates = [f for f in cols_f if _is_date_ref(f)]
+                rows_dims = [f for f in rows_f if _is_dim_ref(f)]
+                cols_dims = [f for f in cols_f if _is_dim_ref(f)]
+
+                # Also check for "Measure Names"/"Measure Values" on shelves
+                has_measure_names = any(
+                    "Measure Names" in f or "Measure Values" in f
+                    for f in all_f
                 )
 
-                if not has_rows_content and not has_cols_content:
-                    # Empty shelves: BAN/KPI single-aggregate card
-                    ws_info["chart_type"] = "ban"
-                    ws_info["mark_type"] = "ban"
-                elif cols_has_date and rows_has_measure:
-                    # Date on X + measure on Y → line chart
-                    ws_info["chart_type"] = "line"
-                    ws_info["mark_type"] = "line"
-                # else: keep "automatic" → clusteredColumnChart (safe default)
+                inferred = None
+
+                # 1. Geographic fields -> map
+                if geo_refs:
+                    inferred = "map"
+
+                # 2. No real fields at all -> card (single aggregate)
+                elif not has_real_fields:
+                    inferred = "ban"
+
+                # 3. Only measures, no dimensions or dates -> card
+                elif measure_refs and not dim_refs and not date_refs:
+                    inferred = "ban"
+
+                # 4. Measure Names/Values pattern -> multi-measure line
+                elif has_measure_names and date_refs:
+                    inferred = "line"
+
+                # 5. Date on either shelf + measure -> line chart
+                elif (cols_dates or rows_dates) and measure_refs:
+                    inferred = "line"
+
+                # 6. Both shelves have measures (X=measure, Y=measure) -> scatter
+                elif rows_measures and cols_measures and not dim_refs:
+                    inferred = "circle"
+
+                # 7. Both shelves have dims (no measures) -> text table
+                elif rows_dims and cols_dims and not measure_refs:
+                    inferred = "text"
+
+                # 8. Two+ measures + one dimension -> line
+                elif len(measure_refs) >= 2 and len(dim_refs) == 1:
+                    inferred = "line"
+
+                # 9. Default fallback (current behavior)
+                # else: keep "automatic" -> clusteredColumnChart
+
+                if inferred:
+                    ws_info["chart_type"] = inferred
+                    ws_info["mark_type"] = inferred
 
             spec["worksheets"].append(ws_info)
 

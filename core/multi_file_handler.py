@@ -182,10 +182,20 @@ class MultiFileSession:
             # Route through file_handler extraction -- store as structure
             from app.file_handler import ingest_file
             sub = ingest_file(path)
-            info["structure"] = sub.get("report_structure")
+            structure = sub.get("report_structure")
+            info["structure"] = structure
             info["category"] = sub.get("file_type", ext)
             if not self.structure_file:
                 self.structure_file = info
+            # If vision extraction returned a tableau_spec-shaped dict
+            # (from a dashboard screenshot), store it the same way TWB does
+            if (structure and isinstance(structure, dict)
+                    and structure.get("type") == "tableau_workbook"
+                    and structure.get("worksheets")):
+                self.tableau_spec = structure
+                print(f"[SESSION] Vision-extracted tableau_spec stored: "
+                      f"{len(structure.get('worksheets', []))} worksheets, "
+                      f"{len(structure.get('dashboards', []))} dashboards")
 
         self.files[filename] = info
         return self._describe_session()

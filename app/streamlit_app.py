@@ -1502,10 +1502,57 @@ with tab1:
 
             # Save intelligence card as a message
             _card_msg = f"Loaded {name_str}."
-            if _is_tableau:
-                _vision_tag = " (from screenshot)" if _is_vision else ""
+            if _is_tableau and _is_vision:
+                # Rich vision-specific message describing what GPT-4o saw
+                _chart_types = {}
+                for _vws in _spec.get("worksheets", []):
+                    _ct = _vws.get("chart_type", _vws.get("mark_type", "unknown"))
+                    _ct_label = {
+                        "bar": "bar chart", "line": "line chart",
+                        "circle": "scatter plot", "pie": "pie chart",
+                        "area": "area chart", "map": "map",
+                        "text": "table", "ban": "KPI card",
+                        "polygon": "filled map", "automatic": "chart",
+                    }.get(_ct, _ct)
+                    _chart_types[_ct_label] = _chart_types.get(_ct_label, 0) + 1
+                _type_parts = []
+                for _ct_name, _ct_count in _chart_types.items():
+                    _type_parts.append(
+                        f"{_ct_count} {_ct_name}{'s' if _ct_count > 1 else ''}"
+                    )
+                _type_str = ", ".join(_type_parts) if _type_parts else "visuals"
+
+                _fields = []
+                for _ds in _spec.get("datasources", []):
+                    for _col in _ds.get("columns", []):
+                        _fn = _col.get("name", "")
+                        if _fn and _fn not in _fields:
+                            _fields.append(_fn)
+                _field_str = ", ".join(_fields[:10])
+                if len(_fields) > 10:
+                    _field_str += f" + {len(_fields) - 10} more"
+
+                _palette = _spec.get("design", {}).get("color_palettes", [])
+                _colors = []
+                if _palette:
+                    _colors = _palette[0].get("colors", [])[:5]
+                _color_str = ", ".join(_colors) if _colors else ""
+
                 _card_msg = (
-                    f"Loaded {name_str}{_vision_tag}: "
+                    f"I analyzed your screenshot. I can see {len(_ws_list)} visuals: "
+                    f"{_type_str}. "
+                )
+                if _field_str:
+                    _card_msg += f"Fields detected: {_field_str}. "
+                if _color_str:
+                    _card_msg += f"Color palette: {_color_str}. "
+                _card_msg += (
+                    "Say 'Build Power BI' and I will generate a full wireframe "
+                    "replicating this layout with synthetic data."
+                )
+            elif _is_tableau:
+                _card_msg = (
+                    f"Loaded {name_str}: "
                     f"{len(_ws_list)} visuals, {len(_db_list)} dashboards, "
                     f"{len(_cf_list)} calculated fields."
                 )

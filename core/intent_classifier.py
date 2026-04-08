@@ -1,27 +1,34 @@
 """
 Intent Classifier -- uses Claude Haiku to understand what the user wants.
 
-Replaces brittle keyword matching with LLM understanding of human language.
-Fast (~300ms) classification that routes to the right pipeline.
+Single LLM call that considers both the user message AND the file context
+(what type of file is loaded, whether Tableau structure exists, etc.)
+to determine intent. No keyword matching. No string contains() checks.
 """
 
 import json
-import anthropic
-from config.settings import _get_secret
+import logging
 
+logger = logging.getLogger(__name__)
 
 _CLIENT = None
+
 
 def _get_client():
     global _CLIENT
     if _CLIENT is None:
-        api_key = _get_secret("ANTHROPIC_API_KEY")
-        if api_key:
-            _CLIENT = anthropic.Anthropic(api_key=api_key)
+        try:
+            import anthropic
+            from config.settings import _get_secret
+            api_key = _get_secret("ANTHROPIC_API_KEY")
+            if api_key:
+                _CLIENT = anthropic.Anthropic(api_key=api_key)
+        except Exception as e:
+            logger.warning(f"[INTENT] Could not create client: {e}")
     return _CLIENT
 
 
-# Intent categories
+# Intent categories (backward compatible with existing agent code)
 BUILD_DASHBOARD = "build_dashboard"
 BUILD_POWERBI = "build_powerbi"
 BUILD_PDF = "build_pdf"
@@ -34,121 +41,145 @@ ANALYZE = "analyze"
 BUILD_INTENTS = {BUILD_DASHBOARD, BUILD_POWERBI, BUILD_PDF, BUILD_PPTX, BUILD_WORD, BUILD_ALL}
 
 
-def classify(user_message: str, conversation_context: str = "") -> dict:
-    """Classify user intent using Claude Haiku.
+_SYSTEM_PROMPT = """\
+You are the intent classifier for Dr. Data, a data analytics and \
+Tableau-to-Power BI migration tool. Your job: understand what the user \
+wants based on what they said and what file they have loaded.
+
+Return ONLY valid JSON. No markdown. No explanation.
+
+Available intents:
+- build_powerbi: user wants a Power BI project (.pbip)
+- build_dashboard: user wants an HTML dashboard / visualization
+- build_pdf: user wants a PDF report
+- build_pptx: user wants PowerPoint / slides / presentation / deck
+- build_word: user wants a Word document
+- build_all: user wants multiple formats or "everything"
+- analyze: user wants data analysis, insights, or questions about the data
+- chat: user is asking a question or having a conversation
+
+Mode (for build intents):
+- replicate: user wants output that mirrors the source file exactly
+- creative: user wants something new, impressive, or AI-designed
+
+Rules:
+- If a Tableau file is loaded and user says "convert", "migrate", \
+"replicate", "same thing", "put this in power bi" -> build_powerbi + replicate
+- If a Tableau/image file is loaded and user says "build", "create", \
+"make something", "wow me", "impressive" -> build_dashboard + creative
+- If CSV/Excel only and user says "power bi" -> build_powerbi + creative
+- If CSV/Excel only and user says "dashboard", "visualize", "chart" -> \
+build_dashboard + creative
+- "report" alone -> build_pdf. "interactive report" -> build_dashboard
+- "do it", "go ahead", "yes", "ok", "again", "another", "redo", \
+"surprise me", "blow my mind" -> build_dashboard + creative (rebuild)
+- "analyze", "insights", "what does this show", "tell me about" -> analyze
+- When in doubt between chat and build, prefer build if data is loaded
+- People speak naturally. Understand intent, don't match keywords."""
+
+
+def classify(user_message: str, conversation_context: str = "",
+             file_context: dict = None) -> dict:
+    """Classify user intent using Claude Haiku with file awareness.
 
     Args:
         user_message: what the user just said
         conversation_context: last 2-3 messages for follow-up understanding
+        file_context: dict with source_type, file_name, has_tableau_spec,
+                      has_dataframe, worksheet_count, dashboard_count
 
     Returns:
-        {"intent": str, "confidence": float, "details": str}
+        {"intent": str, "mode": "replicate"|"creative", "confidence": float,
+         "details": str}
     """
     client = _get_client()
     if not client:
-        # Fallback to keyword matching if no API key
-        return _keyword_fallback(user_message)
+        return _minimal_fallback(user_message)
 
-    prompt = f"""Classify the user's intent. They are using a data analytics tool that can:
-- Build interactive HTML dashboards
-- Build Power BI projects (.pbip)
-- Build PDF reports
-- Build PowerPoint presentations
-- Build Word documents
-- Analyze/explore data conversationally
+    # Build file context string
+    fc = file_context or {}
+    file_info = (
+        f"File loaded: {fc.get('source_type', 'none')}\n"
+        f"File name: {fc.get('file_name', 'none')}\n"
+        f"Has Tableau structure: {fc.get('has_tableau_spec', False)}\n"
+        f"Worksheets: {fc.get('worksheet_count', 0)}\n"
+        f"Dashboards: {fc.get('dashboard_count', 0)}\n"
+        f"Has data: {fc.get('has_dataframe', False)}"
+    )
 
-The user has already uploaded a data file. They may be asking for something for the first time, or following up on a previous build.
+    user_prompt = f"""{file_info}
 
-CONVERSATION CONTEXT (last messages):
-{conversation_context}
+CONVERSATION CONTEXT:
+{conversation_context or '(none)'}
 
 USER MESSAGE: {user_message}
 
-Respond with ONLY one of these JSON objects:
-{{"intent":"build_dashboard"}} - user wants an HTML dashboard, visualization, chart, visual output, or is asking for a rebuild/different version of a previous visual output
-{{"intent":"build_powerbi"}} - user explicitly wants Power BI / PBI / PBIP
-{{"intent":"build_pdf"}} - user wants a PDF report
-{{"intent":"build_pptx"}} - user wants PowerPoint / slides / presentation / deck
-{{"intent":"build_word"}} - user wants a Word document
-{{"intent":"build_all"}} - user wants multiple formats or "everything"
-{{"intent":"analyze"}} - user wants data analysis, insights, or questions answered about the data
-{{"intent":"chat"}} - user is chatting, asking questions about the tool, or something unrelated to building
-
-RULES:
-- "do it", "go ahead", "yes", "ok", "make it", "surprise me", "another one", "try again", "redo it", "something different", "blow my mind" after a build = REBUILD (same intent as the last build, default to build_dashboard)
-- "this is terrible", "I hate it", "make it better", "not good enough" after a build = REBUILD
-- Any request to CREATE, GENERATE, PRODUCE, MAKE, BUILD something visual = build_dashboard unless they specifically say Power BI, PDF, PPTX, or Word
-- When in doubt between chat and build, prefer BUILD if the user has data loaded
-- "report" alone = build_pdf. "interactive report" or "visual report" = build_dashboard
-
-Output ONLY the JSON. Nothing else."""
+Return this JSON:
+{{"intent": "build_powerbi|build_dashboard|build_pdf|build_pptx|build_word|build_all|analyze|chat", "mode": "replicate|creative", "confidence": 0.95}}"""
 
     try:
         response = client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=50,
+            max_tokens=100,
             temperature=0,
-            system="You are a JSON classifier. Output ONLY a JSON object. No text. No explanation.",
-            messages=[{"role": "user", "content": prompt}],
+            system=_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_prompt}],
         )
         raw = response.content[0].text.strip()
-        # Extract JSON from response (may be wrapped in text)
-        import re as _re
-        json_match = _re.search(r'\{[^}]+\}', raw)
+
+        # Extract JSON (may be wrapped in markdown)
+        import re
+        json_match = re.search(r'\{[^}]+\}', raw)
         if json_match:
             result = json.loads(json_match.group())
             intent = result.get("intent", CHAT)
-            if intent in (BUILD_DASHBOARD, BUILD_POWERBI, BUILD_PDF,
-                          BUILD_PPTX, BUILD_WORD, BUILD_ALL, CHAT, ANALYZE):
-                return {
-                    "intent": intent,
-                    "confidence": 0.95,
-                    "details": "haiku",
-                }
+            mode = result.get("mode", "creative")
+            confidence = result.get("confidence", 0.9)
+
+            # Validate intent is known
+            valid_intents = {
+                BUILD_DASHBOARD, BUILD_POWERBI, BUILD_PDF,
+                BUILD_PPTX, BUILD_WORD, BUILD_ALL, CHAT, ANALYZE,
+            }
+            if intent not in valid_intents:
+                intent = CHAT
+
+            return {
+                "intent": intent,
+                "mode": mode,
+                "confidence": confidence,
+                "details": "haiku",
+            }
+
     except Exception as e:
-        print(f"[INTENT] Classification failed: {e}")
+        logger.warning(f"[INTENT] Classification failed: {e}")
 
-    return _keyword_fallback(user_message)
+    return _minimal_fallback(user_message)
 
 
-def _keyword_fallback(msg: str) -> dict:
-    """Keyword fallback with fuzzy typo tolerance."""
+def _minimal_fallback(msg: str) -> dict:
+    """Last-resort fallback when API is unavailable.
+
+    Uses only the most obvious signals -- not a full keyword engine.
+    """
     lower = msg.lower()
 
-    # Split into words for fuzzy matching
-    words = set(lower.split())
+    if any(k in lower for k in ("power bi", "powerbi", "pbi", "pbip")):
+        return {"intent": BUILD_POWERBI, "mode": "creative",
+                "confidence": 0.7, "details": "fallback"}
 
-    def _fuzzy_match(target, threshold=0.75):
-        """Check if any word in the message is close to target."""
-        if target in lower:
-            return True
-        for w in words:
-            if len(w) >= 3 and len(target) >= 3:
-                # Simple character overlap ratio
-                common = sum(1 for c in w if c in target)
-                ratio = common / max(len(w), len(target))
-                if ratio >= threshold and abs(len(w) - len(target)) <= 2:
-                    return True
-        return False
+    if "pdf" in lower and "report" in lower:
+        return {"intent": BUILD_PDF, "mode": "creative",
+                "confidence": 0.7, "details": "fallback"}
 
-    if any(k in lower for k in ("power bi", "powerbi", "pbi", "pbip", "pbix")):
-        return {"intent": BUILD_POWERBI, "confidence": 0.9, "details": "keyword"}
-    if _fuzzy_match("dashboard") or any(k in lower for k in ("html", "interactive", "visual", "chart")):
-        return {"intent": BUILD_DASHBOARD, "confidence": 0.8, "details": "keyword"}
-    if "pdf" in lower:
-        return {"intent": BUILD_PDF, "confidence": 0.8, "details": "keyword"}
-    if any(k in lower for k in ("powerpoint", "pptx", "slides", "presentation", "deck")):
-        return {"intent": BUILD_PPTX, "confidence": 0.8, "details": "keyword"}
-    if any(k in lower for k in ("word", "docx", "document")):
-        return {"intent": BUILD_WORD, "confidence": 0.8, "details": "keyword"}
-    if any(k in lower for k in ("all formats", "all three", "everything")):
-        return {"intent": BUILD_ALL, "confidence": 0.8, "details": "keyword"}
-    # Follow-up patterns
-    if any(k in lower for k in (
-        "do it", "build it", "make it", "go ahead", "yes", "ok do",
-        "another", "again", "redo", "different", "better", "surprise",
-        "blow my mind", "out of this world", "something else",
-        "show me", "create", "generate", "produce", "make me",
-    )):
-        return {"intent": BUILD_DASHBOARD, "confidence": 0.6, "details": "followup_keyword"}
-    return {"intent": CHAT, "confidence": 0.5, "details": "default"}
+    if any(k in lower for k in ("powerpoint", "pptx", "slides", "presentation")):
+        return {"intent": BUILD_PPTX, "mode": "creative",
+                "confidence": 0.7, "details": "fallback"}
+
+    # Default to dashboard for any build-like language
+    if any(k in lower for k in ("build", "create", "make", "generate", "dashboard")):
+        return {"intent": BUILD_DASHBOARD, "mode": "creative",
+                "confidence": 0.6, "details": "fallback"}
+
+    return {"intent": CHAT, "mode": "creative",
+            "confidence": 0.5, "details": "fallback"}

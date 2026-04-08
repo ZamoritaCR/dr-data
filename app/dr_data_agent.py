@@ -1449,8 +1449,40 @@ class DrDataAgent:
                 _ctx_lines.append(f"{role}: {content}")
             _recent_ctx = "\n".join(_ctx_lines)
 
-        _intent = _classify_intent(user_message, _recent_ctx)
+        # Build file context for intent classifier
+        _file_context = {
+            "source_type": "tableau" if self.tableau_spec else (
+                "image" if (self.tableau_spec and
+                            self.tableau_spec.get("source") == "vision_screenshot")
+                else "data" if self.dataframe is not None else "none"
+            ),
+            "file_name": os.path.basename(self.data_file_path or ""),
+            "has_tableau_spec": bool(self.tableau_spec),
+            "has_dataframe": self.dataframe is not None,
+            "worksheet_count": len(self.tableau_spec.get("worksheets", []))
+                if self.tableau_spec else 0,
+            "dashboard_count": len(self.tableau_spec.get("dashboards", []))
+                if self.tableau_spec else 0,
+        }
+
+        _intent = _classify_intent(user_message, _recent_ctx, _file_context)
         _intent_type = _intent["intent"]
+        _intent_mode = _intent.get("mode", "creative")
+
+        # Propagate mode to session state for downstream routing
+        # (replicate vs creative for Tableau/vision specs)
+        try:
+            import streamlit as _st_mode
+            if _intent_mode == "replicate":
+                _st_mode.session_state["user_intent"] = "replicate"
+            elif _intent_mode == "creative" and _intent_type in (BUILD_DASHBOARD,):
+                _st_mode.session_state["user_intent"] = "reimagine"
+        except Exception:
+            pass
+
+        print(f"[INTENT] {_intent_type} mode={_intent_mode} "
+              f"conf={_intent.get('confidence', '?')} "
+              f"via={_intent.get('details', '?')}")
 
         want_pbi = _intent_type == BUILD_POWERBI
         want_dash = _intent_type == BUILD_DASHBOARD

@@ -632,9 +632,61 @@ def _guess_format(dax_agg):
     return "#,0"
 
 
+def _translate_spatial_formula(formula, table_name):
+    """Translate Tableau spatial functions to Power BI equivalents.
+
+    Returns (dax_expression, is_map_visual) or (None, False) if not spatial.
+    """
+    f_upper = formula.strip().upper()
+
+    # MAKEPOINT(lat, lon) -> map visual with lat/lon columns
+    mp = re.match(r'MAKEPOINT\s*\(\s*(.+?)\s*,\s*(.+?)\s*\)', formula, re.IGNORECASE)
+    if mp:
+        lat_field = _clean_field_name(mp.group(1).strip().strip('[]'))
+        lon_field = _clean_field_name(mp.group(2).strip().strip('[]'))
+        dax = f"/* MAP_POINT: lat='{table_name}'[{lat_field}] lon='{table_name}'[{lon_field}] */"
+        return dax, True
+
+    # MAKELINE(point1, point2) -> map visual with route layer
+    ml = re.match(r'MAKELINE\s*\(\s*(.+?)\s*,\s*(.+?)\s*\)', formula, re.IGNORECASE)
+    if ml:
+        dax = (f"/* MAP_LINE: connect {ml.group(1).strip()} to {ml.group(2).strip()} "
+               f"- use Azure Maps route layer */")
+        return dax, True
+
+    # DISTANCE(p1, p2, units) -> Haversine DAX
+    dist = re.match(
+        r'DISTANCE\s*\(\s*(.+?)\s*,\s*(.+?)\s*,\s*["\']?(km|miles?|mi)["\']?\s*\)',
+        formula, re.IGNORECASE,
+    )
+    if dist:
+        units = dist.group(3).lower()
+        R = "6371" if "km" in units else "3959"
+        dax = (
+            f"VAR _R = {R} "
+            f"RETURN _R * ACOS(MAX(-1, MIN(1, "
+            f"SIN(RADIANS(SELECTEDVALUE('{table_name}'[_lat1]))) * "
+            f"SIN(RADIANS(SELECTEDVALUE('{table_name}'[_lat2]))) + "
+            f"COS(RADIANS(SELECTEDVALUE('{table_name}'[_lat1]))) * "
+            f"COS(RADIANS(SELECTEDVALUE('{table_name}'[_lat2]))) * "
+            f"COS(RADIANS(SELECTEDVALUE('{table_name}'[_lon2]) - "
+            f"SELECTEDVALUE('{table_name}'[_lon1]))))))"
+        )
+        return dax, False
+
+    # BUFFER, AREA, INTERSECTS, COLLECT, GEOMETRY -> manual with comment
+    for spatial_fn in ('BUFFER', 'AREA', 'INTERSECTS', 'COLLECT', 'GEOMETRY'):
+        if re.match(rf'{spatial_fn}\s*\(', f_upper):
+            return (f"/* SPATIAL_{spatial_fn}: no Power BI DAX equivalent "
+                    f"-- requires custom visual */"), False
+
+    return None, False
+
+
 def _translate_complex_measures(measures, table_name, profile_col_names):
     """Translate complex Tableau formulas to DAX via heuristic + AI fallback.
 
+    0. Run spatial translation first (MAKEPOINT, DISTANCE, etc.)
     1. Run heuristic translation on each needs_ai measure
     2. If heuristic produces a non-BLANK result, use it
     3. Remaining measures get sent to Claude API in a single batch
@@ -645,6 +697,22 @@ def _translate_complex_measures(measures, table_name, profile_col_names):
     needs_ai = [m for m in measures if m.get("needs_ai") and m.get("original_formula")]
     if not needs_ai:
         return measures
+
+    # Phase 0: spatial pre-filter
+    still_needs_translation = []
+    for m in needs_ai:
+        spatial_dax, is_map = _translate_spatial_formula(m["original_formula"], table_name)
+        if spatial_dax is not None:
+            m["dax"] = spatial_dax
+            m["needs_ai"] = False
+            m["translation_method"] = "spatial"
+            if is_map:
+                m["is_map_visual"] = True
+            print(f"    [DAX-SPATIAL] {m['name']}: spatial translation applied")
+        else:
+            still_needs_translation.append(m)
+
+    needs_ai = still_needs_translation
 
     # Phase 1: heuristic pre-filter
     still_needs_ai = []
@@ -669,7 +737,7 @@ def _translate_complex_measures(measures, table_name, profile_col_names):
     if not still_needs_ai:
         return measures
 
-    # Phase 2: AI translation via Claude
+    # Phase 2: AI translation via Claude (process all measures in batches of 20)
     print(f"    [DAX-AI] Sending {len(still_needs_ai)} complex measures to Claude for translation")
     try:
         import os
@@ -680,17 +748,6 @@ def _translate_complex_measures(measures, table_name, profile_col_names):
 
         from anthropic import Anthropic
         client = Anthropic(api_key=api_key)
-
-        # Batch up to 20 measures
-        batch = still_needs_ai[:20]
-        payload = [
-            {
-                "name": m["name"],
-                "formula": m["original_formula"],
-                "table_name": table_name,
-            }
-            for m in batch
-        ]
 
         system_prompt = (
             "You are a DAX expert. Translate Tableau calculated field formulas to DAX.\n"
@@ -717,41 +774,60 @@ def _translate_complex_measures(measures, table_name, profile_col_names):
             "- Return ONLY the JSON array, no explanation."
         )
 
-        response = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=4096,
-            system=system_prompt,
-            messages=[{"role": "user", "content": json.dumps(payload)}],
-        )
+        total_applied = 0
+        batch_size = 20
+        for batch_start in range(0, len(still_needs_ai), batch_size):
+            batch = still_needs_ai[batch_start:batch_start + batch_size]
+            if batch_start > 0:
+                print(f"    [DAX-AI] Batch {batch_start // batch_size + 1}: "
+                      f"sending {len(batch)} more measures")
 
-        response_text = response.content[0].text.strip()
+            payload = [
+                {
+                    "name": m["name"],
+                    "formula": m["original_formula"],
+                    "table_name": table_name,
+                }
+                for m in batch
+            ]
 
-        # Parse JSON from response (handle markdown code blocks)
-        if response_text.startswith("```"):
-            lines = response_text.split("\n")
-            lines = [l for l in lines if not l.startswith("```")]
-            response_text = "\n".join(lines)
+            response = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=4096,
+                system=system_prompt,
+                messages=[{"role": "user", "content": json.dumps(payload)}],
+            )
 
-        ai_results = json.loads(response_text)
-        if not isinstance(ai_results, list):
-            ai_results = []
+            response_text = response.content[0].text.strip()
 
-        # Apply AI translations
-        ai_lookup = {r["name"]: r["dax"] for r in ai_results if r.get("name") and r.get("dax")}
-        applied = 0
-        for m in batch:
-            ai_dax = ai_lookup.get(m["name"], "")
-            if ai_dax and ai_dax.strip() and ai_dax.strip() != "BLANK()":
-                m["dax"] = ai_dax
-                m["needs_ai"] = False
-                m["translation_method"] = "ai_claude"
-                applied += 1
-                print(f"    [DAX-AI] {m['name']}: AI translation applied")
-            else:
-                m["translation_method"] = "ai_failed"
-                print(f"    [DAX-AI] {m['name']}: AI returned BLANK or no result, keeping BLANK()")
+            # Parse JSON from response (handle markdown code blocks)
+            if response_text.startswith("```"):
+                lines = response_text.split("\n")
+                lines = [l for l in lines if not l.startswith("```")]
+                response_text = "\n".join(lines)
 
-        print(f"    [DAX-AI] Applied {applied}/{len(batch)} AI translations")
+            ai_results = json.loads(response_text)
+            if not isinstance(ai_results, list):
+                ai_results = []
+
+            # Apply AI translations
+            ai_lookup = {r["name"]: r["dax"] for r in ai_results if r.get("name") and r.get("dax")}
+            applied = 0
+            for m in batch:
+                ai_dax = ai_lookup.get(m["name"], "")
+                if ai_dax and ai_dax.strip() and ai_dax.strip() != "BLANK()":
+                    m["dax"] = ai_dax
+                    m["needs_ai"] = False
+                    m["translation_method"] = "ai_claude"
+                    applied += 1
+                    print(f"    [DAX-AI] {m['name']}: AI translation applied")
+                else:
+                    m["translation_method"] = "ai_failed"
+                    print(f"    [DAX-AI] {m['name']}: AI returned BLANK or no result, keeping BLANK()")
+
+            total_applied += applied
+
+        print(f"    [DAX-AI] Applied {total_applied}/{len(still_needs_ai)} AI translations")
 
     except ImportError:
         print("    [DAX-AI] anthropic package not installed -- skipping AI translation")

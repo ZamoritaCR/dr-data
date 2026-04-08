@@ -34,6 +34,12 @@ def _classify_tier(measure, calc_detail=None):
             reason = f"No DAX equivalent for: {original[:60]}"
         return "BLOCKED", 0, "NO_MAPPING", f"-100 no mapping"
 
+    # SPATIAL: translated via spatial function mapping
+    if method == "spatial":
+        is_map = measure.get("is_map_visual", False)
+        label = "SPATIAL_MAP" if is_map else "SPATIAL_TRANSLATE"
+        return "MAP" if is_map else "GOOD", 90, label, "-10 spatial translation"
+
     # AUTO: simple aggregation, deterministic (no AI, no heuristic)
     if not needs_ai and method != "heuristic" and method != "ai_claude":
         return "AUTO", 100, "FUNCTION_MAP", ""
@@ -93,7 +99,7 @@ def _compute_dq(fields):
     blocked = [f for f in fields if f["tier"] == "BLOCKED"]
     review = [f for f in fields if f["tier"] in ("REVIEW", "MANUAL")]
     low_conf = [f for f in fields if 0 < f["confidence"] < 50]
-    auto_good = [f for f in fields if f["tier"] in ("AUTO", "GOOD")]
+    auto_good = [f for f in fields if f["tier"] in ("AUTO", "GOOD", "MAP")]
 
     dimensions = []
 
@@ -264,7 +270,7 @@ def build_audit_data(measures, tableau_spec, calc_audit_result=None,
     warnings = _build_warnings(fields)
 
     # Build metadata
-    auto_good = sum(1 for f in fields if f["tier"] in ("AUTO", "GOOD"))
+    auto_good = sum(1 for f in fields if f["tier"] in ("AUTO", "GOOD", "MAP"))
     review_count = sum(1 for f in fields if f["tier"] in ("REVIEW", "MANUAL"))
     blocked_count = sum(1 for f in fields if f["tier"] == "BLOCKED")
     avg_conf = (sum(f["confidence"] for f in fields) / len(fields)
@@ -322,7 +328,7 @@ def generate_audit_report(fields, dq, warnings, meta):
         tier = f["tier"]
         tier_colors = {
             "AUTO": "#00ff88", "GOOD": "#4488ff", "REVIEW": "#ffd700",
-            "MANUAL": "#ff8800", "BLOCKED": "#ff4466",
+            "MANUAL": "#ff8800", "BLOCKED": "#ff4466", "MAP": "#4488ff",
         }
         tc = tier_colors.get(tier, "#888899")
 
@@ -422,7 +428,7 @@ def generate_audit_report(fields, dq, warnings, meta):
         ("Workbook", e(meta.get("workbook_name", "")), ""),
         ("Generated", e(meta.get("timestamp", "")), ""),
         ("Total Fields", str(meta.get("total", 0)), ""),
-        ("Verified (AUTO/GOOD)", str(meta.get("auto_good", 0)), "#00ff88"),
+        ("Verified (AUTO/GOOD/MAP)", str(meta.get("auto_good", 0)), "#00ff88"),
         ("Review (REVIEW/MANUAL)", str(meta.get("review", 0)), "#ffd700"),
         ("Blocked", str(meta.get("blocked", 0)), "#ff4466"),
         ("Avg Confidence", f'{meta.get("avg_confidence", 0)}%', ""),
@@ -915,6 +921,7 @@ body {{
         <button class="filter-btn" onclick="setFilter('REVIEW', this)">REVIEW</button>
         <button class="filter-btn" onclick="setFilter('MANUAL', this)">MANUAL</button>
         <button class="filter-btn" onclick="setFilter('BLOCKED', this)">BLOCKED</button>
+        <button class="filter-btn" onclick="setFilter('MAP', this)">MAP</button>
         <span class="count-display" id="count-display">Showing {total} of {total} fields</span>
     </div>
     <div class="formula-table-wrap">
@@ -1023,7 +1030,7 @@ function sortTable(key) {{
             var bVal = parseInt(b[0].querySelector('.col-conf').textContent) || 0;
             return bVal - aVal;
         }} else if (key === 'tier') {{
-            var order = {{'AUTO': 0, 'GOOD': 1, 'REVIEW': 2, 'MANUAL': 3, 'BLOCKED': 4}};
+            var order = {{'AUTO': 0, 'GOOD': 1, 'MAP': 2, 'REVIEW': 3, 'MANUAL': 4, 'BLOCKED': 5}};
             var aT = a[0].getAttribute('data-tier');
             var bT = b[0].getAttribute('data-tier');
             return (order[aT] || 5) - (order[bT] || 5);

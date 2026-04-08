@@ -3201,6 +3201,45 @@ Output ONLY valid JSON. No markdown. No commentary."""
                     except Exception as cv_err:
                         print(f"[CALC-VALIDATOR] Audit failed (non-fatal): {cv_err}")
 
+                # Generate formula translation audit report (HTML)
+                try:
+                    from core.audit_report import build_audit_data, generate_audit_report
+                    _measures_full = dashboard_spec.get("measures_full", [])
+                    if not _measures_full:
+                        # Fallback: reconstruct from config measures
+                        _measures_full = [
+                            {"name": m["name"], "dax": m.get("dax", m.get("expression", "")),
+                             "format": m.get("format", "#,0")}
+                            for m in config.get("tmdl_model", {}).get("tables", [{}])[0].get("measures", [])
+                        ]
+                    _wb_name = self.tableau_spec.get("workbook_name", "")
+                    if not _wb_name and self.data_file_path:
+                        _wb_name = os.path.splitext(os.path.basename(self.data_file_path))[0]
+                    _audit_data = build_audit_data(
+                        measures=_measures_full,
+                        tableau_spec=self.tableau_spec,
+                        calc_audit_result=calc_audit_result,
+                        workbook_name=_wb_name,
+                        tableau_version=self.tableau_spec.get("version", ""),
+                    )
+                    _audit_html = generate_audit_report(
+                        fields=_audit_data["fields"],
+                        dq=_audit_data["dq"],
+                        warnings=_audit_data["warnings"],
+                        meta=_audit_data["meta"],
+                    )
+                    _audit_html_path = os.path.join(self.output_dir, "translation_audit.html")
+                    with open(_audit_html_path, "w", encoding="utf-8") as _af:
+                        _af.write(_audit_html)
+                    self.generated_files.append(_audit_html_path)
+                    self._report_progress(
+                        f"Translation audit report: DQ {_audit_data['dq']['score']}/100, "
+                        f"{_audit_data['meta']['auto_good']} mapped, "
+                        f"{_audit_data['meta']['blocked']} blocked"
+                    )
+                except Exception as _ar_err:
+                    print(f"[AUDIT-REPORT] Generation failed (non-fatal): {_ar_err}")
+
                 # Preflight validation + self-healing
                 try:
                     from core.preflight_validator import validate as _preflight

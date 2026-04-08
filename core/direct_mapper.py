@@ -1085,6 +1085,7 @@ def build_pbip_config_from_tableau(tableau_spec, data_profile, table_name="Data"
             {"name": m["name"], "dax": m["dax"], "format": m.get("format", "#,0")}
             for m in measures
         ],
+        "measures_full": measures,
         "design": design,
         "worksheet_designs": ws_designs,
         "worksheet_chart_types": ws_chart_types,

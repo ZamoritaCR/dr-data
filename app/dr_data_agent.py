@@ -3169,6 +3169,28 @@ Output ONLY valid JSON. No markdown. No commentary."""
                     except Exception as cv_err:
                         print(f"[CALC-VALIDATOR] Audit failed (non-fatal): {cv_err}")
 
+                # Preflight validation + self-healing
+                try:
+                    from core.preflight_validator import validate as _preflight
+                    from core.pbip_healer import heal as _heal
+                    _pf = _preflight(result_path)
+                    if not _pf.all_passed:
+                        _fixes = _heal(result_path, _pf)
+                        self._report_progress(
+                            f"Preflight: {_pf.fail_count} issues found, "
+                            f"{len(_fixes)} auto-healed"
+                        )
+                        _pf2 = _preflight(result_path)
+                        if not _pf2.all_passed:
+                            for _f in _pf2.failed:
+                                print(f"    [PREFLIGHT] still failing: {_f}")
+                    else:
+                        self._report_progress(
+                            f"Preflight: {_pf.pass_count} checks passed"
+                        )
+                except Exception as _pf_err:
+                    print(f"[PREFLIGHT] Non-fatal: {_pf_err}")
+
                 zip_name = project_name.replace(" ", "_")
                 zip_path = shutil.make_archive(
                     os.path.join(output_dir, zip_name), "zip", result_path
@@ -3508,6 +3530,28 @@ Output ONLY valid JSON. No markdown. No commentary."""
                     )
                 except Exception as cv_err:
                     print(f"[CALC-VALIDATOR] Audit failed (non-fatal): {cv_err}")
+
+            # Preflight validation + self-healing
+            try:
+                from core.preflight_validator import validate as _preflight
+                from core.pbip_healer import heal as _heal
+                _pf = _preflight(result_path)
+                if not _pf.all_passed:
+                    _fixes = _heal(result_path, _pf)
+                    self._report_progress(
+                        f"Preflight: {_pf.fail_count} issues found, "
+                        f"{len(_fixes)} auto-healed"
+                    )
+                    _pf2 = _preflight(result_path)
+                    if not _pf2.all_passed:
+                        for _f in _pf2.failed:
+                            print(f"    [PREFLIGHT] still failing: {_f}")
+                else:
+                    self._report_progress(
+                        f"Preflight: {_pf.pass_count} checks passed"
+                    )
+            except Exception as _pf_err:
+                print(f"[PREFLIGHT] Non-fatal: {_pf_err}")
 
             zip_name = project_name.replace(" ", "_")
             zip_path = shutil.make_archive(

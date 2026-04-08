@@ -1629,30 +1629,76 @@ class DrDataAgent:
             if want_dash:
                 print('[BUILD] Starting dashboard generation...')
                 self._dashboard_iteration += 1
-                _progress(
-                    f"Claude is creating your dashboard from scratch "
-                    f"(version {self._dashboard_iteration})..."
+
+                # Check if this is a vision-sourced spec that should be
+                # replicated deterministically instead of AI-generated
+                _is_vision_replica = (
+                    self.tableau_spec
+                    and self.tableau_spec.get("source") == "vision_screenshot"
+                    and self.tableau_spec.get("worksheets")
                 )
-                try:
-                    p = self._generate_freeform_dashboard(
-                        user_message, title, _progress
+
+                if _is_vision_replica:
+                    _progress(
+                        f"Building replica dashboard from screenshot "
+                        f"({len(self.tableau_spec.get('worksheets', []))} visuals)..."
                     )
-                    if p:
-                        fname = os.path.basename(p)
-                        downloads.append({
-                            "name": "Interactive Dashboard",
-                            "filename": fname,
-                            "path": p,
-                            "description": (
-                                "AI-generated interactive dashboard -- "
-                                "unique design, charts, and insights"
-                            ),
-                        })
-                        self.trace.log_deliverable(
-                            "Interactive Dashboard", p,
-                            {"title": title, "type": "html"},
+                    try:
+                        from core.vision_html_builder import build_replica_html
+                        p = build_replica_html(
+                            self.tableau_spec,
+                            output_dir=self.output_dir,
+                            title=title,
                         )
-                        _progress("  Dashboard complete.")
+                        if p:
+                            fname = os.path.basename(p)
+                            downloads.append({
+                                "name": "Dashboard Replica",
+                                "filename": fname,
+                                "path": p,
+                                "description": (
+                                    "Screenshot replica -- matching layout, "
+                                    "chart types, and colors"
+                                ),
+                            })
+                            self.trace.log_deliverable(
+                                "Dashboard Replica", p,
+                                {"title": title, "type": "html"},
+                            )
+                            _progress("  Replica dashboard complete.")
+                    except Exception as e:
+                        print('[BUILD] Vision replica FAILED, falling back to freeform:')
+                        _tb.print_exc()
+                        _progress(f"  Replica failed ({str(e)[:60]}), trying AI generation...")
+                        _is_vision_replica = False
+
+                if not _is_vision_replica:
+                    _progress(
+                        f"Claude is creating your dashboard from scratch "
+                        f"(version {self._dashboard_iteration})..."
+                    )
+
+                try:
+                    if not _is_vision_replica:
+                        p = self._generate_freeform_dashboard(
+                            user_message, title, _progress
+                        )
+                        if p:
+                            fname = os.path.basename(p)
+                            downloads.append({
+                                "name": "Interactive Dashboard",
+                                "filename": fname,
+                                "path": p,
+                                "description": (
+                                    "AI-generated interactive dashboard -- "
+                                    "unique design, charts, and insights"
+                                ),
+                            })
+                            self.trace.log_deliverable(
+                                "Interactive Dashboard", p,
+                                {"title": title, "type": "html"},
+                            )
+                            _progress("  Dashboard complete.")
                 except Exception as e:
                     print('[BUILD] Dashboard FAILED:')
                     _tb.print_exc()

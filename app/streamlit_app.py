@@ -1329,6 +1329,31 @@ with tab1:
                                     key=f"ws_dl_{idx}_{dl['filename']}",
                                 )
 
+                    # Inline preview for HTML dashboards
+                    _dl_ext = dl.get("filename", "").rsplit(".", 1)[-1].lower()
+                    if _dl_ext == "html" and os.path.exists(dl["path"]):
+                        try:
+                            with open(dl["path"], "r", encoding="utf-8") as _hf:
+                                _html_content = _hf.read()
+                            # Only preview if it contains actual chart/dashboard
+                            # content (Plotly, scripts, substantial HTML)
+                            if len(_html_content) > 1000 and (
+                                "plotly" in _html_content.lower()
+                                or "<script>" in _html_content.lower()
+                                or "chart" in _html_content.lower()
+                            ):
+                                with st.expander(
+                                    f"Preview: {dl['name']}",
+                                    expanded=True,
+                                ):
+                                    components.html(
+                                        _html_content,
+                                        height=800,
+                                        scrolling=True,
+                                    )
+                        except Exception as _preview_err:
+                            print(f"[PREVIEW] Failed to render {dl['filename']}: {_preview_err}")
+
 
     # ============================================
     # MIME types for download buttons

@@ -1865,6 +1865,23 @@ class DrDataAgent:
                                 {"title": title, "type": "pbip",
                                  "build_context": pbi_build_context},
                             )
+                        # Run QA agent on generated PBIP
+                        if _pbip_folder and os.path.isdir(_pbip_folder):
+                            try:
+                                from core.qa_agent import QAAgent
+                                _qa = QAAgent(_pbip_folder, dataframe=self.dataframe)
+                                _qa_result = _qa.run_full_qa()
+                                if _qa_result["fixes"]:
+                                    _progress(f"  QA auto-fixed: {', '.join(_qa_result['fixes'][:3])}")
+                                if not _qa_result["passed"]:
+                                    _progress(f"  QA BLOCKED: {len(_qa_result['issues'])} issue(s)")
+                                    for _qi in _qa_result["issues"][:5]:
+                                        _progress(f"    - {_qi}")
+                                else:
+                                    _warn_count = len(_qa_result.get("warnings", []))
+                                    _progress(f"  QA passed ({_warn_count} advisory warnings)")
+                            except Exception as _qa_err:
+                                print(f"[QA] Non-fatal: {_qa_err}")
                         _progress("  Power BI project complete.")
                 except Exception as e:
                     print(f"[PBI] GENERATION FAILED:")

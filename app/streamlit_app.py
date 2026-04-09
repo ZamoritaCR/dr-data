@@ -93,6 +93,42 @@ def _publish_pbi_deliverable(dl):
     if not display_name:
         display_name = dl.get("filename", "DrData-Report").replace(".zip", "")
 
+    # --- QA Gate: run deterministic checks BEFORE publishing ---
+    agent = st.session_state.get("agent")
+    qa_df = getattr(agent, "dataframe", None) if agent else None
+
+    with st.spinner("Running QA validation..."):
+        try:
+            from core.qa_agent import QAAgent
+            qa = QAAgent(pbip_folder, dataframe=qa_df)
+            qa_result = qa.run_full_qa()
+        except Exception as qa_err:
+            st.warning(f"QA check failed (non-blocking): {qa_err}")
+            qa_result = {"passed": True, "issues": [], "warnings": [], "fixes": []}
+
+    # Show QA results
+    if qa_result.get("fixes"):
+        st.info(
+            "**QA Auto-fixes applied:** "
+            + " | ".join(qa_result["fixes"])
+        )
+    if qa_result.get("warnings"):
+        with st.expander(
+            f"QA Advisory ({len(qa_result['warnings'])} warnings)",
+            expanded=False,
+        ):
+            for w in qa_result["warnings"]:
+                st.markdown(f"- {w}")
+
+    if not qa_result.get("passed"):
+        st.error("**QA Gate BLOCKED publish.** Fix these issues first:")
+        for issue in qa_result["issues"]:
+            st.markdown(f"- {issue}")
+        return
+
+    st.success("QA gate passed -- publishing...")
+
+    # --- Publish to Power BI ---
     with st.spinner("Publishing to Power BI..."):
         try:
             from core.powerbi_publisher import (

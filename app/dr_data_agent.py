@@ -961,6 +961,41 @@ class DrDataAgent:
         Gathers data context (rows, columns, stats, structure) then sends
         it through the LLM so Dr. Data's personality controls the greeting.
         """
+        # DIRECT HYPER EXTRACTION -- ensure real data before any profiling
+        if self.dataframe is None:
+            _twbx = None
+            if self.session and hasattr(self.session, "files"):
+                for _fn, _fi in self.session.files.items():
+                    if str(_fn).lower().endswith((".twbx", ".twb")):
+                        _twbx = _fi.get("path") or _fn
+                        break
+            if _twbx is None:
+                import glob as _glob
+                _candidates = sorted(
+                    _glob.glob("/tmp/*/*.twbx") + _glob.glob("/tmp/*.twbx"),
+                    key=os.path.getmtime, reverse=True,
+                )
+                if _candidates:
+                    _twbx = _candidates[0]
+            if _twbx and os.path.isfile(_twbx):
+                try:
+                    import warnings as _w; _w.filterwarnings("ignore")
+                    from app.file_handler import ingest_file as _ingest
+                    _r = _ingest(_twbx)
+                    _dfs = _r.get("dataframes", {})
+                    _df = list(_dfs.values())[0] if _dfs else None
+                    if _df is not None and len(_df) > 0:
+                        self.dataframe = _df
+                        self.data_file_path = None
+                        self.data_path = None
+                        self.tableau_spec = _r.get(
+                            "report_structure", self.tableau_spec
+                        )
+                        print(f"[ANALYZE-DIRECT] Real .hyper loaded: "
+                              f"{self.dataframe.shape}")
+                except Exception as _ie:
+                    print(f"[ANALYZE-DIRECT] ingest_file error: {_ie}")
+
         # Multi-file session path
         if self.session:
             context = self._build_upload_context_from_session()

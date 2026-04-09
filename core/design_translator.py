@@ -35,10 +35,10 @@ _CHART_TYPE_MAP = {
     "circle": "scatterChart",
     "square": "matrix",                   # Tableau filled-square grid → PBI matrix
     "text": "tableEx",
-    "map": "tableEx",                      # map requires PBI Service (Bing Maps) -- tableEx for local PBIP
-    "filled-map": "tableEx",              # same -- choropleth not supported locally
-    "polygon": "tableEx",                 # fallback for local rendering
-    "multipolygon": "tableEx",            # fallback for local rendering
+    "map": "map",
+    "filled-map": "filledMap",
+    "polygon": "filledMap",
+    "multipolygon": "filledMap",
     "pie": "pieChart",
     "gantt-bar": "clusteredBarChart",     # horizontal gantt -> horizontal bar
     "automatic": "clusteredColumnChart",  # vertical columns (safe default)

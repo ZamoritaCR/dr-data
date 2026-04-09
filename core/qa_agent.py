@@ -365,6 +365,22 @@ class QAAgent:
     #  DETERMINISTIC FILE CHECKS                                          #
     # ================================================================== #
 
+    # PBIR page.json allowed fields (strict allowlist)
+    _PBIR_PAGE_ALLOWED_KEYS = {
+        "$schema", "name", "displayName", "displayOption",
+        "width", "height", "background", "backgroundImage",
+        "mobileState", "outspacePartitions", "filters",
+        "filterConfig", "publicCustomVisuals", "pods",
+    }
+
+    # PBIR visual.json allowed top-level keys
+    _PBIR_VISUAL_ALLOWED_KEYS = {
+        "$schema", "name", "position", "visual",
+        "filters", "filterConfig", "dataTransforms",
+        "howCreated", "isHidden", "tabOrder",
+        "parentGroupName", "layerOrder",
+    }
+
     def _deterministic_checks(self, pbip_path) -> list:
         """Run ALL pre-publish checks. Return list of issue dicts."""
         issues = []
@@ -380,7 +396,102 @@ class QAAgent:
         issues.extend(self._check_data_integrity(pbip_path))
         issues.extend(self._check_visuals(pbip_path))
 
+        # Schema allowlist checks (catches ordinal-type bugs)
+        schema_issues = self._check_pbir_schemas(pbip_path)
+        if schema_issues:
+            # Auto-fix critical schema issues immediately
+            self._auto_fix_schema_issues(pbip_path, schema_issues)
+            # Re-check after fix
+            remaining = self._check_pbir_schemas(pbip_path)
+            issues.extend(remaining)
+
         return issues
+
+    def _check_pbir_schemas(self, pbip_path) -> list:
+        """Validate page.json and visual.json against PBIR allowed fields."""
+        issues = []
+        # Find the .Report folder
+        rpt_dirs = glob.glob(os.path.join(pbip_path, "*.Report"))
+        if not rpt_dirs:
+            return issues
+        rpt = rpt_dirs[0]
+
+        # Check all page.json files
+        pages_dir = os.path.join(rpt, "definition", "pages")
+        if os.path.isdir(pages_dir):
+            for page_folder in os.listdir(pages_dir):
+                pj_path = os.path.join(pages_dir, page_folder, "page.json")
+                if not os.path.isfile(pj_path):
+                    continue
+                try:
+                    with open(pj_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    unknown = set(data.keys()) - self._PBIR_PAGE_ALLOWED_KEYS
+                    if unknown:
+                        issues.append({
+                            "type": "SCHEMA",
+                            "severity": "critical",
+                            "file": pj_path,
+                            "detail": f"page.json has invalid fields: "
+                                      f"{unknown} -- PBI will reject",
+                            "fix_action": "remove_keys",
+                            "fix_keys": list(unknown),
+                        })
+                except Exception:
+                    pass
+
+                # Check visual.json files under this page
+                vis_dir = os.path.join(pages_dir, page_folder, "visuals")
+                if not os.path.isdir(vis_dir):
+                    continue
+                for viz_folder in os.listdir(vis_dir):
+                    vj_path = os.path.join(vis_dir, viz_folder, "visual.json")
+                    if not os.path.isfile(vj_path):
+                        continue
+                    try:
+                        with open(vj_path, "r", encoding="utf-8") as f:
+                            vdata = json.load(f)
+                        unknown_v = (
+                            set(vdata.keys()) - self._PBIR_VISUAL_ALLOWED_KEYS
+                        )
+                        if unknown_v:
+                            issues.append({
+                                "type": "SCHEMA",
+                                "severity": "critical",
+                                "file": vj_path,
+                                "detail": f"visual.json has invalid fields: "
+                                          f"{unknown_v} -- PBI will reject",
+                                "fix_action": "remove_keys",
+                                "fix_keys": list(unknown_v),
+                            })
+                    except Exception:
+                        pass
+
+        return issues
+
+    def _auto_fix_schema_issues(self, pbip_path, issues):
+        """Remove invalid keys from page.json and visual.json files."""
+        for issue in issues:
+            if issue.get("fix_action") != "remove_keys":
+                continue
+            fpath = issue.get("file", "")
+            keys_to_remove = issue.get("fix_keys", [])
+            if not fpath or not keys_to_remove or not os.path.isfile(fpath):
+                continue
+            try:
+                with open(fpath, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                for k in keys_to_remove:
+                    data.pop(k, None)
+                with open(fpath, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2)
+                self._log("SCHEMA_FIX",
+                          f"Removed {keys_to_remove} from "
+                          f"{os.path.basename(fpath)}",
+                          "fix")
+            except Exception as e:
+                self._log("SCHEMA_FIX",
+                          f"Failed on {fpath}: {e}", "error")
 
     def _check_structure(self, root):
         issues = []

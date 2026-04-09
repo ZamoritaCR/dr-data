@@ -3072,6 +3072,8 @@ Output ONLY valid JSON. No markdown. No commentary."""
                 )
                 if _df is not None and len(_df) > 0:
                     self.dataframe = _df
+                    self.data_file_path = None  # force generator to use inline dataframe
+                    self.data_path = None
                     self.tableau_spec = _r.get("report_structure", self.tableau_spec)
                     print(f"[POWERBI-DIRECT] Real .hyper loaded: {self.dataframe.shape}, twbx={_twbx}")
             except Exception as _ie:

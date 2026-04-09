@@ -3045,7 +3045,39 @@ Output ONLY valid JSON. No markdown. No commentary."""
         audience = inputs.get("audience", "executive")
         project_name = inputs.get("project_name", "Dashboard")
 
-        # Try to recover data from session if not on agent
+        # DIRECT HYPER EXTRACTION -- bypasses all session/synthetic complexity
+        _twbx = None
+        if self.session and hasattr(self.session, "files"):
+            for _fn, _fi in self.session.files.items():
+                if str(_fn).lower().endswith((".twbx", ".twb")):
+                    _twbx = _fi.get("path") or _fn
+                    break
+        if _twbx is None:
+            import glob as _glob
+            _candidates = sorted(
+                _glob.glob("/tmp/*/*.twbx") + _glob.glob("/tmp/*.twbx"),
+                key=os.path.getmtime, reverse=True,
+            )
+            if _candidates:
+                _twbx = _candidates[0]
+        if _twbx and os.path.isfile(_twbx):
+            try:
+                import warnings as _w; _w.filterwarnings("ignore")
+                from app.file_handler import ingest_file as _ingest
+                _r = _ingest(_twbx)
+                _dfs = _r.get("dataframes", {})
+                _df = (
+                    list(_dfs.values())[0] if _dfs
+                    else _r.get("dataframe")
+                )
+                if _df is not None and len(_df) > 0:
+                    self.dataframe = _df
+                    self.tableau_spec = _r.get("report_structure", self.tableau_spec)
+                    print(f"[POWERBI-DIRECT] Real .hyper loaded: {self.dataframe.shape}, twbx={_twbx}")
+            except Exception as _ie:
+                print(f"[POWERBI-DIRECT] ingest_file error: {_ie}")
+
+        # Fallback: try session + synthetic recovery
         if self.dataframe is None:
             self._try_recover_data()
         if self.dataframe is None:

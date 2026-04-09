@@ -42,6 +42,48 @@ def _extract_mark_type(ws_element):
     return "automatic"
 
 
+def _disambiguate_chart_type(ws_info):
+    """Refine chart type using shelf fields and encodings after initial extraction.
+
+    The raw mark type from _extract_mark_type() is ambiguous in many cases:
+    - Circle can be a scatter plot OR a bubble map (when lat/lon fields present)
+    - Multipolygon/polygon are filled maps, not tables
+    - Shape with no shelf fields = UI decoration (zoom buttons), not a visual
+    - Shape with dims on rows = table, not scatter
+    - Automatic with empty shelves = card/BAN, not column chart
+
+    Must be called AFTER rows_fields/cols_fields are populated on ws_info.
+    Returns the refined chart type string.
+    """
+    mark = ws_info.get("chart_type", "automatic")
+    rows_f = ws_info.get("rows_fields", [])
+    cols_f = ws_info.get("cols_fields", [])
+    all_fields = rows_f + cols_f
+    field_str = " ".join(all_fields).lower()
+
+    # Circle + lat/lon fields = map, not scatter
+    if mark == "circle" and ("latitude" in field_str or "longitude" in field_str):
+        return "map"
+
+    # Multipolygon/polygon = filled map (choropleth)
+    if mark in ("multipolygon", "polygon"):
+        return "filled-map"
+
+    # Shape with no shelf fields = UI decoration (zoom buttons, icons)
+    if mark == "shape" and not rows_f and not cols_f:
+        return "skip"
+
+    # Shape with dims on rows = table, not scatter
+    if mark == "shape" and rows_f:
+        return "text"
+
+    # Automatic with empty shelves = card/BAN
+    if mark in ("automatic", "") and not rows_f and not cols_f:
+        return "ban"
+
+    return mark
+
+
 def _extract_shelf_fields(text):
     """Extract field references from shelf expression text.
 
@@ -709,6 +751,14 @@ def parse_twb(path):
 
             # Per-worksheet color extraction
             ws_info["colors"] = _parse_colors(ws, root)
+
+            # -- Mark type disambiguation using shelf context --
+            # Refine ambiguous mark types (circle, shape, multipolygon, etc.)
+            # now that shelf fields are populated.
+            refined = _disambiguate_chart_type(ws_info)
+            if refined != ws_info["chart_type"]:
+                ws_info["chart_type"] = refined
+                ws_info["mark_type"] = refined
 
             # -- Chart type inference from shelf bindings --
             # When the mark class is "automatic", infer a better chart type

@@ -65,6 +65,86 @@ def _escape_user_text(text):
     return html_module.escape(str(text)) if text else ""
 
 
+def _publish_pbi_deliverable(dl):
+    """Publish a Power BI PBIP deliverable to a workspace via Fabric REST API."""
+    # Resolve PBIP folder path from download entry or agent
+    pbip_folder = dl.get("pbip_folder_path", "")
+    if not pbip_folder:
+        agent = st.session_state.get("agent")
+        if agent and hasattr(agent, "last_pbip_folder_path"):
+            pbip_folder = getattr(agent, "last_pbip_folder_path", "")
+    if not pbip_folder or not os.path.isdir(pbip_folder):
+        # Try extracting the ZIP to a temp dir
+        zip_path = dl.get("path", "")
+        if zip_path and os.path.exists(zip_path) and zip_path.endswith(".zip"):
+            import zipfile
+            pbip_folder = tempfile.mkdtemp(prefix="pbi_publish_")
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                zf.extractall(pbip_folder)
+        else:
+            st.error("PBIP folder not found. Re-generate the Power BI project first.")
+            return
+
+    display_name = dl.get("display_name", "")
+    if not display_name:
+        agent = st.session_state.get("agent")
+        if agent and hasattr(agent, "last_pbip_display_name"):
+            display_name = getattr(agent, "last_pbip_display_name", "")
+    if not display_name:
+        display_name = dl.get("filename", "DrData-Report").replace(".zip", "")
+
+    with st.spinner("Publishing to Power BI..."):
+        try:
+            from core.powerbi_publisher import (
+                get_access_token, list_workspaces, publish_pbip,
+            )
+            token = get_access_token()
+            workspaces = list_workspaces(token)
+
+            if not workspaces:
+                st.error(
+                    "No Power BI workspaces accessible. "
+                    "Ensure the service principal is added as Member/Admin "
+                    "to at least one workspace."
+                )
+                return
+
+            # Auto-select if single workspace, otherwise let user pick
+            if len(workspaces) == 1:
+                target_ws = workspaces[0]
+            else:
+                ws_names = [
+                    w.get("displayName", w.get("name", "?"))
+                    for w in workspaces
+                ]
+                selected = st.selectbox(
+                    "Select workspace",
+                    ws_names,
+                    key="pbi_ws_select",
+                )
+                target_ws = workspaces[ws_names.index(selected)]
+
+            ws_id = target_ws["id"]
+            ws_name = target_ws.get(
+                "displayName", target_ws.get("name", "?")
+            )
+
+            result = publish_pbip(token, ws_id, pbip_folder, display_name)
+
+            if result.get("error"):
+                st.error(f"Publish failed: {result.get('error')} -- "
+                         f"{result.get('detail', '')}")
+            else:
+                report_url = result.get("report_url", "")
+                st.success(
+                    f"Your dashboard is live in workspace **{ws_name}**! "
+                    f"[Open in Power BI]({report_url})"
+                )
+
+        except Exception as e:
+            st.error(f"Power BI publish failed: {e}")
+
+
 # === PAGE CONFIG (must be first Streamlit call) ===
 st.set_page_config(
     page_title="Dr. Data -- Dashboard Intelligence",
@@ -1306,7 +1386,11 @@ with tab1:
                     )
 
                 for idx, dl in enumerate(ws["deliverables"]):
-                    dl_col1, dl_col2 = st.columns([3, 1])
+                    _is_pbi = dl.get("name") == "Power BI Project"
+                    if _is_pbi:
+                        dl_col1, dl_col2, dl_col3 = st.columns([3, 1, 1])
+                    else:
+                        dl_col1, dl_col2 = st.columns([3, 1])
                     with dl_col1:
                         _safe_html(f'<div class="dl-card"><div class="dl-name">{html_module.escape(dl["name"])}</div><div class="dl-desc">{html_module.escape(dl.get("description", ""))}</div></div>', f'{dl["name"]}: {dl.get("description", "")}')
                     with dl_col2:
@@ -1328,6 +1412,16 @@ with tab1:
                                     file_name=dl["filename"],
                                     key=f"ws_dl_{idx}_{dl['filename']}",
                                 )
+                    # Publish to Power BI button for PBI deliverables
+                    if _is_pbi:
+                        with dl_col3:
+                            _pbi_publish_key = f"pbi_pub_{idx}"
+                            if st.button("Publish to Power BI", key=_pbi_publish_key):
+                                st.session_state[f"_pbi_publish_trigger_{idx}"] = True
+
+                        if st.session_state.get(f"_pbi_publish_trigger_{idx}"):
+                            st.session_state.pop(f"_pbi_publish_trigger_{idx}", None)
+                            _publish_pbi_deliverable(dl)
 
                     # Inline preview for HTML dashboards
                     _dl_ext = dl.get("filename", "").rsplit(".", 1)[-1].lower()

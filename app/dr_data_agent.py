@@ -1846,12 +1846,15 @@ class DrDataAgent:
                     else:
                         zip_path = pbi_result.get("file_path")
                         pbi_build_context = pbi_result.get("build_context", {})
+                        _pbip_folder = pbi_result.get("pbip_folder_path", "")
                         if zip_path and os.path.exists(zip_path):
                             fname = os.path.basename(zip_path)
                             downloads.append({
                                 "name": "Power BI Project",
                                 "filename": fname,
                                 "path": zip_path,
+                                "pbip_folder_path": _pbip_folder,
+                                "display_name": title,
                                 "description": (
                                     "Full .pbip project with DAX measures, "
                                     "visuals, and data model"
@@ -3267,6 +3270,9 @@ Output ONLY valid JSON. No markdown. No commentary."""
                     os.path.join(output_dir, zip_name), "zip", result_path
                 )
                 self.generated_files.append(zip_path)
+                # Store PBIP folder path for Power BI publish button
+                self.last_pbip_folder_path = result_path
+                self.last_pbip_display_name = project_name
                 self._report_progress("Power BI project ready for download (direct Tableau replica)")
 
                 # Build context for summary
@@ -3629,6 +3635,9 @@ Output ONLY valid JSON. No markdown. No commentary."""
                 os.path.join(output_dir, zip_name), "zip", result_path
             )
             self.generated_files.append(zip_path)
+            # Store PBIP folder path for Power BI publish button
+            self.last_pbip_folder_path = result_path
+            self.last_pbip_display_name = project_name
 
             self._report_progress("Power BI project ready for download")
 
@@ -3742,6 +3751,7 @@ Output ONLY valid JSON. No markdown. No commentary."""
             return json.dumps({
                 "status": "success",
                 "file_path": zip_path,
+                "pbip_folder_path": result_path,
                 "project_name": project_name,
                 "pages": page_count,
                 "visuals": visual_count,

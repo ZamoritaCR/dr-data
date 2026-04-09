@@ -388,10 +388,18 @@ class MultiFileSession:
                             ext = name.rsplit(".", 1)[-1].lower()
 
                             if ext in ("hyper", "tde"):
-                                # Hyper/TDE need special handling
-                                # For now, skip -- the user should provide the data separately
                                 if spec:
                                     spec["has_hyper"] = True
+                                # Read .hyper via pantab (same as file_handler)
+                                try:
+                                    import pantab
+                                    hyper_tables = pantab.frames_from_hyper(extracted_path)
+                                    for _tbl_name, _tbl_df in hyper_tables.items():
+                                        if _tbl_df is not None and len(_tbl_df) > 0:
+                                            dfs.append(_tbl_df)
+                                            print(f"[TWBX] Extracted .hyper data: {name} ({_tbl_df.shape})")
+                                except Exception as _hyp_err:
+                                    print(f"[WARN] Could not read .hyper {name}: {_hyp_err}")
                                 continue
 
                             df, _sn = self._load_data(extracted_path, ext)

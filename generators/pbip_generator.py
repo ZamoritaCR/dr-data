@@ -1473,7 +1473,8 @@ class PBIPGenerator:
         lines.append(f"\t\tmode: {partition_mode}")
         lines.append("\t\tsource =")
         for m_line in m_expr:
-            # Replace leading spaces with tabs for TMDL compliance
+            # Convert any remaining 4-space indents to tabs for TMDL compliance,
+            # then prepend 4 tabs to place inside the partition block.
             _cleaned = m_line.replace("    ", "\t")
             lines.append(f"\t\t\t\t{_cleaned}")
         lines.append("")
@@ -1516,12 +1517,12 @@ class PBIPGenerator:
         )
         return [
             "let",
-            f'\tSource = Csv.Document(Web.Contents("{csv_url}"),',
-            f'\t\t[Delimiter=",", Columns={cols_arg}, Encoding=65001, QuoteStyle=QuoteStyle.None]),',
-            '\t#"Promoted Headers" = Table.PromoteHeaders(Source, [PromoteAllScalars=true]),',
-            f'\t#"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers", {{{type_list}}})',
+            f'    Source = Csv.Document(Web.Contents("{csv_url}"),',
+            f'        [Delimiter=",", Columns={cols_arg}, Encoding=65001, QuoteStyle=QuoteStyle.None]),',
+            '    #"Promoted Headers" = Table.PromoteHeaders(Source, [PromoteAllScalars=true]),',
+            f'    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers", {{{type_list}}})',
             "in",
-            '\t#"Changed Type"',
+            '    #"Changed Type"',
         ]
 
     def _build_m_expression(self, table_cfg, data_file_path, sheet_name=None):
@@ -1661,16 +1662,19 @@ class PBIPGenerator:
                 elif dt == "boolean":
                     vals.append("true" if raw else "false")
                 else:
-                    # String -- escape double quotes
+                    # String -- escape double quotes, strip control chars
                     s = str(raw).replace('"', '""')
+                    s = s.replace("\t", " ").replace("\n", " ").replace("\r", "")
                     vals.append(f'"{s}"')
 
-            # Sanitize values: strip tabs/newlines that would break TMDL indent
-            clean_vals = ", ".join(vals).replace("\t", " ").replace("\n", " ")
+            # Sanitize entire row: strip any remaining control chars
+            clean_vals = ", ".join(vals).replace("\t", " ").replace("\n", " ").replace("\r", "")
             row_lines.append("{" + clean_vals + "}")
 
-        # Build the M expression -- each line is a separate list element
-        # so the caller can prepend consistent indentation to every line.
+        # Build the M expression -- each line is a separate list element.
+        # Use tab indentation throughout -- the caller (_write_tables_tmdl)
+        # prepends 4 tabs. TMDL requires pure tab indentation; any spaces
+        # in leading whitespace cause Fabric API "Indentation" errors.
         lines = [
             "let",
             "\tSource = #table(" + type_schema + ",",

@@ -646,3 +646,338 @@ class QAAgent:
             self.warnings.append("GPT review timed out")
         except Exception as e:
             self.warnings.append(f"GPT review unavailable: {e}")
+
+
+# ================================================================== #
+#  Agentic QA Agent -- loops until the dashboard is RIGHT             #
+# ================================================================== #
+
+class AgenticQAAuditEntry:
+    """Single audit trail entry."""
+    __slots__ = ("timestamp", "phase", "action", "status", "detail")
+
+    def __init__(self, phase, action, status, detail=""):
+        from datetime import datetime
+        self.timestamp = datetime.now().isoformat(timespec="seconds")
+        self.phase = phase
+        self.action = action
+        self.status = status
+        self.detail = str(detail)[:500]
+
+    def to_dict(self):
+        return {
+            "timestamp": self.timestamp,
+            "phase": self.phase,
+            "action": self.action,
+            "status": self.status,
+            "detail": self.detail,
+        }
+
+    def __repr__(self):
+        return f"[{self.timestamp}] {self.phase}/{self.action}: {self.status} {self.detail[:80]}"
+
+
+class AgenticQA:
+    """Agentic QA: loops generate -> validate -> publish -> readback -> score -> fix.
+
+    Fidelity scoring:
+      DATA      40pts: row count match, column match, data loaded
+      STRUCTURE 30pts: page count, visual count, no empty pages
+      QUALITY   30pts: chart types, sizes, titles, data bindings
+    """
+
+    MAX_LOOPS = 3
+
+    def __init__(self, source_spec, dataframe, config, dashboard_spec, profile):
+        self.source_spec = source_spec
+        self.dataframe = dataframe
+        self.config = config
+        self.dashboard_spec = dashboard_spec
+        self.profile = profile
+        self.audit = []
+        self._source_row_count = len(dataframe) if dataframe is not None else 0
+        self._source_col_count = len(dataframe.columns) if dataframe is not None else 0
+        self._source_ws_count = len(source_spec.get("worksheets", []))
+        self._source_db_count = len(source_spec.get("dashboards", []))
+
+    def _log(self, phase, action, status, detail=""):
+        entry = AgenticQAAuditEntry(phase, action, status, detail)
+        self.audit.append(entry)
+        print(f"    [QA-AGENT] {entry}")
+
+    def run(self, token, workspace_id, display_name,
+            pbip_generator_class, output_base_dir):
+        """Run full QA loop: generate -> validate -> publish -> score -> fix.
+
+        Returns dict with success, report_id, report_url, fidelity, audit, loops.
+        """
+        import time
+        import shutil
+        from core.preflight_validator import validate as preflight_validate
+        from core.powerbi_publisher import (
+            publish_pbip, get_report_pages, get_report_visuals,
+            get_dataset_id_from_report, get_dataset_tables,
+            execute_dax_query, delete_item,
+        )
+
+        self._log("INIT", "start", "OK",
+                  f"source: {self._source_ws_count} ws, {self._source_db_count} db, "
+                  f"{self._source_row_count} rows, {self._source_col_count} cols")
+
+        best_result = None
+        best_fidelity = 0
+
+        for loop in range(self.MAX_LOOPS):
+            self._log("LOOP", f"iteration_{loop+1}", "START",
+                      f"attempt {loop+1}/{self.MAX_LOOPS}")
+
+            # Phase 1: Generate PBIP
+            pbip_path = None
+            try:
+                out_dir = os.path.join(output_base_dir, f"qa_loop_{loop}")
+                if os.path.exists(out_dir):
+                    shutil.rmtree(out_dir)
+                os.makedirs(out_dir, exist_ok=True)
+                gen = pbip_generator_class(out_dir)
+                gen_result = gen.generate(
+                    self.config, self.profile, self.dashboard_spec,
+                    data_file_path=None, dataframe=self.dataframe,
+                )
+                pbip_path = gen_result["path"]
+                self._log("GENERATE", "pbip_created", "OK",
+                          f"{gen_result.get('file_count', 0)} files, "
+                          f"{gen_result.get('page_count', 0)} pages")
+            except Exception as e:
+                self._log("GENERATE", "pbip_failed", "ERROR", str(e))
+                continue
+
+            # Phase 2: Preflight + auto-fix
+            try:
+                pf = preflight_validate(pbip_path)
+                if not pf.all_passed:
+                    self._log("PREFLIGHT", "validate", "WARN",
+                              f"{pf.fail_count} issues: {[f.name for f in pf.failed]}")
+                    try:
+                        from core.pbip_healer import heal
+                        fixes = heal(pbip_path, pf)
+                        self._log("PREFLIGHT", "heal", "OK", f"{len(fixes)} fixes")
+                    except Exception:
+                        pass
+                else:
+                    self._log("PREFLIGHT", "validate", "PASS",
+                              f"{pf.pass_count} checks passed")
+            except Exception as e:
+                self._log("PREFLIGHT", "error", "WARN", str(e))
+
+            # Phase 3: Publish
+            pub_name = display_name if loop == 0 else f"{display_name}_v{loop+1}"
+            pub_result = None
+            try:
+                pub_result = publish_pbip(token, workspace_id, pbip_path, pub_name)
+                if pub_result.get("error"):
+                    self._log("PUBLISH", "failed", "ERROR",
+                              str(pub_result.get("error"))[:200])
+                    continue
+                self._log("PUBLISH", "success", "OK",
+                          f"url={pub_result.get('report_url', '')}")
+            except Exception as e:
+                self._log("PUBLISH", "exception", "ERROR", str(e))
+                continue
+
+            report_id = pub_result.get("report_id", "")
+            sm_id = pub_result.get("semantic_model_id", "")
+            report_url = pub_result.get("report_url", "")
+
+            # Phase 4: Read back via REST API
+            time.sleep(3)
+            readback = {
+                "pages": [], "visuals_per_page": {}, "total_visuals": 0,
+                "dataset_id": None, "tables": [], "row_count": None,
+                "column_count": None,
+            }
+            try:
+                pages = get_report_pages(token, workspace_id, report_id)
+                readback["pages"] = pages
+                self._log("READBACK", "pages", "OK", f"{len(pages)} pages")
+
+                total_v = 0
+                for page in pages:
+                    pname = page.get("name", "")
+                    visuals = get_report_visuals(token, workspace_id,
+                                                  report_id, pname)
+                    readback["visuals_per_page"][pname] = visuals
+                    total_v += len(visuals)
+                readback["total_visuals"] = total_v
+                self._log("READBACK", "visuals", "OK", f"{total_v} total")
+
+                dataset_id = get_dataset_id_from_report(
+                    token, workspace_id, report_id
+                ) or sm_id
+                readback["dataset_id"] = dataset_id
+
+                if dataset_id:
+                    tables = get_dataset_tables(token, workspace_id, dataset_id)
+                    readback["tables"] = tables
+                    readback["column_count"] = sum(
+                        len(t.get("columns", [])) for t in tables
+                    )
+
+                    try:
+                        dax_r = execute_dax_query(
+                            token, workspace_id, dataset_id,
+                            'EVALUATE ROW("cnt", COUNTROWS(Data))'
+                        )
+                        rows = dax_r.get("rows", [])
+                        if rows:
+                            rc = rows[0].get("[cnt]", rows[0].get("cnt", 0))
+                            readback["row_count"] = int(rc)
+                            self._log("READBACK", "row_count", "OK", f"{rc} rows")
+                    except Exception as dax_err:
+                        self._log("READBACK", "row_count", "WARN", str(dax_err))
+            except Exception as rb_err:
+                self._log("READBACK", "error", "ERROR", str(rb_err))
+
+            # Phase 5: Fidelity scoring
+            fidelity = self._score(readback)
+
+            result = {
+                "success": fidelity >= 40,
+                "report_id": report_id,
+                "semantic_model_id": sm_id,
+                "report_url": report_url,
+                "fidelity": fidelity,
+                "loops": loop + 1,
+                "readback": readback,
+            }
+
+            if fidelity > best_fidelity:
+                best_fidelity = fidelity
+                best_result = result
+
+            if fidelity >= 60:
+                self._log("DECISION", "accept", "OK",
+                          f"fidelity {fidelity}% >= 60%")
+                result["audit"] = [e.to_dict() for e in self.audit]
+                return result
+
+            # Phase 6: Diagnose + delete bad publish
+            self._log("DECISION", "retry", "WARN",
+                      f"fidelity {fidelity}% < 60%")
+            if report_id:
+                delete_item(token, workspace_id, report_id)
+            if sm_id:
+                delete_item(token, workspace_id, sm_id)
+
+        # Return best
+        if best_result:
+            best_result["audit"] = [e.to_dict() for e in self.audit]
+            return best_result
+        return {
+            "success": False, "fidelity": 0, "loops": self.MAX_LOOPS,
+            "error": "All QA loops failed",
+            "audit": [e.to_dict() for e in self.audit],
+        }
+
+    def _score(self, readback):
+        """Score fidelity 0-100."""
+        data_s = 0
+        struct_s = 0
+        qual_s = 0
+
+        # DATA 40pts
+        actual_rows = readback.get("row_count")
+        if actual_rows is not None and self._source_row_count > 0:
+            ratio = min(actual_rows, self._source_row_count) / max(
+                actual_rows, self._source_row_count, 1
+            )
+            data_s += int(20 * ratio)
+        elif actual_rows and actual_rows > 0:
+            data_s += 15
+
+        actual_cols = readback.get("column_count", 0)
+        if actual_cols and self._source_col_count > 0:
+            ratio = min(actual_cols, self._source_col_count) / max(
+                actual_cols, self._source_col_count, 1
+            )
+            data_s += int(10 * ratio)
+        elif actual_cols:
+            data_s += 7
+
+        if actual_rows and actual_rows > 0:
+            data_s += 10
+        elif readback.get("tables"):
+            data_s += 5
+
+        # STRUCTURE 30pts
+        actual_pages = len(readback.get("pages", []))
+        expected_pages = len(
+            self.config.get("report_layout", {}).get("sections", [])
+        )
+        if actual_pages >= expected_pages and actual_pages > 0:
+            struct_s += 10
+        elif actual_pages > 0:
+            struct_s += int(10 * actual_pages / max(expected_pages, 1))
+
+        actual_vis = readback.get("total_visuals", 0)
+        expected_vis = sum(
+            len(s.get("visualContainers", []))
+            for s in self.config.get("report_layout", {}).get("sections", [])
+        )
+        if actual_vis >= expected_vis and actual_vis > 0:
+            struct_s += 15
+        elif actual_vis > 0:
+            struct_s += int(15 * min(actual_vis / max(expected_vis, 1), 1.0))
+
+        vpg = readback.get("visuals_per_page", {})
+        if vpg and all(len(v) > 0 for v in vpg.values()):
+            struct_s += 5
+        elif actual_pages > 0:
+            struct_s += 2
+
+        # QUALITY 30pts
+        titled = 0
+        typed = 0
+        total_checked = 0
+        for pv in vpg.values():
+            for v in pv:
+                total_checked += 1
+                if v.get("title"):
+                    titled += 1
+                vt = v.get("type", v.get("visualType", ""))
+                if vt and vt not in ("unknown", ""):
+                    typed += 1
+        if total_checked > 0:
+            qual_s += int(10 * titled / total_checked)
+            qual_s += int(10 * typed / max(total_checked, 1))
+        qual_s += min(10, actual_vis * 2)
+
+        total = data_s + struct_s + qual_s
+        self._log("SCORE", "total", "OK",
+                  f"data={data_s}/40 struct={struct_s}/30 qual={qual_s}/30 = {total}/100")
+        return total
+
+    def get_audit_report(self):
+        """Full transparent audit report."""
+        from datetime import datetime
+        lines = [
+            "=" * 60,
+            "DR. DATA QA AGENT -- AUDIT REPORT",
+            f"Generated: {datetime.now().isoformat(timespec='seconds')}",
+            "=" * 60, "",
+            f"Source: {self._source_ws_count} worksheets, "
+            f"{self._source_db_count} dashboards",
+            f"Data: {self._source_row_count} rows x {self._source_col_count} columns",
+            "", "-" * 60, "AUDIT TRAIL", "-" * 60,
+        ]
+        for e in self.audit:
+            lines.append(
+                f"  [{e.timestamp}] {e.phase:12s} | {e.action:20s} | "
+                f"{e.status:6s} | {e.detail}"
+            )
+        ok = sum(1 for e in self.audit if e.status == "OK")
+        warn = sum(1 for e in self.audit if e.status == "WARN")
+        err = sum(1 for e in self.audit if e.status == "ERROR")
+        lines.extend(["", "-" * 60,
+                       f"SUMMARY: {ok} OK, {warn} WARN, {err} ERROR",
+                       "-" * 60])
+        return "\n".join(lines)

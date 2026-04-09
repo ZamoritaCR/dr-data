@@ -527,3 +527,129 @@ def publish_from_output(pbip_folder_path: str, display_name: str,
             return {"error": f"Workspace discovery failed: {e}"}
 
     return publish_pbip(token, workspace_id, pbip_folder_path, display_name)
+
+# ------------------------------------------------------------------ #
+#  REST API Read-Back Functions                                        #
+# ------------------------------------------------------------------ #
+
+def get_report_pages(token: str, workspace_id: str, report_id: str) -> List[Dict]:
+    """Get all pages from a published report.
+
+    Returns list of page dicts: [{name, displayName, order}]
+    """
+    resp = requests.get(
+        f"{PBI_API}/groups/{workspace_id}/reports/{report_id}/pages",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    return resp.json().get("value", [])
+
+
+def get_report_visuals(token: str, workspace_id: str, report_id: str,
+                       page_name: str) -> List[Dict]:
+    """Get all visuals on a specific report page.
+
+    Returns list of visual dicts: [{name, title, type, layout}]
+    """
+    resp = requests.get(
+        f"{PBI_API}/groups/{workspace_id}/reports/{report_id}/pages/{page_name}/visuals",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=15,
+    )
+    if resp.status_code == 200:
+        return resp.json().get("value", [])
+    # Some report types don't support this endpoint
+    return []
+
+
+def get_dataset_id_from_report(token: str, workspace_id: str,
+                               report_id: str) -> Optional[str]:
+    """Get the dataset ID linked to a report.
+
+    Returns dataset ID string or None.
+    """
+    resp = requests.get(
+        f"{PBI_API}/groups/{workspace_id}/reports/{report_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=15,
+    )
+    if resp.status_code == 200:
+        return resp.json().get("datasetId")
+    return None
+
+
+def get_dataset_tables(token: str, workspace_id: str,
+                       dataset_id: str) -> List[Dict]:
+    """Get tables and columns from a dataset.
+
+    Returns list of table dicts: [{name, columns: [{name, dataType}]}]
+    """
+    resp = requests.get(
+        f"{PBI_API}/groups/{workspace_id}/datasets/{dataset_id}/tables",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=15,
+    )
+    if resp.status_code == 200:
+        return resp.json().get("value", [])
+    return []
+
+
+def execute_dax_query(token: str, workspace_id: str, dataset_id: str,
+                      dax: str) -> Dict:
+    """Execute a DAX query against a published dataset.
+
+    Args:
+        dax: DAX query string, e.g. "EVALUATE ROW(\"count\", COUNTROWS(Data))"
+
+    Returns dict with results or error.
+    """
+    resp = requests.post(
+        f"{PBI_API}/groups/{workspace_id}/datasets/{dataset_id}/executeQueries",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "queries": [{"query": dax}],
+            "serializerSettings": {"includeNulls": True},
+        },
+        timeout=30,
+    )
+    if resp.status_code == 200:
+        data = resp.json()
+        results = data.get("results", [])
+        if results:
+            return {
+                "tables": results[0].get("tables", []),
+                "rows": results[0].get("tables", [{}])[0].get("rows", []) if results[0].get("tables") else [],
+            }
+        return {"tables": [], "rows": []}
+    return {"error": resp.status_code, "detail": resp.text[:500]}
+
+
+def delete_item(token: str, workspace_id: str, item_id: str) -> bool:
+    """Delete any Fabric item (report, semantic model, etc).
+
+    Returns True on success.
+    """
+    resp = requests.delete(
+        f"{FABRIC_API}/workspaces/{workspace_id}/items/{item_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=15,
+    )
+    if resp.status_code in (200, 204):
+        print(f"[PBI-DELETE] Deleted item {item_id}")
+        return True
+    print(f"[PBI-DELETE] Failed to delete {item_id}: {resp.status_code} {resp.text[:200]}")
+    return False
+
+
+def delete_report(token: str, workspace_id: str, report_id: str) -> bool:
+    """Delete a report."""
+    return delete_item(token, workspace_id, report_id)
+
+
+def delete_dataset(token: str, workspace_id: str, dataset_id: str) -> bool:
+    """Delete a dataset/semantic model."""
+    return delete_item(token, workspace_id, dataset_id)

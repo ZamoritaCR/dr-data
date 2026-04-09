@@ -580,7 +580,6 @@ class PBIPGenerator:
             page = deepcopy(PAGE_JSON_TEMPLATE)
             page["name"] = page_id
             page["displayName"] = display_name
-            page["ordinal"] = idx
             page["width"] = int(raw.get("width", 1280))
             page["height"] = int(raw.get("height", 720))
             self._write_json(page_dir / "page.json", page)

@@ -88,22 +88,32 @@ class CopilotEnricher:
         import pandas as pd
         if pd.api.types.is_datetime64_any_dtype(series):
             return True
-        # Heuristic: try parsing a sample
+        # Only try parsing string/object columns (not numeric)
+        if pd.api.types.is_numeric_dtype(series):
+            return False
         try:
             sample = series.dropna().head(20)
             if len(sample) == 0:
                 return False
-            parsed = pd.to_datetime(sample, errors="coerce")
+            parsed = pd.to_datetime(sample, errors="coerce", format="mixed")
             return parsed.notna().sum() > len(sample) * 0.8
         except Exception:
             return False
 
     def _is_low_cardinality(self, series):
-        """Return True if series has low cardinality (< 10% unique)."""
+        """Return True if series has low cardinality (dimension-like).
+
+        Uses absolute threshold for small datasets, ratio for large.
+        """
         n = len(series)
         if n == 0:
             return False
-        return (series.nunique() / n) < 0.1
+        nunique = series.nunique()
+        # Small datasets: anything under 50 unique values is a dimension
+        if nunique <= 50:
+            return True
+        # Large datasets: less than 5% unique is a dimension
+        return (nunique / n) < 0.05
 
     def _generate_synonyms(self, column_name):
         """Generate synonyms from column name using stem matching."""

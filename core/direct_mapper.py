@@ -903,6 +903,11 @@ def _build_page_from_dashboard(dashboard, worksheets_by_name, profile_col_names,
         added_ws_names.add(ws_name)
 
         chart_type = translate_chart_type(ws.get("chart_type", "automatic"))
+
+        # Skip UI decorations (zoom buttons, shape icons with no data)
+        if chart_type == "skip":
+            continue
+
         data_roles = _classify_fields_for_chart(
             ws, chart_type, profile_col_names, col_types
         )
@@ -969,6 +974,11 @@ def _build_page_for_orphan_worksheets(worksheets, profile_col_names,
         col = idx % cols
 
         chart_type = translate_chart_type(ws.get("chart_type", "automatic"))
+
+        # Skip UI decorations (zoom buttons, shape icons with no data)
+        if chart_type == "skip":
+            continue
+
         data_roles = _classify_fields_for_chart(
             ws, chart_type, profile_col_names, col_types
         )
@@ -1049,57 +1059,154 @@ def build_pbip_config_from_tableau(tableau_spec, data_profile, table_name="Data"
     except Exception as _pp_err:
         print(f"    [DAX-POSTPROCESS] Skipped (non-fatal): {_pp_err}")
 
-    # -- Build pages from dashboards --
-    sections = []
+    # -- Build pages: TAB-DRIVEN (from <windows>) or DASHBOARD-DRIVEN (legacy) --
+    windows = tableau_spec.get("windows", [])
+    visible_tabs = [w for w in windows if not w.get("hidden", False)]
     dashboards = tableau_spec.get("dashboards", [])
-    used_ws_names = set()
+    dashboards_by_name = {d["name"]: d for d in dashboards}
 
-    for db in dashboards:
-        section = _build_page_from_dashboard(
-            db, worksheets_by_name, profile_col_names, col_types, table_name
-        )
-        # Safety: if zone matching produced 0 visuals but the dashboard
-        # has worksheets_used, create visuals from those worksheets directly
-        if (not section.get("visualContainers")
-                and db.get("worksheets_used")):
-            ws_list = [
-                worksheets_by_name[n]
-                for n in db.get("worksheets_used", [])
-                if n in worksheets_by_name
-            ]
-            if ws_list:
-                fallback = _build_page_for_orphan_worksheets(
-                    ws_list, profile_col_names, col_types, table_name
+    sections = []
+
+    if visible_tabs:
+        # TAB-DRIVEN: one PBI page per visible Tableau tab
+        print(f"    [MAPPER] Tab-driven mode: {len(visible_tabs)} visible tabs")
+        for tab in visible_tabs:
+            tab_name = tab["name"]
+            tab_type = tab["type"]
+
+            if tab_type == "dashboard":
+                db = dashboards_by_name.get(tab_name)
+                if db:
+                    section = _build_page_from_dashboard(
+                        db, worksheets_by_name, profile_col_names,
+                        col_types, table_name
+                    )
+                    if (not section.get("visualContainers")
+                            and db.get("worksheets_used")):
+                        ws_list = [
+                            worksheets_by_name[n]
+                            for n in db.get("worksheets_used", [])
+                            if n in worksheets_by_name
+                        ]
+                        if ws_list:
+                            fb = _build_page_for_orphan_worksheets(
+                                ws_list, profile_col_names, col_types, table_name
+                            )
+                            if fb and fb.get("visualContainers"):
+                                section["visualContainers"] = fb["visualContainers"]
+                    sections.append(section)
+                    print(f"    [MAPPER] Tab '{tab_name}' -> dashboard page "
+                          f"({len(section.get('visualContainers', []))} visuals)")
+
+            elif tab_type == "worksheet":
+                ws = worksheets_by_name.get(tab_name)
+                if ws:
+                    chart_type = translate_chart_type(
+                        ws.get("chart_type", "automatic")
+                    )
+                    data_roles = _classify_fields_for_chart(
+                        ws, chart_type, profile_col_names, col_types
+                    )
+                    section = {
+                        "displayName": tab_name,
+                        "width": 1280,
+                        "height": 720,
+                        "visualContainers": [{
+                            "x": 12, "y": 12, "width": 1256, "height": 696,
+                            "config": {
+                                "visualType": chart_type,
+                                "title": tab_name,
+                                "dataRoles": data_roles,
+                                "worksheet_name": tab_name,
+                            },
+                        }],
+                    }
+                    sections.append(section)
+                    print(f"    [MAPPER] Tab '{tab_name}' -> worksheet page "
+                          f"(type={chart_type})")
+
+            elif tab_type == "story":
+                stories = tableau_spec.get("stories", [])
+                story = next(
+                    (s for s in stories if s["name"] == tab_name), None
                 )
-                if fallback and fallback.get("visualContainers"):
-                    section["visualContainers"] = fallback["visualContainers"]
-                    print(f"    [DIRECT-MAPPER] Zone matching failed for "
-                          f"'{db.get('name','')}' -- used worksheets_used fallback "
-                          f"({len(section['visualContainers'])} visuals)")
+                if story and story.get("storypoints"):
+                    for sp in story["storypoints"]:
+                        sp_sheet = sp.get("sheet", "")
+                        sp_caption = sp.get("caption", sp_sheet or tab_name)
+                        if sp_sheet in dashboards_by_name:
+                            db = dashboards_by_name[sp_sheet]
+                            sec = _build_page_from_dashboard(
+                                db, worksheets_by_name, profile_col_names,
+                                col_types, table_name
+                            )
+                            sec["displayName"] = sp_caption
+                            sections.append(sec)
+                        elif sp_sheet in worksheets_by_name:
+                            ws = worksheets_by_name[sp_sheet]
+                            ct = translate_chart_type(
+                                ws.get("chart_type", "automatic")
+                            )
+                            dr = _classify_fields_for_chart(
+                                ws, ct, profile_col_names, col_types
+                            )
+                            sections.append({
+                                "displayName": sp_caption,
+                                "width": 1280, "height": 720,
+                                "visualContainers": [{
+                                    "x": 12, "y": 12,
+                                    "width": 1256, "height": 696,
+                                    "config": {
+                                        "visualType": ct, "title": sp_caption,
+                                        "dataRoles": dr,
+                                        "worksheet_name": sp_sheet,
+                                    },
+                                }],
+                            })
+                    print(f"    [MAPPER] Tab '{tab_name}' -> story "
+                          f"({len(story['storypoints'])} pages)")
 
-        sections.append(section)
-        used_ws_names.update(db.get("worksheets_used", []))
+    else:
+        # LEGACY: dashboard-driven (no <windows> section)
+        print(f"    [MAPPER] Legacy mode: no <windows> section")
+        used_ws_names = set()
+        for db in dashboards:
+            section = _build_page_from_dashboard(
+                db, worksheets_by_name, profile_col_names, col_types, table_name
+            )
+            if (not section.get("visualContainers")
+                    and db.get("worksheets_used")):
+                ws_list = [
+                    worksheets_by_name[n]
+                    for n in db.get("worksheets_used", [])
+                    if n in worksheets_by_name
+                ]
+                if ws_list:
+                    fb = _build_page_for_orphan_worksheets(
+                        ws_list, profile_col_names, col_types, table_name
+                    )
+                    if fb and fb.get("visualContainers"):
+                        section["visualContainers"] = fb["visualContainers"]
+            sections.append(section)
+            used_ws_names.update(db.get("worksheets_used", []))
 
-    # -- Handle orphan worksheets (not in any dashboard) --
-    orphan_ws = [
-        ws for ws in tableau_spec.get("worksheets", [])
-        if ws["name"] not in used_ws_names
-    ]
-    if orphan_ws:
-        orphan_section = _build_page_for_orphan_worksheets(
-            orphan_ws, profile_col_names, col_types, table_name
-        )
-        if orphan_section:
-            # When there are no dashboards, these worksheets ARE the pages --
-            # give the section a proper name instead of "Additional Worksheets"
-            if not dashboards:
-                if len(orphan_ws) == 1:
-                    orphan_section["displayName"] = orphan_ws[0].get("name", "Sheet")
-                else:
-                    orphan_section["displayName"] = "Dashboard"
-                print(f"    [MAPPER] No dashboards found -- built page from "
-                      f"{len(orphan_ws)} worksheet(s)")
-            sections.append(orphan_section)
+        orphan_ws = [
+            ws for ws in tableau_spec.get("worksheets", [])
+            if ws["name"] not in used_ws_names
+        ]
+        if orphan_ws:
+            orphan_section = _build_page_for_orphan_worksheets(
+                orphan_ws, profile_col_names, col_types, table_name
+            )
+            if orphan_section:
+                if not dashboards:
+                    if len(orphan_ws) == 1:
+                        orphan_section["displayName"] = orphan_ws[0].get(
+                            "name", "Sheet"
+                        )
+                    else:
+                        orphan_section["displayName"] = "Dashboard"
+                sections.append(orphan_section)
 
     # If no dashboards and no worksheets, create a placeholder page
     # with at least one visual so the PBI file is never empty.

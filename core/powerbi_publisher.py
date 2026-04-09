@@ -176,12 +176,19 @@ def _encode_file(file_path: str) -> str:
         return base64.b64encode(f.read()).decode("utf-8")
 
 
-def _collect_parts(root_dir: str) -> List[Dict]:
+def _collect_parts(root_dir: str,
+                   file_overrides: Optional[Dict[str, bytes]] = None) -> List[Dict]:
     """Walk a directory and collect all files as Fabric API parts.
+
+    Args:
+        root_dir: Directory to walk.
+        file_overrides: Optional dict of {relative_path: bytes_content} to override
+            specific files with in-memory content instead of reading from disk.
 
     Returns:
         List of part dicts with path, payload (base64), payloadType.
     """
+    overrides = file_overrides or {}
     parts = []
     root = Path(root_dir)
     for file_path in sorted(root.rglob("*")):
@@ -195,12 +202,36 @@ def _collect_parts(root_dir: str) -> List[Dict]:
                 continue
 
             rel = str(file_path.relative_to(root)).replace("\\", "/")
+            if rel in overrides:
+                payload = base64.b64encode(overrides[rel]).decode("utf-8")
+            else:
+                payload = _encode_file(str(file_path))
             parts.append({
                 "path": rel,
-                "payload": _encode_file(str(file_path)),
+                "payload": payload,
                 "payloadType": "InlineBase64",
             })
     return parts
+
+
+def _find_item(token: str, workspace_id: str, display_name: str,
+               item_type: str) -> Optional[Dict]:
+    """Look up a workspace item by name and type after async creation."""
+    try:
+        resp = requests.get(
+            f"{FABRIC_API}/workspaces/{workspace_id}/items",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"type": item_type},
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            for item in resp.json().get("value", []):
+                if item.get("displayName") == display_name:
+                    print(f"[PBI-PUBLISH] Found {item_type}: {item.get('id')}")
+                    return item
+    except Exception:
+        pass
+    return None
 
 
 def _publish_item(
@@ -209,6 +240,7 @@ def _publish_item(
     display_name: str,
     item_type: str,
     item_dir: str,
+    file_overrides: Optional[Dict[str, bytes]] = None,
 ) -> Dict:
     """Create a Fabric item (SemanticModel or Report) from a folder.
 
@@ -222,7 +254,7 @@ def _publish_item(
     Returns:
         API response dict or error dict.
     """
-    parts = _collect_parts(item_dir)
+    parts = _collect_parts(item_dir, file_overrides=file_overrides)
     if not parts:
         return {"error": f"No files found in {item_dir}"}
 
@@ -248,8 +280,19 @@ def _publish_item(
         return resp.json()
     elif resp.status_code == 202:
         location = resp.headers.get("Location", "")
+        retry_after = resp.headers.get("Retry-After", "")
         print(f"[PBI-PUBLISH] {item_type} accepted (202 async), polling...")
-        return poll_status(token, location)
+        poll_result = poll_status(token, location)
+        status = poll_result.get("status", "")
+        if status in ("Succeeded", "Completed"):
+            # Poll result doesn't contain the item -- look it up by name
+            item = _find_item(token, workspace_id, display_name, item_type)
+            if item:
+                return item
+            # Fallback: return poll result but mark success
+            poll_result.pop("error", None)
+            return poll_result
+        return {"error": f"Async {item_type} failed", "detail": poll_result}
     else:
         detail = resp.text[:500]
         print(f"[PBI-PUBLISH] {item_type} failed: {resp.status_code} -- {detail}")
@@ -300,16 +343,36 @@ def publish_pbip(
     # Step 1: Publish semantic model
     sm_result = _publish_item(token, workspace_id, display_name,
                                "SemanticModel", sm_dir)
-    if "error" in sm_result:
+    if sm_result.get("error"):
         return {"error": f"SemanticModel publish failed", "detail": sm_result}
 
     sm_id = sm_result.get("id", "")
     print(f"[PBI-PUBLISH] SemanticModel ID: {sm_id}")
 
-    # Step 2: Publish report
+    # Step 2: Rewrite definition.pbir to use byConnection (API requires this
+    # instead of byPath which only works in git-integrated projects)
+    pbir_override = json.dumps({
+        "version": "4.0",
+        "datasetReference": {
+            "byConnection": {
+                "connectionString": None,
+                "pbiServiceModelId": None,
+                "pbiModelVirtualServerName": "sobe_wowvirtualserver",
+                "pbiModelDatabaseName": sm_id,
+                "name": "EntityDataSource",
+                "connectionType": "pbiServiceXmlaStyleLive",
+            },
+            "byPath": None,
+        },
+    }, indent=2).encode("utf-8")
+    rpt_overrides = {"definition.pbir": pbir_override}
+    print(f"[PBI-PUBLISH] Rewrote definition.pbir to reference SM {sm_id} via byConnection")
+
+    # Step 3: Publish report
     rpt_result = _publish_item(token, workspace_id, display_name,
-                                "Report", rpt_dir)
-    if "error" in rpt_result:
+                                "Report", rpt_dir,
+                                file_overrides=rpt_overrides)
+    if rpt_result.get("error"):
         return {
             "error": "Report publish failed (SemanticModel succeeded)",
             "semantic_model": sm_result,

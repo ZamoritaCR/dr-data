@@ -35,18 +35,20 @@ _CHART_TYPE_MAP = {
     "circle": "scatterChart",
     "square": "matrix",                   # Tableau filled-square grid → PBI matrix
     "text": "tableEx",
-    "map": "tableEx",
-    "polygon": "tableEx",
-    "multipolygon": "tableEx",
+    "map": "map",                         # bubble/symbol map (circle + lat/lon)
+    "filled-map": "filledMap",            # choropleth (multipolygon/polygon)
+    "polygon": "filledMap",               # fallback if disambiguation missed
+    "multipolygon": "filledMap",          # fallback if disambiguation missed
     "pie": "pieChart",
     "gantt-bar": "clusteredBarChart",     # horizontal gantt -> horizontal bar
     "automatic": "clusteredColumnChart",  # vertical columns (safe default)
-    "shape": "scatterChart",
+    "shape": "scatterChart",             # fallback; disambiguation usually overrides
     "density": "scatterChart",
     "heatmap": "matrix",
-    # Inferred from empty shelf bindings (BAN/KPI single aggregate)
+    # Inferred from shelf bindings / disambiguation
     "ban": "cardVisual",
     "kpi": "cardVisual",
+    "skip": "skip",                       # UI decoration — excluded from output
 }
 
 

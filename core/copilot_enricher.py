@@ -1,9 +1,11 @@
 """
 Copilot Enricher -- AI-powered analysis of Tableau-to-PBI conversions.
 
-Uses local Ollama models (localhost:11434) to analyze a completed conversion
-and generate enrichment suggestions: better chart types, missing KPIs,
-DAX optimization, accessibility improvements, naming conventions.
+Two modes:
+1. CopilotEnricher class: heuristic column descriptions + linguistic schema
+   with synonyms (no AI, pure Python). Based on phi4 Ollama draft.
+2. enrich() function: Ollama-powered conversion analysis with chart suggestions,
+   missing KPIs, DAX tips, accessibility checks.
 
 Graceful degradation: returns empty suggestions if Ollama is unavailable.
 """
@@ -13,6 +15,112 @@ import logging
 import requests
 
 logger = logging.getLogger(__name__)
+
+
+# ------------------------------------------------------------------ #
+# CopilotEnricher class (heuristic, no AI)                           #
+# Drafted by phi4 via Ollama, reviewed + enhanced by Claude           #
+# ------------------------------------------------------------------ #
+
+class CopilotEnricher:
+    """Heuristic column enrichment for Power BI linguistic schema."""
+
+    # Common business term synonyms keyed by lowercase stem
+    _SYNONYM_MAP = {
+        "revenue": ["sales", "income", "earnings", "turnover"],
+        "profit": ["gain", "net income", "benefit", "margin"],
+        "cost": ["expense", "expenditure", "charge", "spend"],
+        "quantity": ["count", "amount", "volume", "units"],
+        "price": ["rate", "cost", "value", "unit price"],
+        "discount": ["rebate", "reduction", "markdown"],
+        "date": ["day", "time", "period", "timestamp"],
+        "region": ["area", "territory", "zone", "geography"],
+        "category": ["type", "class", "group", "segment"],
+        "customer": ["client", "buyer", "account", "consumer"],
+        "product": ["item", "good", "sku", "merchandise"],
+        "order": ["transaction", "purchase", "sale"],
+        "employee": ["staff", "worker", "associate"],
+        "country": ["nation", "state", "territory"],
+        "city": ["town", "municipality", "metro"],
+    }
+
+    def enrich(self, dataframe, column_names):
+        """Classify columns and generate linguistic schema with synonyms.
+
+        Args:
+            dataframe: pandas DataFrame with the data.
+            column_names: list of column name strings to analyze.
+
+        Returns:
+            dict with "descriptions" (col->role mapping) and
+            "linguistic_schema" (synonyms per column).
+        """
+        import pandas as pd
+
+        descriptions = {}
+        linguistic_schema = {"synonyms": {}}
+
+        for col in column_names:
+            if col not in dataframe.columns:
+                descriptions[col] = "unknown"
+                continue
+
+            series = dataframe[col]
+
+            if self._is_date_column(series):
+                descriptions[col] = "date"
+            elif pd.api.types.is_numeric_dtype(series):
+                descriptions[col] = "measure"
+            elif self._is_low_cardinality(series):
+                descriptions[col] = "dimension"
+            else:
+                descriptions[col] = "text"
+
+            linguistic_schema["synonyms"][col] = self._generate_synonyms(col)
+
+        return {
+            "descriptions": descriptions,
+            "linguistic_schema": linguistic_schema,
+        }
+
+    def _is_date_column(self, series):
+        """Check if a series contains date-like values."""
+        import pandas as pd
+        if pd.api.types.is_datetime64_any_dtype(series):
+            return True
+        # Heuristic: try parsing a sample
+        try:
+            sample = series.dropna().head(20)
+            if len(sample) == 0:
+                return False
+            parsed = pd.to_datetime(sample, errors="coerce")
+            return parsed.notna().sum() > len(sample) * 0.8
+        except Exception:
+            return False
+
+    def _is_low_cardinality(self, series):
+        """Return True if series has low cardinality (< 10% unique)."""
+        n = len(series)
+        if n == 0:
+            return False
+        return (series.nunique() / n) < 0.1
+
+    def _generate_synonyms(self, column_name):
+        """Generate synonyms from column name using stem matching."""
+        parts = column_name.lower().replace("-", "_").split("_")
+        synonyms = set()
+
+        for part in parts:
+            part_clean = part.strip()
+            if part_clean in self._SYNONYM_MAP:
+                synonyms.update(self._SYNONYM_MAP[part_clean])
+            # Partial match for compound names
+            for key, syns in self._SYNONYM_MAP.items():
+                if key in part_clean or part_clean in key:
+                    synonyms.update(syns)
+                    break
+
+        return list(synonyms)
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 DEFAULT_MODEL = "deepseek-coder-v2"

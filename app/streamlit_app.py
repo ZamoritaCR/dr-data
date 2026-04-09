@@ -1763,7 +1763,7 @@ with tab1:
                 )
                 with chat_container:
                     with st.chat_message("assistant"):
-                        _btn_col1, _btn_col2 = st.columns(2)
+                        _btn_col1, _btn_col2, _btn_col3 = st.columns(3)
                         with _btn_col1:
                             if st.button(_btn1_label,
                                          key="intent_replicate",
@@ -1788,6 +1788,119 @@ with tab1:
                                     "timestamp": time.time(),
                                 })
                                 st.rerun()
+                        with _btn_col3:
+                            if st.button("Direct Generate",
+                                         key="direct_generate",
+                                         use_container_width=True):
+                                st.session_state["_direct_generate"] = True
+                                st.rerun()
+
+                # Handle direct generate trigger
+                if st.session_state.get("_direct_generate"):
+                    st.session_state.pop("_direct_generate", None)
+                    with chat_container:
+                        with st.chat_message("assistant"):
+                            with st.status("Direct pipeline running...", expanded=True) as _dg_status:
+                                try:
+                                    import glob as _dg_glob
+                                    _dg_twbx = None
+                                    if st.session_state.agent and hasattr(st.session_state.agent, "session"):
+                                        _dg_sess = st.session_state.agent.session
+                                        if _dg_sess and hasattr(_dg_sess, "files"):
+                                            for _fn, _fi in _dg_sess.files.items():
+                                                if str(_fn).lower().endswith((".twbx", ".twb")):
+                                                    _dg_twbx = _fi.get("path") or _fn
+                                                    break
+                                    if not _dg_twbx:
+                                        _dg_cands = sorted(
+                                            _dg_glob.glob("/tmp/*/*.twbx") + _dg_glob.glob("/tmp/*.twbx"),
+                                            key=os.path.getmtime, reverse=True,
+                                        )
+                                        if _dg_cands:
+                                            _dg_twbx = _dg_cands[0]
+
+                                    if not _dg_twbx:
+                                        st.error("No TWBX file found.")
+                                    else:
+                                        import warnings as _dg_w; _dg_w.filterwarnings("ignore")
+                                        st.write(f"File: {os.path.basename(_dg_twbx)}")
+
+                                        from app.file_handler import ingest_file as _dg_ingest
+                                        _dg_r = _dg_ingest(_dg_twbx)
+                                        _dg_dfs = _dg_r.get("dataframes", {})
+                                        _dg_df = list(_dg_dfs.values())[0] if _dg_dfs else None
+                                        if _dg_df is None or len(_dg_df) == 0:
+                                            st.error("No data extracted from file.")
+                                        else:
+                                            st.write(f"Data: {_dg_df.shape[0]} rows x {_dg_df.shape[1]} columns")
+
+                                            from core.data_analyzer import DataAnalyzer as _DG_DA
+                                            _dg_profile = _DG_DA().analyze(_dg_df)
+
+                                            from core.direct_mapper import build_pbip_config_from_tableau as _dg_map
+                                            _dg_config, _dg_dash = _dg_map(
+                                                _dg_r["report_structure"], _dg_profile
+                                            )
+                                            _dg_sections = _dg_config.get("report_layout", {}).get("sections", [])
+                                            st.write(f"Pages: {len(_dg_sections)}")
+
+                                            import shutil as _dg_shutil
+                                            _dg_out = str(PROJECT_ROOT / "output")
+                                            from generators.pbip_generator import PBIPGenerator as _DG_GEN
+                                            _dg_gen = _DG_GEN(_dg_out)
+                                            _dg_result = _dg_gen.generate(
+                                                _dg_config, _dg_profile, _dg_dash,
+                                                data_file_path=None, dataframe=_dg_df,
+                                            )
+                                            _dg_pbip = _dg_result["path"]
+                                            _dg_zip = _dg_shutil.make_archive(
+                                                _dg_pbip.replace("_pbip", ""), "zip", _dg_pbip
+                                            )
+                                            st.write(f"PBIP: {_dg_result.get('file_count', '?')} files")
+
+                                            # Download button
+                                            with open(_dg_zip, "rb") as _dg_f:
+                                                st.download_button(
+                                                    "Download PBIP ZIP",
+                                                    data=_dg_f.read(),
+                                                    file_name=os.path.basename(_dg_zip),
+                                                    mime="application/zip",
+                                                )
+
+                                            # Auto-publish
+                                            try:
+                                                from core.powerbi_publisher import (
+                                                    get_access_token as _dg_auth,
+                                                    list_workspaces as _dg_ws,
+                                                    publish_pbip as _dg_pub,
+                                                )
+                                                st.write("Publishing to Power BI...")
+                                                _dg_token = _dg_auth()
+                                                _dg_workspaces = _dg_ws(_dg_token)
+                                                if _dg_workspaces:
+                                                    _dg_wid = _dg_workspaces[0]["id"]
+                                                    _dg_name = os.path.basename(_dg_twbx).replace(".twbx", "")[:40]
+                                                    _dg_pub_r = _dg_pub(
+                                                        _dg_token, _dg_wid, _dg_pbip, _dg_name,
+                                                    )
+                                                    if _dg_pub_r.get("report_url"):
+                                                        st.success(f"Published: {_dg_pub_r['report_url']}")
+                                                        st.link_button(
+                                                            "Open in Power BI",
+                                                            _dg_pub_r["report_url"],
+                                                        )
+                                                    else:
+                                                        st.warning(f"Publish: {_dg_pub_r.get('error', 'unknown')}")
+                                            except Exception as _dg_pub_err:
+                                                st.info(f"Auto-publish skipped: {_dg_pub_err}")
+
+                                            _dg_status.update(label="Done", state="complete")
+
+                                except Exception as _dg_err:
+                                    st.error(f"Direct generate failed: {_dg_err}")
+                                    import traceback; traceback.print_exc()
+                                    _dg_status.update(label="Failed", state="error")
+                    st.rerun()
 
             # Intelligence card IS the reaction -- rerun to display
             st.rerun()

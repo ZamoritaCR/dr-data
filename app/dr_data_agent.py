@@ -1539,7 +1539,15 @@ class DrDataAgent:
             print(f"[EXPORT] is_export=True. dataframe={self.dataframe is not None}, "
                   f"tableau_spec={bool(self.tableau_spec)}, "
                   f"session={bool(self.session)}")
-            # Guard: need data first -- but auto-generate if we have Tableau structure
+            # Guard: need data first -- try session recovery before synthetic fallback
+            if self.dataframe is None and self.session:
+                try:
+                    _session_df = self.session.get_primary_dataframe()
+                    if _session_df is not None:
+                        self.dataframe = _session_df
+                        print(f"[ANALYZE] Recovered real data from session: {_session_df.shape}")
+                except Exception:
+                    pass
             if self.dataframe is None and self.tableau_spec:
                 self._report_progress(
                     "No extractable data found in the Tableau file "

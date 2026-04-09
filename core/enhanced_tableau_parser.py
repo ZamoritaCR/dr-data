@@ -281,6 +281,100 @@ def _extract_ws_design(ws_element):
     return ws_design
 
 
+def _parse_colors(ws_element, root):
+    """Extract color hex values used by a worksheet.
+
+    Checks three sources in priority order:
+    1. Worksheet style-rule mark encodings: <style-rule element="mark"><encoding attr="color"><map to="...">
+    2. Pane mark color values: <panes><pane><mark><color value="...">
+    3. Workbook-level custom palettes: <preferences><color-palette><color>
+
+    Returns a list of unique hex color strings (e.g. ["#4E79A7", "#F28E2B"]).
+    Returns empty list if no custom colors found.
+    """
+    colors = []
+    seen = set()
+
+    def _add(c):
+        if c and c.startswith("#") and c not in seen:
+            seen.add(c)
+            colors.append(c)
+
+    # Source 1: worksheet style-rule mark color encodings
+    for sr in ws_element.iter("style-rule"):
+        if sr.get("element") == "mark":
+            for enc in sr.findall("encoding"):
+                if enc.get("attr") == "color":
+                    for m in enc.findall("map"):
+                        _add(m.get("to", ""))
+            for fmt in sr.findall("format"):
+                if fmt.get("attr") == "mark-color":
+                    _add(fmt.get("value", ""))
+
+    # Source 2: pane mark color values
+    for pane in ws_element.iter("pane"):
+        for mark in pane.iter("mark"):
+            for color_el in mark.iter("color"):
+                _add(color_el.get("value", ""))
+
+    # Source 3: workbook-level custom color palettes (only if no ws-level colors)
+    if not colors:
+        for cp in root.iter("color-palette"):
+            for c_el in cp.findall("color"):
+                if c_el.text:
+                    _add(c_el.text.strip())
+
+    return colors
+
+
+def _parse_dashboard_zones(dashboard_element):
+    """Parse all zones from a dashboard element with worksheet references.
+
+    For each zone, extracts name, spatial layout, and the worksheet it
+    references (from param attribute or nested zone-xml content).
+
+    Returns list of dicts:
+        [{"name": str, "x": int, "y": int, "w": int, "h": int,
+          "worksheet_ref": str or "", "type": str}]
+    """
+    zones = []
+    seen = set()
+
+    for zone in dashboard_element.iter("zone"):
+        zone_name = zone.get("name", "")
+        if not zone_name or zone_name in seen:
+            continue
+        seen.add(zone_name)
+
+        zone_type = zone.get("type-v2", zone.get("type", ""))
+        layout = _extract_zone_layout(zone)
+
+        # Worksheet reference: check param attribute first (most common),
+        # then look for nested zone content that names a worksheet
+        ws_ref = zone.get("param", "")
+
+        # Some zones store the worksheet reference in a nested <zone> with
+        # a name attribute matching a worksheet
+        if not ws_ref:
+            for child_zone in zone.findall("zone"):
+                child_name = child_zone.get("name", "")
+                if child_name:
+                    ws_ref = child_name
+                    break
+
+        zones.append({
+            "name": zone_name,
+            "x": layout.get("x", 0),
+            "y": layout.get("y", 0),
+            "w": layout.get("w", 0),
+            "h": layout.get("h", 0),
+            "worksheet_ref": ws_ref,
+            "type": zone_type,
+        })
+
+    return zones
+
+
 def _extract_zone_layout(zone_element):
     """Extract spatial layout dict from a zone element's x/y/w/h attributes.
 
@@ -340,6 +434,59 @@ def get_xml_root(path):
             shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+def _parse_windows(root):
+    """Extract the visible tab list from the <windows> section.
+
+    Returns ordered list:
+        [{"name": str, "type": str, "order": int, "hidden": bool}]
+    """
+    windows_el = root.find("windows")
+    if windows_el is None:
+        return []
+    tabs = []
+    for idx, win in enumerate(windows_el):
+        if win.tag != "window":
+            continue
+        name = win.get("name", "")
+        wclass = win.get("class", "")
+        hidden = win.get("hidden", "").lower() == "true"
+        if not name or not wclass:
+            continue
+        tabs.append({
+            "name": name,
+            "type": wclass,
+            "order": idx,
+            "hidden": hidden,
+        })
+    return tabs
+
+
+def _parse_stories(root):
+    """Extract story elements with their storypoints.
+
+    Returns:
+        [{"name": str, "storypoints": [{"caption": str, "sheet": str}]}]
+    """
+    stories = []
+    for story in root.iter("story"):
+        s_name = story.get("name", "")
+        if not s_name:
+            continue
+        points = []
+        for sp in story.iter("storypoint"):
+            caption = sp.get("caption", "")
+            sheet = ""
+            for child in sp:
+                if child.tag in ("dashboard", "worksheet"):
+                    sheet = child.get("name", "")
+                    break
+            if not sheet:
+                sheet = sp.get("captured-sheet", "")
+            points.append({"caption": caption, "sheet": sheet})
+        stories.append({"name": s_name, "storypoints": points})
+    return stories
+
+
 def parse_twb(path):
     """Parse a Tableau workbook XML with full metadata extraction.
 
@@ -348,7 +495,7 @@ def parse_twb(path):
     Returns a dict with:
         type, version, datasources, worksheets, dashboards,
         calculated_fields, parameters, filters, relationships,
-        has_hyper
+        has_hyper, windows, stories, worksheet_colors
     """
     spec = {
         "type": "tableau_workbook",
@@ -361,6 +508,9 @@ def parse_twb(path):
         "filters": [],
         "relationships": [],
         "has_hyper": False,
+        "windows": [],
+        "stories": [],
+        "worksheet_colors": {},
     }
 
     actual_path = path
@@ -557,6 +707,9 @@ def parse_twb(path):
             # Per-worksheet design metadata
             ws_info["design"] = _extract_ws_design(ws)
 
+            # Per-worksheet color extraction
+            ws_info["colors"] = _parse_colors(ws, root)
+
             # -- Chart type inference from shelf bindings --
             # When the mark class is "automatic", infer a better chart type
             # from the actual row/col shelf composition rather than defaulting
@@ -752,7 +905,26 @@ def parse_twb(path):
                             seen_ws_used.add(zone_name)
                             db_info["worksheets_used"].append(zone_name)
 
+            # Parsed zones with worksheet references (for QA manifest)
+            db_info["parsed_zones"] = _parse_dashboard_zones(db)
+
             spec["dashboards"].append(db_info)
+
+        # --- Windows (visible tab list) ---
+        spec["windows"] = _parse_windows(root)
+
+        # --- Stories ---
+        spec["stories"] = _parse_stories(root)
+
+        # --- Per-worksheet colors ---
+        ws_colors = {}
+        for ws in root.iter("worksheet"):
+            ws_name = ws.get("name", "")
+            if ws_name:
+                colors = _parse_colors(ws, root)
+                if colors:
+                    ws_colors[ws_name] = colors
+        spec["worksheet_colors"] = ws_colors
 
     except Exception as e:
         spec["parse_error"] = str(e)

@@ -1659,20 +1659,23 @@ class PBIPGenerator:
                     s = str(raw).replace('"', '""')
                     vals.append(f'"{s}"')
 
-            row_lines.append("\t{" + ", ".join(vals) + "}")
+            # Sanitize values: strip tabs/newlines that would break TMDL indent
+            clean_vals = ", ".join(vals).replace("\t", " ").replace("\n", " ")
+            row_lines.append("{" + clean_vals + "}")
 
-        rows_block = ",\n".join(row_lines)
-
-        # Build the M expression using tabs (not spaces) throughout
+        # Build the M expression -- each line is a separate list element
+        # so the caller can prepend consistent indentation to every line.
         lines = [
             "let",
-            f"\tSource = #table({type_schema},",
+            "\tSource = #table(" + type_schema + ",",
             "\t{",
-            rows_block,
-            "\t})",
-            "in",
-            "\tSource",
         ]
+        for i, row in enumerate(row_lines):
+            suffix = "," if i < len(row_lines) - 1 else ""
+            lines.append("\t" + row + suffix)
+        lines.append("\t})")
+        lines.append("in")
+        lines.append("\tSource")
         return lines
 
     @staticmethod

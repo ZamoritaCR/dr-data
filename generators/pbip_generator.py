@@ -1609,19 +1609,25 @@ class PBIPGenerator:
         columns = table_cfg.get("columns", [])
         col_names = [c["name"] for c in columns]
 
-        # Build type schema: {"ColName", type number}, ...
+        # Build type schema using M "type table" syntax:
+        #   type table [#"Col Name" = text, Col2 = number]
         pbi_to_m = {
-            "string": "type text",
-            "int64": "type number",
-            "double": "type number",
-            "dateTime": "type date",
-            "boolean": "type logical",
+            "string": "text",
+            "int64": "number",
+            "double": "number",
+            "dateTime": "date",
+            "boolean": "logical",
         }
-        type_pairs = []
+        type_cols = []
         for c in columns:
-            m_type = pbi_to_m.get(c.get("dataType", "string"), "type text")
-            type_pairs.append(f'{{"{c["name"]}", {m_type}}}')
-        type_schema = "{" + ", ".join(type_pairs) + "}"
+            m_type = pbi_to_m.get(c.get("dataType", "string"), "text")
+            col_name = c["name"]
+            # Quote column names that contain spaces or special chars
+            if " " in col_name or "-" in col_name or not col_name.isidentifier():
+                type_cols.append(f'#"{col_name}" = {m_type}')
+            else:
+                type_cols.append(f'{col_name} = {m_type}')
+        type_schema = "type table [" + ", ".join(type_cols) + "]"
 
         # Build data rows -- limit to 500 rows to keep TMDL size reasonable
         max_rows = min(len(df), 500)

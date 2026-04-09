@@ -385,6 +385,10 @@ def publish_pbip(
     print(f"[PBI-PUBLISH] Report ID: {rpt_id}")
     print(f"[PBI-PUBLISH] Report URL: {report_url}")
 
+    # Step 4: Trigger dataset refresh so inline data is queryable
+    if sm_id:
+        _refresh_dataset(workspace_id, sm_id)
+
     return {
         "semantic_model": sm_result,
         "report": rpt_result,
@@ -392,6 +396,52 @@ def publish_pbip(
         "report_id": rpt_id,
         "report_url": report_url,
     }
+
+
+# ------------------------------------------------------------------ #
+#  Dataset refresh (required for inline #table data)                   #
+# ------------------------------------------------------------------ #
+
+def _refresh_dataset(workspace_id: str, dataset_id: str) -> None:
+    """Trigger a dataset refresh so inline data becomes queryable.
+
+    Uses the PBI API scope (not Fabric) since the refresh endpoint lives
+    on api.powerbi.com. Fire-and-forget: logs result but does not block.
+    """
+    try:
+        pbi_token = get_access_token(PBI_SCOPE)
+        resp = requests.post(
+            f"{PBI_API}/groups/{workspace_id}/datasets/{dataset_id}/refreshes",
+            headers={
+                "Authorization": f"Bearer {pbi_token}",
+                "Content-Type": "application/json",
+            },
+            json={"type": "Full"},
+            timeout=30,
+        )
+        if resp.status_code == 202:
+            print(f"[PBI-REFRESH] Dataset refresh triggered for {dataset_id}")
+            # Poll briefly for completion (inline data refreshes are fast)
+            for _ in range(10):
+                time.sleep(3)
+                r = requests.get(
+                    f"{PBI_API}/groups/{workspace_id}/datasets/{dataset_id}/refreshes?$top=1",
+                    headers={"Authorization": f"Bearer {pbi_token}"},
+                    timeout=15,
+                )
+                if r.status_code == 200:
+                    refs = r.json().get("value", [])
+                    if refs and refs[0].get("status") in ("Completed", "Failed"):
+                        status = refs[0]["status"]
+                        print(f"[PBI-REFRESH] Refresh {status}")
+                        if status == "Failed":
+                            err = refs[0].get("serviceExceptionJson", "")
+                            print(f"[PBI-REFRESH] Error: {err[:200]}")
+                        return
+        else:
+            print(f"[PBI-REFRESH] Refresh request failed: {resp.status_code} -- {resp.text[:200]}")
+    except Exception as e:
+        print(f"[PBI-REFRESH] Non-fatal refresh error: {e}")
 
 
 # ------------------------------------------------------------------ #

@@ -203,8 +203,8 @@ CULTURE_TMDL = _load_text(
         "\n"
         "\tlinguisticMetadata =\n"
         "\t\t\t{\n"
-        '\t\t\t  "Version": "1.0.0",\n'
-        '\t\t\t  "Language": "en-US"\n'
+        '\t\t\t\t"Version": "1.0.0",\n'
+        '\t\t\t\t"Language": "en-US"\n'
         "\t\t\t}\n"
         "\t\tcontentType: json\n"
         "\n"

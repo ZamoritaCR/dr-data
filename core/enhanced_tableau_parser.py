@@ -309,6 +309,37 @@ def _extract_zone_style(zone_element):
     return border
 
 
+def get_xml_root(path):
+    """Get the XML Element root from a .twb or .twbx file.
+
+    Returns the root Element or None on error. Caller must handle cleanup.
+    Used by Sprint 2 color_extractor for deep color extraction.
+    """
+    actual_path = path
+    tmpdir = None
+    if str(path).lower().endswith('.twbx'):
+        try:
+            tmpdir = tempfile.mkdtemp(prefix="etp_root_")
+            with zipfile.ZipFile(path, 'r') as z:
+                for name in z.namelist():
+                    if name.endswith('.twb'):
+                        z.extract(name, tmpdir)
+                        actual_path = os.path.join(tmpdir, name)
+                        break
+        except Exception:
+            if tmpdir:
+                shutil.rmtree(tmpdir, ignore_errors=True)
+            return None
+    try:
+        tree = ET.parse(actual_path)
+        return tree.getroot()
+    except Exception:
+        return None
+    finally:
+        if tmpdir:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 def parse_twb(path):
     """Parse a Tableau workbook XML with full metadata extraction.
 

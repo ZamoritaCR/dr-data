@@ -237,12 +237,19 @@ class PBIPGenerator:
         # 7. pages.json
         self._write_pages_json(pages_dir, page_ids)
 
-        # 8. Theme file -- always write a custom theme with good colors.
-        # Tableau categorical colors are rarely stored in the TWB XML,
-        # so we use a professional palette that looks good in PBI.
-        from core.design_translator import build_pbi_theme
+        # 8. Theme file -- Sprint 2: use color_extractor + visual_styler for
+        # enhanced theme when deep color data is available, fallback to
+        # design_translator for basic cases.
         tableau_design = dashboard_spec.get("design") or {}
-        custom_theme = build_pbi_theme(tableau_design, title)
+        unified_palette = dashboard_spec.get("_unified_palette", [])
+        if unified_palette:
+            from core.visual_styler import build_enhanced_theme
+            from core.design_translator import translate_fonts
+            fonts = translate_fonts(tableau_design.get("global_fonts", {}))
+            custom_theme = build_enhanced_theme(unified_palette, fonts, title)
+        else:
+            from core.design_translator import build_pbi_theme
+            custom_theme = build_pbi_theme(tableau_design, title)
         self._write_json(theme_dir / "CY25SU12.json", custom_theme)
 
         # 15. Auto-launcher .bat (patches data path + opens .pbip)
@@ -734,10 +741,16 @@ class PBIPGenerator:
             }
 
         # Apply Tableau worksheet design formatting if available
+        # Sprint 2: use visual_styler for enhanced formatting when palette available
         ws_name = cfg_obj.get("worksheet_name", "")
         if ws_name and ws_name in ws_designs:
-            from core.design_translator import build_visual_formatting
-            formatting = build_visual_formatting(ws_designs[ws_name])
+            color_palette = vc.get("_color_palette", [])
+            if color_palette:
+                from core.visual_styler import style_visual
+                formatting = style_visual(ws_designs[ws_name], color_palette, visual_type)
+            else:
+                from core.design_translator import build_visual_formatting
+                formatting = build_visual_formatting(ws_designs[ws_name])
             if formatting:
                 existing_objects = doc["visual"].get("objects", {})
                 # Merge: formatting keys that don't already exist
@@ -1385,7 +1398,7 @@ class PBIPGenerator:
         valid_measure_names = set()
         for m in all_measures:
             m_name = self._strip_control_chars(m["name"])
-            dax = self._strip_control_chars(
+            dax = self._sanitize_dax(
                 m.get("dax", m.get("expression", "BLANK()"))
             )
             fmt = self._strip_control_chars(
@@ -1874,6 +1887,32 @@ class PBIPGenerator:
         if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', name):
             return f"'{name}'"
         return name
+
+    @classmethod
+    def _sanitize_dax(cls, text):
+        """Clean a DAX expression for safe TMDL embedding.
+
+        1. Strip control characters
+        2. Remove // line comments and /* block comments */
+        3. Collapse multi-line expressions to a single line
+        4. Normalize whitespace
+
+        TMDL requires measure expressions on one line after the = sign.
+        Multi-line comments or expressions cause InvalidLineType errors.
+        """
+        if not isinstance(text, str):
+            return "BLANK()"
+        import re
+        text = cls._strip_control_chars(text)
+        # Remove /* ... */ block comments
+        text = re.sub(r'/\*.*?\*/', ' ', text, flags=re.DOTALL)
+        # Remove // line comments (everything from // to end of line)
+        text = re.sub(r'//[^\n]*', ' ', text)
+        # Collapse newlines and excess whitespace to single spaces
+        text = re.sub(r'\s+', ' ', text).strip()
+        if not text:
+            return "BLANK()"
+        return text
 
     @staticmethod
     def _strip_control_chars(text):

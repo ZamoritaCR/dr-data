@@ -1377,6 +1377,53 @@ with tab1:
                 elif st.session_state.audience_mode == "executive" and ws.get("audit_summary"):
                     st.info(ws["audit_summary"])
 
+            # === COPILOT ENRICHMENT (Sprint 2) ===
+            _agent = st.session_state.get("agent")
+            _enrichment = getattr(_agent, '_copilot_enrichment', {}) if _agent else {}
+            if _enrichment and _enrichment.get("score", 0) > 0:
+                _safe_html('<div class="workspace-card"><h3>Copilot Analysis</h3></div>', "**Copilot Analysis**")
+                _score = _enrichment.get("score", 0)
+                _score_class = "score-green" if _score >= 80 else "score-amber" if _score >= 60 else "score-red"
+                st.markdown(f"**Conversion Quality:** <span class='{_score_class}'>{_score}/100</span>", unsafe_allow_html=True)
+
+                _chart_sugg = _enrichment.get("chart_suggestions", [])
+                _missing_kpis = _enrichment.get("missing_kpis", [])
+                _dax_tips = _enrichment.get("dax_tips", [])
+                _access = _enrichment.get("accessibility", [])
+                _naming = _enrichment.get("naming", [])
+                _layout = _enrichment.get("layout_tips", [])
+
+                if _chart_sugg:
+                    with st.expander(f"Chart Suggestions ({len(_chart_sugg)})"):
+                        for s in _chart_sugg:
+                            st.markdown(f"- **{_escape_user_text(s.get('worksheet', ''))}**: "
+                                        f"{_escape_user_text(s.get('current_type', ''))} -> "
+                                        f"{_escape_user_text(s.get('suggested_type', ''))} -- "
+                                        f"{_escape_user_text(s.get('reason', ''))}")
+                if _missing_kpis:
+                    with st.expander(f"Missing KPIs ({len(_missing_kpis)})"):
+                        for k in _missing_kpis:
+                            st.markdown(f"- **{_escape_user_text(k.get('name', ''))}**: "
+                                        f"`{_escape_user_text(k.get('dax_formula', ''))}`")
+                            if k.get("reason"):
+                                st.caption(_escape_user_text(k["reason"]))
+                if _dax_tips:
+                    with st.expander(f"DAX Optimization ({len(_dax_tips)})"):
+                        for t in _dax_tips:
+                            st.markdown(f"- **{_escape_user_text(t.get('field', ''))}**: "
+                                        f"{_escape_user_text(t.get('reason', ''))}")
+                if _access:
+                    with st.expander(f"Accessibility ({len(_access)})"):
+                        for a in _access:
+                            sev = a.get("severity", "info")
+                            st.markdown(f"- [{sev.upper()}] {_escape_user_text(a.get('issue', ''))}: "
+                                        f"{_escape_user_text(a.get('fix', ''))}")
+                if _naming:
+                    with st.expander(f"Naming Suggestions ({len(_naming)})"):
+                        for n in _naming:
+                            st.markdown(f"- {_escape_user_text(n.get('current', ''))} -> "
+                                        f"**{_escape_user_text(n.get('suggested', ''))}**")
+
             # === DATA PREVIEW ===
             if ws.get("data_preview") is not None:
                 df_preview = ws["data_preview"]

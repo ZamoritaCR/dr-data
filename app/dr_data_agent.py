@@ -1009,6 +1009,14 @@ class DrDataAgent:
         if result.get("report_structure"):
             self.tableau_spec = result["report_structure"]
 
+            # Sprint 2: cache XML root for deep color extraction
+            if self.tableau_spec.get("type", "").startswith("tableau"):
+                try:
+                    from core.enhanced_tableau_parser import get_xml_root
+                    self._twb_xml_root = get_xml_root(file_path)
+                except Exception:
+                    self._twb_xml_root = None
+
             # Wire field resolution: if we have both a Tableau spec and data,
             # resolve field names against actual columns using fuzzy matching.
             if self.dataframe is not None and self.tableau_spec.get("type", "").startswith("tableau"):
@@ -3149,6 +3157,21 @@ Output ONLY valid JSON. No markdown. No commentary."""
 
                 self.dashboard_spec = dashboard_spec
 
+                # Sprint 2: Deep color extraction for enhanced theming
+                try:
+                    from core.color_extractor import extract_all_colors, build_unified_palette
+                    if hasattr(self, '_twb_xml_root') and self._twb_xml_root is not None:
+                        extracted = extract_all_colors(self._twb_xml_root)
+                        unified = build_unified_palette(extracted)
+                        if unified:
+                            dashboard_spec["_unified_palette"] = unified
+                            self._report_progress(
+                                f"Color extraction: {len(unified)} palette colors "
+                                f"extracted from workbook design"
+                            )
+                except Exception as e:
+                    print(f"[WARN] Sprint 2 color extraction skipped: {e}")
+
                 # Jump to PBIP generator (skip Claude + GPT-4 pipeline)
                 self._report_progress(
                     "Writing Power BI project files: page layouts, "
@@ -3345,6 +3368,34 @@ Output ONLY valid JSON. No markdown. No commentary."""
                     except Exception as _qg_err:
                         print(f"[QUALITY-GATE] Rebuild failed: {_qg_err}")
 
+                # Sprint 2: Copilot enrichment (async-safe, non-blocking)
+                try:
+                    from core.copilot_enricher import enrich as copilot_enrich
+                    self._report_progress("Running Copilot enrichment analysis...")
+                    enrichment = copilot_enrich(self.tableau_spec, gen_result)
+                    self._copilot_enrichment = enrichment
+                    score = enrichment.get("score", 0)
+                    n_suggestions = sum(
+                        len(enrichment.get(k, []))
+                        for k in ("chart_suggestions", "missing_kpis", "dax_tips",
+                                  "accessibility", "naming", "layout_tips")
+                    )
+                    warnings = enrichment.get("warnings", [])
+                    if warnings:
+                        self._report_progress(
+                            f"Copilot: {'; '.join(warnings)}"
+                        )
+                    elif n_suggestions > 0:
+                        self._report_progress(
+                            f"Copilot analysis: score {score}/100, "
+                            f"{n_suggestions} suggestions generated"
+                        )
+                    else:
+                        self._report_progress("Copilot: no suggestions (clean conversion)")
+                except Exception as _ce:
+                    print(f"[COPILOT] Enrichment failed (non-fatal): {_ce}")
+                    self._copilot_enrichment = {}
+
                 zip_name = project_name.replace(" ", "_")
                 zip_path = shutil.make_archive(
                     os.path.join(output_dir, zip_name), "zip", result_path
@@ -3364,6 +3415,9 @@ Output ONLY valid JSON. No markdown. No commentary."""
                                     for p in dashboard_spec.get("pages", [])]
                 measure_names = [m["name"] for m in dashboard_spec.get("measures", [])]
 
+                # Sprint 2: include copilot enrichment in result
+                _enrichment = getattr(self, '_copilot_enrichment', {})
+
                 return json.dumps({
                     "status": "success",
                     "method": "direct_tableau_mapper",
@@ -3377,6 +3431,7 @@ Output ONLY valid JSON. No markdown. No commentary."""
                     "total_visuals": sum(visuals_per_page),
                     "measures": measure_names,
                     "field_audit": field_audit,
+                    "copilot_enrichment": _enrichment,
                     "build_context": {
                         "data_file": data_file_name,
                         "row_count": row_count,

@@ -1858,23 +1858,15 @@ with tab1:
                                             )
                                             st.write(f"PBIP: {_dg_result.get('file_count', '?')} files")
 
-                                            # Download button
-                                            with open(_dg_zip, "rb") as _dg_f:
-                                                st.download_button(
-                                                    "Download PBIP ZIP",
-                                                    data=_dg_f.read(),
-                                                    file_name=os.path.basename(_dg_zip),
-                                                    mime="application/zip",
-                                                )
-
-                                            # Auto-publish
+                                            # Auto-publish FIRST (primary deliverable)
+                                            _dg_report_url = ""
                                             try:
                                                 from core.powerbi_publisher import (
                                                     get_access_token as _dg_auth,
                                                     list_workspaces as _dg_ws,
                                                     publish_pbip as _dg_pub,
                                                 )
-                                                st.write("Publishing to Power BI...")
+                                                st.write("Publishing to Power BI Service...")
                                                 _dg_token = _dg_auth()
                                                 _dg_workspaces = _dg_ws(_dg_token)
                                                 if _dg_workspaces:
@@ -1884,17 +1876,35 @@ with tab1:
                                                         _dg_token, _dg_wid, _dg_pbip, _dg_name,
                                                     )
                                                     if _dg_pub_r.get("report_url"):
-                                                        st.success(f"Published: {_dg_pub_r['report_url']}")
-                                                        st.link_button(
-                                                            "Open in Power BI",
-                                                            _dg_pub_r["report_url"],
-                                                        )
-                                                    else:
-                                                        st.warning(f"Publish: {_dg_pub_r.get('error', 'unknown')}")
+                                                        _dg_report_url = _dg_pub_r["report_url"]
                                             except Exception as _dg_pub_err:
-                                                st.info(f"Auto-publish skipped: {_dg_pub_err}")
+                                                print(f"[DIRECT-GEN] Publish skipped: {_dg_pub_err}")
 
                                             _dg_status.update(label="Done", state="complete")
+
+                                    # Show results OUTSIDE the status block
+                                    if _dg_report_url:
+                                        st.success("Published to Power BI Service")
+                                        st.markdown(
+                                            f"### [Open Live Dashboard in Power BI]"
+                                            f"({_dg_report_url})"
+                                        )
+                                        st.link_button(
+                                            "Open in Power BI",
+                                            _dg_report_url,
+                                            type="primary",
+                                        )
+                                        st.caption("Your report is live with real data.")
+
+                                    # Download ZIP as secondary option
+                                    if os.path.exists(_dg_zip):
+                                        with open(_dg_zip, "rb") as _dg_f:
+                                            st.download_button(
+                                                "Download PBIP ZIP (for PBI Desktop)",
+                                                data=_dg_f.read(),
+                                                file_name=os.path.basename(_dg_zip),
+                                                mime="application/zip",
+                                            )
 
                                 except Exception as _dg_err:
                                     st.error(f"Direct generate failed: {_dg_err}")

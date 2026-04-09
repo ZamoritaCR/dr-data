@@ -151,7 +151,7 @@ PAGE_JSON_TEMPLATE = {
     "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/page/2.0.0/schema.json",
     "name": None,
     "displayName": None,
-    "displayOption": "FitToPage",
+    "displayOption": 0,
     "height": 720,
     "width": 1280,
 }

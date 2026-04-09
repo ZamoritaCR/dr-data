@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import os
+import queue
 import shutil
 import sys
 import tempfile
@@ -124,20 +125,19 @@ async def start_process(file_id: str):
         raise HTTPException(404, f"File {file_id} not found")
 
     job_id = uuid.uuid4().hex[:12]
-    queue = asyncio.Queue()
+    q = queue.Queue()  # Thread-safe stdlib queue
 
     _jobs[job_id] = {
         "file_id": file_id,
         "status": "queued",
-        "queue": queue,
+        "queue": q,
         "created": datetime.utcnow().isoformat(),
     }
 
     # Run pipeline in background thread
-    loop = asyncio.get_event_loop()
     thread = threading.Thread(
         target=_run_pipeline,
-        args=(job_id, file_id, loop, queue),
+        args=(job_id, file_id, q),
         daemon=True,
     )
     thread.start()
@@ -151,19 +151,22 @@ async def stream_events(job_id: str, request: Request):
     if job_id not in _jobs:
         raise HTTPException(404, f"Job {job_id} not found")
 
-    queue = _jobs[job_id]["queue"]
+    q = _jobs[job_id]["queue"]
 
     async def event_generator():
         while True:
             if await request.is_disconnected():
                 break
+            # Poll the thread-safe queue from the async context
             try:
-                event = await asyncio.wait_for(queue.get(), timeout=30.0)
-                yield {"data": json.dumps(event, default=str)}
-                if event.get("phase") == "done" or event.get("phase") == "error":
+                event = q.get(block=False)
+                yield json.dumps(event, default=str)
+                if event.get("phase") in ("done", "error"):
                     break
-            except asyncio.TimeoutError:
-                yield {"data": json.dumps({"phase": "heartbeat", "timestamp": datetime.utcnow().isoformat()})}
+            except queue.Empty:
+                # No event yet -- yield a comment to keep connection alive and retry
+                await asyncio.sleep(0.3)
+                continue
 
     return EventSourceResponse(event_generator())
 
@@ -221,8 +224,8 @@ async def get_job(job_id: str):
 #  Pipeline (runs in background thread)
 # ------------------------------------------------------------------ #
 
-def _emit(loop, queue, phase, status, detail="", **extra):
-    """Thread-safe event emit to async queue."""
+def _emit(q, phase, status, detail="", **extra):
+    """Thread-safe event emit to stdlib queue."""
     event = {
         "phase": phase,
         "status": status,
@@ -230,11 +233,11 @@ def _emit(loop, queue, phase, status, detail="", **extra):
         "timestamp": datetime.utcnow().isoformat(),
         **extra,
     }
-    asyncio.run_coroutine_threadsafe(queue.put(event), loop)
+    q.put(event)
     logger.info(f"[{phase}] {status}: {detail[:100]}")
 
 
-def _run_pipeline(job_id: str, file_id: str, loop, queue):
+def _run_pipeline(job_id: str, file_id: str, q):
     """Full migration pipeline: parse -> translate -> build -> validate -> publish."""
     import pandas as pd
 
@@ -245,7 +248,7 @@ def _run_pipeline(job_id: str, file_id: str, loop, queue):
 
     try:
         # ---- PHASE: PARSE ----
-        _emit(loop, queue, "parse", "start", f"Parsing {filename}")
+        _emit(q, "parse", "start", f"Parsing {filename}")
 
         from core.enhanced_tableau_parser import parse_twb
         spec = parse_twb(filepath)
@@ -258,13 +261,13 @@ def _run_pipeline(job_id: str, file_id: str, loop, queue):
         ws_names = [w.get("name", "") for w in spec.get("worksheets", [])]
         db_names = [d.get("name", "") for d in spec.get("dashboards", [])]
 
-        _emit(loop, queue, "parse", "complete",
+        _emit(q, "parse", "complete",
               f"{ws_count} worksheets, {db_count} dashboards, {cf_count} calcs, {ds_count} datasources",
               worksheets=ws_names[:10], dashboards=db_names[:5],
               calc_count=cf_count, datasource_count=ds_count)
 
         # ---- PHASE: TRANSLATE ----
-        _emit(loop, queue, "translate", "start", "Generating synthetic data + mapping fields")
+        _emit(q, "translate", "start", "Generating synthetic data + mapping fields")
 
         from core.synthetic_data import generate_from_tableau_spec
         df, col_map, gen_log = generate_from_tableau_spec(spec)
@@ -294,14 +297,14 @@ def _run_pipeline(job_id: str, file_id: str, loop, queue):
         total_visuals = sum(len(s.get("visualContainers", [])) for s in sections)
         measure_count = len(config.get("tmdl_model", {}).get("tables", [{}])[0].get("measures", []))
 
-        _emit(loop, queue, "translate", "complete",
+        _emit(q, "translate", "complete",
               f"{len(df)} rows, {len(df.columns)} cols, {len(sections)} pages, "
               f"{total_visuals} visuals, {measure_count} DAX measures",
               rows=len(df), cols=len(df.columns), pages=len(sections),
               visuals=total_visuals, measures=measure_count)
 
         # ---- PHASE: BUILD ----
-        _emit(loop, queue, "build", "start", "Generating PBIP project files")
+        _emit(q, "build", "start", "Generating PBIP project files")
 
         out_dir = str(OUTPUT_DIR / f"v2_{job_id}")
         from generators.pbip_generator import PBIPGenerator
@@ -314,12 +317,12 @@ def _run_pipeline(job_id: str, file_id: str, loop, queue):
         pbip_path = gen_result["path"]
         file_count = gen_result.get("file_count", 0)
 
-        _emit(loop, queue, "build", "complete",
+        _emit(q, "build", "complete",
               f"{file_count} files generated",
               pbip_path=pbip_path, file_count=file_count)
 
         # ---- PHASE: VALIDATE ----
-        _emit(loop, queue, "validate", "start", "Running preflight checks")
+        _emit(q, "validate", "start", "Running preflight checks")
 
         from core.preflight_validator import validate as preflight
         pf = preflight(pbip_path)
@@ -328,19 +331,19 @@ def _run_pipeline(job_id: str, file_id: str, loop, queue):
             try:
                 from core.pbip_healer import heal
                 fixes = heal(pbip_path, pf)
-                _emit(loop, queue, "validate", "progress",
+                _emit(q, "validate", "progress",
                       f"{pf.fail_count} issues found, {len(fixes)} auto-healed")
                 pf = preflight(pbip_path)
             except Exception as heal_err:
-                _emit(loop, queue, "validate", "progress",
+                _emit(q, "validate", "progress",
                       f"Healer error (non-fatal): {heal_err}")
 
-        _emit(loop, queue, "validate", "complete",
+        _emit(q, "validate", "complete",
               f"{pf.pass_count} passed, {pf.fail_count} failed",
               passed=pf.pass_count, failed=pf.fail_count)
 
         # ---- PHASE: PUBLISH ----
-        _emit(loop, queue, "publish", "start", "Publishing to Power BI")
+        _emit(q, "publish", "start", "Publishing to Power BI")
 
         report_url = ""
         report_id = ""
@@ -354,14 +357,14 @@ def _run_pipeline(job_id: str, file_id: str, loop, queue):
             workspaces = list_workspaces(token)
 
             if not workspaces:
-                _emit(loop, queue, "publish", "error",
+                _emit(q, "publish", "error",
                       "No Power BI workspaces found. Add service principal to a workspace.")
             else:
                 target = workspaces[0]
                 ws_id = target["id"]
                 ws_name = target.get("displayName", "?")
 
-                _emit(loop, queue, "publish", "progress",
+                _emit(q, "publish", "progress",
                       f"Target workspace: {ws_name}")
 
                 display_name = filename.replace(".twbx", "").replace(".twb", "")[:40]
@@ -370,14 +373,14 @@ def _run_pipeline(job_id: str, file_id: str, loop, queue):
                 pub = publish_pbip(token, ws_id, pbip_path, display_name)
 
                 if pub.get("error"):
-                    _emit(loop, queue, "publish", "error",
+                    _emit(q, "publish", "error",
                           f"Publish failed: {pub.get('error')}")
                 else:
                     report_id = pub.get("report_id", "")
                     sm_id = pub.get("semantic_model_id", "")
                     report_url = pub.get("report_url", "")
 
-                    _emit(loop, queue, "publish", "progress",
+                    _emit(q, "publish", "progress",
                           f"Published. Verifying data...")
 
                     # Verify data loaded
@@ -408,17 +411,17 @@ def _run_pipeline(job_id: str, file_id: str, loop, queue):
                             "actual_rows": actual_rows,
                         }
 
-                        _emit(loop, queue, "publish", "complete",
+                        _emit(q, "publish", "complete",
                               f"Fidelity: {total_score}% ({actual_rows} rows verified)",
                               report_url=report_url, fidelity=fidelity)
                     except Exception as dax_err:
                         fidelity = {"score": 50, "data": 20, "structure": 20, "quality": 10}
-                        _emit(loop, queue, "publish", "complete",
+                        _emit(q, "publish", "complete",
                               f"Published (DAX verify skipped: {dax_err})",
                               report_url=report_url, fidelity=fidelity)
 
         except Exception as pub_err:
-            _emit(loop, queue, "publish", "error", f"Publish error: {pub_err}")
+            _emit(q, "publish", "error", f"Publish error: {pub_err}")
 
         # ---- PHASE: DONE ----
         result = {
@@ -439,12 +442,12 @@ def _run_pipeline(job_id: str, file_id: str, loop, queue):
         _job_results[job_id] = result
         _jobs[job_id]["status"] = "complete"
 
-        _emit(loop, queue, "done", "complete", "Pipeline finished", **result)
+        _emit(q, "done", "complete", "Pipeline finished", **result)
 
     except Exception as e:
         logger.exception(f"Pipeline failed: {e}")
         _jobs[job_id]["status"] = "failed"
-        _emit(loop, queue, "error", "failed", str(e)[:500])
+        _emit(q, "error", "failed", str(e)[:500])
 
 
 # ------------------------------------------------------------------ #

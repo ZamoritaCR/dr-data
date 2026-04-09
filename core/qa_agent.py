@@ -155,6 +155,20 @@ class QAAgent:
                 self._log("GENERATE", f"Failed: {e}", "error")
                 continue
 
+            # ---- PHASE 1.5: STRUCTURAL QA (tab-by-tab) ----
+            try:
+                repairs, tab_fidelity = self._pre_publish_structural_qa(
+                    self.source_spec, self.config, pbip_path
+                )
+                tab_score = tab_fidelity.get("total", 0)
+                tab_count = len(tab_fidelity.get("tab_scores", []))
+                self._log("STRUCTURAL_QA",
+                          f"Tab fidelity: {tab_score:.0f}% "
+                          f"({tab_count} tabs, {len(repairs)} repairs)",
+                          "success" if not repairs else "warning")
+            except Exception as sq_err:
+                self._log("STRUCTURAL_QA", f"Skipped: {sq_err}", "warning")
+
             # ---- PHASE 2: DETERMINISTIC FILE CHECKS + AUTO-FIX ----
             issues = self._deterministic_checks(pbip_path)
             if issues:
@@ -217,15 +231,45 @@ class QAAgent:
             except Exception as e:
                 self._log("READ_BACK", f"Failed: {e}", "warning")
 
-            # ---- PHASE 5: FIDELITY COMPARISON ----
-            fidelity = self._compute_fidelity(live_result)
+            # ---- PHASE 5: FIDELITY COMPARISON (4-axis tab-by-tab) ----
+            source_manifest = self._build_source_manifest()
+            fidelity = self._compute_fidelity(live_result, source_manifest)
             self.fidelity_report = fidelity
             score = fidelity.get("score", 0)
-            self._log("FIDELITY", f"Score: {score}%",
-                      "success" if score >= 70 else "warning")
+            matched = fidelity.get("matched_tabs", 0)
+            total = fidelity.get("total_tabs", 0)
+            self._log(
+                "FIDELITY",
+                f"Score: {score}% | Tabs: {matched}/{total} | "
+                f"Identity: {fidelity.get('tab_identity', 0)}/25  "
+                f"Charts: {fidelity.get('chart_types', 0)}/25  "
+                f"Fields: {fidelity.get('field_bindings', 0)}/25  "
+                f"Layout: {fidelity.get('layout', 0)}/25",
+                "success" if score >= 90 else (
+                    "warning" if score >= 75 else "error"
+                ),
+            )
+
+            # Log per-tab scores
+            for ts in fidelity.get("tab_scores", []):
+                status = "success" if ts.get("page_found") else "error"
+                self._log(
+                    "TAB_SCORE",
+                    f"  {ts['name']}: "
+                    f"{'FOUND' if ts.get('page_found') else 'MISSING'}"
+                    f" | chart={'OK' if ts.get('chart_match') else 'MISMATCH'}"
+                    f" | fields={ts.get('field_pct', 0)}%"
+                    f" | visuals={ts.get('visual_count_actual', 0)}"
+                    f"/{ts.get('visual_count_expected', 0)}",
+                    status,
+                )
 
             # ---- PHASE 6: DECIDE -- GOOD ENOUGH OR FIX? ----
-            if score >= 60 or loop == self.max_loops - 1:
+            # >= 90: clean accept
+            # 75-89: accept with warnings
+            # 60-74: re-loop with repairs
+            # < 60: fail (unless last loop)
+            if score >= 75 or loop == self.max_loops - 1:
                 # Accept
                 if self.api_key:
                     try:
@@ -252,7 +296,9 @@ class QAAgent:
                 }
             else:
                 self._log("FIDELITY_LOW",
-                          f"Score {score}% < 60% -- diagnosing", "warning")
+                          f"Score {score}% < 75% -- diagnosing "
+                          f"({len(fidelity.get('repairs', []))} repairs)",
+                          "warning")
                 self._diagnose_fidelity_gaps(fidelity, live_result)
                 # Clean up bad publish before retry
                 try:
@@ -777,159 +823,375 @@ class QAAgent:
         return result
 
     # ================================================================== #
-    #  FIDELITY SCORING                                                   #
+    #  SOURCE MANIFEST BUILDER                                             #
     # ================================================================== #
 
-    def _compute_fidelity(self, live_result) -> dict:
-        """Compare source_spec vs live Power BI result. All deterministic."""
+    def _build_source_manifest(self) -> list:
+        """Build a per-tab source-of-truth manifest from source_spec.
+
+        Each entry represents one expected output page with the fields,
+        chart type, and visual count the QA agent should verify.
+        """
         spec = self.source_spec
-        df = self.dataframe
+        if not spec:
+            return []
 
-        details = {}
-        data_score = 0
-        structure_score = 0
-        quality_score = 0
+        manifest = []
+        worksheets = spec.get("worksheets", [])
+        dashboards = spec.get("dashboards", [])
+        ws_by_name = {ws.get("name", ""): ws for ws in worksheets}
 
-        # ---- DATA (40 points) ----
-        source_row_count = len(df) if df is not None else 0
-        pbi_row_count = live_result.get("row_count", 0)
-        details["source_row_count"] = source_row_count
-        details["pbi_row_count"] = pbi_row_count
+        if dashboards:
+            used_ws_names = set()
+            for db in dashboards:
+                db_name = db.get("name", "Dashboard")
+                ws_used = db.get("worksheets_used", [])
+                # Collect fields from all worksheets on this dashboard
+                all_fields = []
+                chart_types = []
+                for ws_name in ws_used:
+                    used_ws_names.add(ws_name)
+                    ws = ws_by_name.get(ws_name, {})
+                    for shelf_key in ("rows_fields", "cols_fields",
+                                      "rows", "cols"):
+                        for f in ws.get(shelf_key, []):
+                            cleaned = f.strip("[]").split(":")[-1] if ":" in f else f.strip("[]")
+                            if cleaned:
+                                all_fields.append(cleaned)
+                    chart_types.append(ws.get("chart_type", "automatic"))
+                manifest.append({
+                    "name": db_name,
+                    "type": "dashboard",
+                    "expected_visual_count": len(ws_used),
+                    "worksheet_names": list(ws_used),
+                    "chart_types": chart_types,
+                    "fields": all_fields,
+                })
 
-        # Row count match (20 pts)
-        if pbi_row_count > 0 and source_row_count > 0:
-            ratio = min(pbi_row_count, source_row_count) / max(
-                pbi_row_count, source_row_count
-            )
-            if ratio >= 0.9:
-                data_score += 20
+            # Orphan worksheets not in any dashboard
+            orphans = [
+                ws for ws in worksheets
+                if ws.get("name", "") not in used_ws_names
+            ]
+            if orphans:
+                orphan_fields = []
+                for ws in orphans:
+                    for shelf_key in ("rows_fields", "cols_fields",
+                                      "rows", "cols"):
+                        for f in ws.get(shelf_key, []):
+                            cleaned = f.strip("[]").split(":")[-1] if ":" in f else f.strip("[]")
+                            if cleaned:
+                                orphan_fields.append(cleaned)
+                if len(orphans) == 1:
+                    page_name = orphans[0].get("name", "Sheet")
+                else:
+                    page_name = "Additional Sheets"
+                manifest.append({
+                    "name": page_name,
+                    "type": "orphan",
+                    "expected_visual_count": len(orphans),
+                    "worksheet_names": [ws.get("name", "") for ws in orphans],
+                    "chart_types": [
+                        ws.get("chart_type", "automatic") for ws in orphans
+                    ],
+                    "fields": orphan_fields,
+                })
+        else:
+            # No dashboards: each worksheet becomes its own page
+            for ws in worksheets:
+                ws_fields = []
+                for shelf_key in ("rows_fields", "cols_fields",
+                                  "rows", "cols"):
+                    for f in ws.get(shelf_key, []):
+                        cleaned = f.strip("[]").split(":")[-1] if ":" in f else f.strip("[]")
+                        if cleaned:
+                            ws_fields.append(cleaned)
+                manifest.append({
+                    "name": ws.get("name", "Sheet"),
+                    "type": "worksheet",
+                    "expected_visual_count": 1,
+                    "worksheet_names": [ws.get("name", "")],
+                    "chart_types": [ws.get("chart_type", "automatic")],
+                    "fields": ws_fields,
+                })
+
+        return manifest
+
+    # ================================================================== #
+    #  CHART TYPE TRANSLATION                                              #
+    # ================================================================== #
+
+    # Tableau mark type -> expected Power BI visual type(s)
+    _MARK_TO_PBI = {
+        "bar": {"clusteredColumnChart", "clusteredBarChart",
+                "hundredPercentStackedColumnChart",
+                "hundredPercentStackedBarChart"},
+        "line": {"lineChart", "lineClusteredColumnComboChart",
+                 "lineStackedColumnComboChart"},
+        "area": {"areaChart", "stackedAreaChart"},
+        "circle": {"scatterChart"},
+        "square": {"treemap", "matrix"},
+        "text": {"tableEx", "matrix", "card", "cardVisual", "kpi",
+                 "multiRowCard"},
+        "pie": {"pieChart", "donutChart"},
+        "gantt": {"clusteredBarChart", "tableEx"},  # no native PBI Gantt
+        "polygon": {"filledMap", "shapeMap"},
+        "map": {"map", "filledMap"},
+        "automatic": set(),  # accept any type
+    }
+
+    def _tableau_mark_to_pbi_visual(self, mark_type: str) -> set:
+        """Return set of acceptable PBI visual types for a Tableau mark."""
+        return self._MARK_TO_PBI.get(
+            mark_type.lower().strip(), set()
+        )
+
+    # ================================================================== #
+    #  FIDELITY SCORING — 4-AXIS TAB-BY-TAB                               #
+    # ================================================================== #
+
+    def _compute_fidelity(self, live_result, source_manifest=None) -> dict:
+        """4-axis fidelity scoring per tab.
+
+        Axes (25 pts each, normalized to 100 total):
+          Tab Identity — tab count + name match + order
+          Chart Types  — visual type matches Tableau mark per tab
+          Field Bindings — correct fields present in visuals per tab
+          Layout — visual count per page + relative sizing
+        """
+        if source_manifest is None:
+            source_manifest = self._build_source_manifest()
+
+        if not source_manifest:
+            return {
+                "score": 50,
+                "reason": "no_source_manifest",
+                "tab_identity": 0,
+                "chart_types": 0,
+                "field_bindings": 0,
+                "layout": 0,
+                "tab_scores": [],
+                "repairs": [],
+                "total_tabs": 0,
+                "matched_tabs": 0,
+            }
+
+        total_tabs = len(source_manifest)
+        identity_pts = 0
+        chart_pts = 0
+        field_pts = 0
+        layout_pts = 0
+        tab_scores = []
+        repairs = []
+
+        # Build lookup: lowercase displayName -> page dict
+        output_pages = live_result.get("pages", [])
+        page_lookup = {}
+        for idx, page in enumerate(output_pages):
+            dn = page.get("displayName", "").lower().strip()
+            if dn:
+                page_lookup[dn] = (idx, page)
+
+        for src_idx, src_tab in enumerate(source_manifest):
+            src_name = src_tab["name"]
+            src_lower = src_name.lower().strip()
+            ts = {
+                "name": src_name,
+                "type": src_tab.get("type", "worksheet"),
+                "page_found": False,
+                "chart_match": None,
+                "field_pct": 0,
+                "visual_count_expected": src_tab.get(
+                    "expected_visual_count", 1
+                ),
+                "visual_count_actual": 0,
+            }
+
+            # --- TAB IDENTITY (25 pts) ---
+            match = page_lookup.get(src_lower)
+            if match is None:
+                # Try fuzzy: check if any page name contains or is contained
+                for dn, (pidx, pg) in page_lookup.items():
+                    if src_lower in dn or dn in src_lower:
+                        match = (pidx, pg)
+                        break
+
+            if match is not None:
+                page_idx, page = match
+                ts["page_found"] = True
+                # Name match: 15 pts for exact, 10 for fuzzy
+                exact = (page.get("displayName", "").lower().strip()
+                         == src_lower)
+                identity_pts += 15 if exact else 10
+                if not exact:
+                    repairs.append({
+                        "repair_type": "RENAME_PAGE",
+                        "target": page.get("displayName", ""),
+                        "expected_value": src_name,
+                        "priority": 3,
+                    })
+                # Order match: 10 pts if within ±1 position
+                if abs(page_idx - src_idx) <= 1:
+                    identity_pts += 10
+                elif abs(page_idx - src_idx) <= 2:
+                    identity_pts += 5
+                else:
+                    repairs.append({
+                        "repair_type": "REORDER_PAGES",
+                        "target": src_name,
+                        "current_value": f"position {page_idx}",
+                        "expected_value": f"position {src_idx}",
+                        "priority": 3,
+                    })
             else:
-                data_score += int(20 * ratio)
-        elif pbi_row_count > 0:
-            data_score += 10
+                # Page completely missing
+                ts["score"] = 0
+                tab_scores.append(ts)
+                repairs.append({
+                    "repair_type": "ADD_PAGE",
+                    "target": src_name,
+                    "source_ref": f"manifest[{src_idx}]",
+                    "expected_value": (
+                        f"page with {src_tab.get('expected_visual_count', 1)} "
+                        f"visuals for worksheets: "
+                        f"{src_tab.get('worksheet_names', [])}"
+                    ),
+                    "priority": 1,
+                })
+                continue
 
-        # Column match (10 pts)
-        source_cols = set(df.columns) if df is not None else set()
-        pbi_cols = set(live_result.get("column_names", []))
-        details["source_columns"] = sorted(source_cols)
-        details["pbi_columns"] = sorted(pbi_cols)
-        if source_cols and pbi_cols:
-            src_lower = {c.lower() for c in source_cols}
-            pbi_lower = {c.lower() for c in pbi_cols}
-            matched = len(src_lower & pbi_lower)
-            match_pct = matched / max(len(src_lower), 1) * 100
-            details["column_match_pct"] = round(match_pct)
-            data_score += int(10 * match_pct / 100)
-        elif pbi_cols:
-            data_score += 5
-            details["column_match_pct"] = 0
+            visuals = page.get("visuals", [])
+            ts["visual_count_actual"] = len(visuals)
 
-        # Data loaded (10 pts)
-        if pbi_row_count > 0:
-            data_score += 10
+            # --- CHART TYPES (25 pts) ---
+            src_chart_types = src_tab.get("chart_types", [])
+            if src_chart_types:
+                matched_charts = 0
+                total_charts = len(src_chart_types)
+                pbi_types = [v.get("type", "") for v in visuals]
+                for ct in src_chart_types:
+                    acceptable = self._tableau_mark_to_pbi_visual(ct)
+                    if not acceptable:
+                        # "automatic" — accept anything
+                        matched_charts += 1
+                    elif any(pt in acceptable for pt in pbi_types):
+                        matched_charts += 1
+                    else:
+                        repairs.append({
+                            "repair_type": "CHANGE_VISUAL_TYPE",
+                            "target": src_name,
+                            "current_value": (
+                                pbi_types[0] if pbi_types else "none"
+                            ),
+                            "expected_value": sorted(acceptable)[0],
+                            "source_ref": ct,
+                            "priority": 2,
+                        })
+                ratio = matched_charts / max(total_charts, 1)
+                chart_pts += int(25 * ratio)
+                ts["chart_match"] = ratio >= 0.8
+            else:
+                chart_pts += 25  # no chart types to verify
 
-        # ---- STRUCTURE (30 points) ----
-        source_dashboards = len(spec.get("dashboards", []))
-        source_worksheets = len(spec.get("worksheets", []))
-        pbi_pages = live_result.get("page_count", 0)
-        pbi_visuals = live_result.get("visual_count", 0)
-        details["source_worksheets"] = source_worksheets
-        details["source_dashboards"] = source_dashboards
-        details["pbi_pages"] = pbi_pages
-        details["pbi_visual_count"] = pbi_visuals
+            # --- FIELD BINDINGS (25 pts) ---
+            src_fields = set()
+            for f in src_tab.get("fields", []):
+                cleaned = f.lower().strip("[]' ")
+                # Strip Tableau prefixes like sum:, avg:, none:
+                if ":" in cleaned:
+                    parts = cleaned.split(":")
+                    # Use the field name part (usually index 1 for
+                    # prefix:field:suffix patterns)
+                    if len(parts) >= 2:
+                        cleaned = parts[-2] if len(parts) >= 3 else parts[-1]
+                if cleaned:
+                    src_fields.add(cleaned)
 
-        # Page count (10 pts)
-        target_pages = max(source_dashboards, 1)
-        if pbi_pages >= target_pages:
-            structure_score += 10
-        elif pbi_pages > 0:
-            structure_score += 5
+            pbi_fields = set()
+            for v in visuals:
+                for f in v.get("fields", []):
+                    pbi_fields.add(f.lower().strip("[]' "))
+                # Also check queryRef patterns from visual.json
+                for f in v.get("queryRefs", []):
+                    # "Table.Column" -> "column"
+                    if "." in f:
+                        pbi_fields.add(f.split(".")[-1].lower().strip())
+                    else:
+                        pbi_fields.add(f.lower().strip())
 
-        # Visual count (10 pts)
-        if source_worksheets > 0 and pbi_visuals >= source_worksheets:
-            structure_score += 10
-        elif pbi_visuals > 0:
-            ratio = min(pbi_visuals, max(source_worksheets, 1)) / max(
-                source_worksheets, 1
+            if src_fields:
+                overlap = len(src_fields & pbi_fields)
+                field_ratio = overlap / len(src_fields)
+                field_pts += int(25 * field_ratio)
+                ts["field_pct"] = round(field_ratio * 100)
+                missing_fields = src_fields - pbi_fields
+                for mf in missing_fields:
+                    repairs.append({
+                        "repair_type": "ADD_FIELD",
+                        "target": f"{src_name}/{mf}",
+                        "expected_value": mf,
+                        "priority": 2,
+                    })
+            else:
+                field_pts += 25  # no fields to check
+
+            # --- LAYOUT (25 pts) ---
+            expected_vc = src_tab.get("expected_visual_count", 1)
+            actual_vc = len(visuals)
+            if expected_vc > 0:
+                vc_ratio = min(actual_vc / max(expected_vc, 1), 1.0)
+                # Visual count match: 15 pts
+                layout_pts += int(15 * vc_ratio)
+                # Sizing check: 10 pts if all visuals have valid size
+                sized = sum(
+                    1 for v in visuals
+                    if v.get("width", 0) > 100 and v.get("height", 0) > 80
+                )
+                if actual_vc > 0:
+                    layout_pts += int(10 * (sized / actual_vc))
+                ts["visual_count_expected"] = expected_vc
+                ts["visual_count_actual"] = actual_vc
+
+                if actual_vc < expected_vc:
+                    missing_count = expected_vc - actual_vc
+                    repairs.append({
+                        "repair_type": "ADD_VISUAL",
+                        "target": src_name,
+                        "current_value": f"{actual_vc} visuals",
+                        "expected_value": f"{expected_vc} visuals",
+                        "priority": 1,
+                    })
+            else:
+                layout_pts += 25
+
+            ts["score"] = int(
+                (identity_pts + chart_pts + field_pts + layout_pts)
+                / (4 * max(src_idx + 1, 1))
+                * 100
             )
-            structure_score += int(10 * ratio)
+            tab_scores.append(ts)
 
-        # Every page has >= 1 visual (10 pts)
-        pages_with_visuals = sum(
-            1 for p in live_result.get("pages", [])
-            if len(p.get("visuals", [])) > 0
-        )
-        if pbi_pages > 0 and pages_with_visuals == pbi_pages:
-            structure_score += 10
-        elif pages_with_visuals > 0:
-            structure_score += 5
+        # Normalize to 100
+        n = max(total_tabs, 1)
+        raw = identity_pts + chart_pts + field_pts + layout_pts
+        score = int(raw / (4 * n) * 100)
+        score = max(0, min(100, score))
 
-        # ---- VISUAL QUALITY (30 points) ----
-        source_chart_types = []
-        for ws in spec.get("worksheets", []):
-            ct = ws.get("chart_type", "automatic")
-            source_chart_types.append(ct)
-        details["source_chart_types"] = source_chart_types
-
-        pbi_visual_types = []
-        visuals_with_titles = 0
-        visuals_with_size = 0
-        for page in live_result.get("pages", []):
-            for v in page.get("visuals", []):
-                vtype = v.get("type", "")
-                pbi_visual_types.append(vtype)
-                if v.get("title"):
-                    visuals_with_titles += 1
-                w = v.get("width", 0)
-                h = v.get("height", 0)
-                if w > 200 and h > 150:
-                    visuals_with_size += 1
-        details["pbi_visual_types"] = pbi_visual_types
-
-        # Chart types present (10 pts)
-        if source_chart_types and pbi_visual_types:
-            quality_score += 10
-        elif pbi_visual_types:
-            quality_score += 5
-
-        # Proper sizes (10 pts)
-        if pbi_visuals > 0:
-            size_ratio = visuals_with_size / max(pbi_visuals, 1)
-            quality_score += int(10 * size_ratio)
-        details["visuals_with_proper_size"] = visuals_with_size
-
-        # Non-table charts (5 pts)
-        non_table_types = {
-            "clusteredBarChart", "clusteredColumnChart", "lineChart",
-            "areaChart", "pieChart", "donutChart", "scatterChart",
-            "card", "lineClusteredColumnComboChart", "treemap",
-        }
-        has_non_table = any(
-            t in non_table_types for t in pbi_visual_types
-        )
-        if has_non_table:
-            quality_score += 5
-
-        # Titles (5 pts)
-        details["visuals_with_titles"] = visuals_with_titles
-        if pbi_visuals > 0 and visuals_with_titles > 0:
-            title_ratio = visuals_with_titles / max(pbi_visuals, 1)
-            quality_score += int(5 * title_ratio)
-
-        total = data_score + structure_score + quality_score
-
-        # If we couldn't read back at all but publish succeeded,
-        # give baseline score
-        if (not live_result.get("page_count")
-                and not live_result.get("row_count")):
-            total = max(total, 50)
+        # Sort repairs by priority
+        repairs.sort(key=lambda r: r.get("priority", 9))
 
         return {
-            "score": total,
-            "data_score": data_score,
-            "structure_score": structure_score,
-            "quality_score": quality_score,
-            "details": details,
+            "score": score,
+            "tab_identity": int(identity_pts / n),
+            "chart_types": int(chart_pts / n),
+            "field_bindings": int(field_pts / n),
+            "layout": int(layout_pts / n),
+            "tab_scores": tab_scores,
+            "repairs": repairs,
+            "total_tabs": total_tabs,
+            "matched_tabs": sum(
+                1 for t in tab_scores if t.get("page_found")
+            ),
         }
 
     # ================================================================== #
@@ -937,24 +1199,128 @@ class QAAgent:
     # ================================================================== #
 
     def _diagnose_fidelity_gaps(self, fidelity, live_result):
-        """Look at what's wrong and adjust self.config for next loop."""
-        details = fidelity.get("details", {})
+        """Diagnose gaps using tab-level scores and issue repair instructions.
 
-        if details.get("pbi_row_count", 0) == 0:
-            self._log("DIAGNOSE", "Row count = 0. Data didn't load. "
-                      "Checking M expression.", "warning")
+        Reads the ``repairs`` list from ``_compute_fidelity()`` and applies
+        priority-1 and priority-2 repairs to ``self.config`` so the next
+        loop generates a better PBIP.
+        """
+        repairs = fidelity.get("repairs", [])
+        tab_scores = fidelity.get("tab_scores", [])
 
-        pbi_visuals = live_result.get("visual_count", 0)
-        src_ws = details.get("source_worksheets", 0)
-        if pbi_visuals < src_ws:
-            self._log("DIAGNOSE",
-                      f"Only {pbi_visuals} visuals vs {src_ws} worksheets",
-                      "warning")
+        # Log per-tab status
+        for ts in tab_scores:
+            if not ts.get("page_found"):
+                self._log(
+                    "DIAGNOSE",
+                    f"TAB MISSING: '{ts['name']}' has no output page",
+                    "error",
+                )
+            elif ts.get("chart_match") is False:
+                self._log(
+                    "DIAGNOSE",
+                    f"CHART MISMATCH on '{ts['name']}': "
+                    f"expected {ts.get('chart_expected', '?')}, "
+                    f"got {ts.get('chart_actual', '?')}",
+                    "warning",
+                )
+            field_pct = ts.get("field_pct", 100)
+            if field_pct < 80:
+                self._log(
+                    "DIAGNOSE",
+                    f"FIELD GAP on '{ts['name']}': "
+                    f"only {field_pct}% of source fields found",
+                    "warning",
+                )
+            vc_exp = ts.get("visual_count_expected", 0)
+            vc_act = ts.get("visual_count_actual", 0)
+            if vc_exp > 0 and vc_act < vc_exp:
+                self._log(
+                    "DIAGNOSE",
+                    f"VISUAL COUNT on '{ts['name']}': "
+                    f"{vc_act}/{vc_exp} visuals",
+                    "warning",
+                )
 
-        col_match = details.get("column_match_pct", 0)
-        if col_match < 80:
-            self._log("DIAGNOSE",
-                      f"Column match only {col_match}%", "warning")
+        # Log data-level issues from live_result
+        if live_result.get("row_count", 0) == 0:
+            self._log(
+                "DIAGNOSE",
+                "Row count = 0. Data didn't load. "
+                "Checking M expression.",
+                "warning",
+            )
+
+        # Apply repair instructions to config for next loop
+        config_sections = self.config.get("report_layout", {}).get(
+            "sections", []
+        )
+        if not config_sections:
+            config_sections = []
+
+        for repair in repairs:
+            rtype = repair.get("repair_type", "")
+            priority = repair.get("priority", 9)
+            if priority > 2:
+                continue  # Only apply critical + high priority in re-loop
+
+            if rtype == "ADD_PAGE":
+                self._log(
+                    "REPAIR",
+                    f"Queuing page add: '{repair['target']}' "
+                    f"({repair.get('expected_value', '')})",
+                    "fix",
+                )
+                # Flag in config so the mapper knows to create this page
+                missing = self.config.setdefault(
+                    "_repair_add_pages", []
+                )
+                missing.append({
+                    "name": repair["target"],
+                    "source_ref": repair.get("source_ref", ""),
+                })
+
+            elif rtype == "ADD_VISUAL":
+                self._log(
+                    "REPAIR",
+                    f"Queuing visual add on '{repair['target']}': "
+                    f"{repair.get('expected_value', '')}",
+                    "fix",
+                )
+                add_visuals = self.config.setdefault(
+                    "_repair_add_visuals", []
+                )
+                add_visuals.append({
+                    "page": repair["target"],
+                    "expected": repair.get("expected_value", ""),
+                })
+
+            elif rtype == "CHANGE_VISUAL_TYPE":
+                self._log(
+                    "REPAIR",
+                    f"Queuing chart type fix on '{repair['target']}': "
+                    f"{repair.get('current_value', '')} -> "
+                    f"{repair.get('expected_value', '')}",
+                    "fix",
+                )
+
+            elif rtype == "ADD_FIELD":
+                self._log(
+                    "REPAIR",
+                    f"Queuing field binding: '{repair['target']}' "
+                    f"needs '{repair.get('expected_value', '')}'",
+                    "fix",
+                )
+
+        total_repairs = len([
+            r for r in repairs if r.get("priority", 9) <= 2
+        ])
+        if total_repairs:
+            self._log(
+                "REPAIR_SUMMARY",
+                f"{total_repairs} repair(s) queued for next loop",
+                "fix",
+            )
 
     def _adjust_config_for_issues(self, issues):
         """Modify self.config based on deterministic check failures."""
@@ -1052,16 +1418,56 @@ class QAAgent:
 
         fid = self.fidelity_report
         if fid:
-            lines.append("FIDELITY REPORT:")
-            lines.append(f"  Data: {fid.get('data_score', 0)}/40")
+            lines.append("FIDELITY REPORT (4-axis tab-by-tab):")
             lines.append(
-                f"  Structure: {fid.get('structure_score', 0)}/30"
+                f"  Tab Identity:   {fid.get('tab_identity', 0)}/25"
             )
             lines.append(
-                f"  Quality: {fid.get('quality_score', 0)}/30"
+                f"  Chart Types:    {fid.get('chart_types', 0)}/25"
             )
-            lines.append(f"  TOTAL: {fid.get('score', 0)}/100")
+            lines.append(
+                f"  Field Bindings: {fid.get('field_bindings', 0)}/25"
+            )
+            lines.append(
+                f"  Layout:         {fid.get('layout', 0)}/25"
+            )
+            lines.append(
+                f"  TOTAL: {fid.get('score', 0)}/100  "
+                f"(tabs: {fid.get('matched_tabs', 0)}"
+                f"/{fid.get('total_tabs', 0)})"
+            )
             lines.append("")
+
+            tab_scores = fid.get("tab_scores", [])
+            if tab_scores:
+                lines.append("PER-TAB SCORES:")
+                for ts in tab_scores:
+                    found = "FOUND" if ts.get("page_found") else "MISSING"
+                    chart = ("OK" if ts.get("chart_match")
+                             else "MISMATCH"
+                             if ts.get("chart_match") is False
+                             else "N/A")
+                    lines.append(
+                        f"  {ts['name']}: {found} | "
+                        f"chart={chart} | "
+                        f"fields={ts.get('field_pct', 0)}% | "
+                        f"visuals="
+                        f"{ts.get('visual_count_actual', 0)}"
+                        f"/{ts.get('visual_count_expected', 0)}"
+                    )
+                lines.append("")
+
+            repairs = fid.get("repairs", [])
+            if repairs:
+                lines.append("REPAIR INSTRUCTIONS:")
+                for r in repairs:
+                    prio = r.get("priority", "?")
+                    lines.append(
+                        f"  [P{prio}] {r['repair_type']}: "
+                        f"{r.get('target', '')} -> "
+                        f"{r.get('expected_value', '')}"
+                    )
+                lines.append("")
 
         fix_entries = [
             e for e in self.audit if e.get("status") == "fix"
@@ -1094,3 +1500,210 @@ class QAAgent:
             )
 
         return "\n".join(lines)
+
+    # ================================================================== #
+    #  PRE-PUBLISH STRUCTURAL QA (tab-by-tab)                             #
+    # ================================================================== #
+
+    _MARK_TO_PBI = {
+        "bar": "clusteredBarChart",
+        "line": "lineChart",
+        "area": "areaChart",
+        "pie": "pieChart",
+        "ban": "cardVisual",
+        "kpi": "cardVisual",
+        "text": "tableEx",
+        "circle": "scatterChart",
+        "map": "map",
+        "filledMap": "filledMap",
+        "multipolygon": "filledMap",
+        "polygon": "filledMap",
+        "gantt-bar": "clusteredBarChart",
+        "shape": "tableEx",
+        "density": "scatterChart",
+        "heatmap": "matrix",
+        "square": "matrix",
+        "automatic": "clusteredColumnChart",
+    }
+
+    def _pre_publish_structural_qa(self, spec, config, pbip_dir):
+        """Compare Tableau tab manifest vs generated PBI pages.
+
+        Returns (repairs, fidelity) where repairs is a list of actions
+        and fidelity is a per-tab scoring dict.
+        """
+        windows = spec.get("windows", [])
+        visible_tabs = [w for w in windows if not w.get("hidden", False)]
+
+        if not visible_tabs:
+            # No windows data -- skip structural QA
+            return [], {"total": 100, "tab_scores": []}
+
+        ws_by_name = {ws["name"]: ws for ws in spec.get("worksheets", [])}
+
+        # Build source manifest
+        source_manifest = []
+        for tab in visible_tabs:
+            entry = {"name": tab["name"], "type": tab["type"]}
+            if tab["type"] == "worksheet":
+                ws = ws_by_name.get(tab["name"], {})
+                entry["chart_type"] = ws.get("chart_type", "automatic")
+                entry["expected_pbi_type"] = self._MARK_TO_PBI.get(
+                    entry["chart_type"], "clusteredColumnChart"
+                )
+            elif tab["type"] == "dashboard":
+                db = next(
+                    (d for d in spec.get("dashboards", [])
+                     if d["name"] == tab["name"]),
+                    None,
+                )
+                if db:
+                    entry["expected_visual_count"] = len(
+                        db.get("worksheets_used", [])
+                    )
+            source_manifest.append(entry)
+
+        # Build output manifest from generated PBIP
+        output_manifest = self._read_pbip_manifest(pbip_dir)
+
+        # Diff
+        repairs = []
+        tab_scores = []
+
+        for src in source_manifest:
+            score = 0
+            checks = {}
+
+            # Find matching page (case-insensitive)
+            match = next(
+                (p for p in output_manifest
+                 if p["displayName"].lower().strip() == src["name"].lower().strip()),
+                None,
+            )
+
+            checks["page_exists"] = match is not None
+            if not match:
+                repairs.append({
+                    "action": "add_page",
+                    "tab": src["name"],
+                    "type": src["type"],
+                })
+                tab_scores.append({
+                    "name": src["name"], "score": 0, "checks": checks,
+                })
+                continue
+
+            score += 25  # page exists
+
+            # Visual count check for dashboards
+            if src["type"] == "dashboard":
+                expected = src.get("expected_visual_count", 0)
+                actual = len(match.get("visuals", []))
+                checks["visual_count"] = f"{actual}/{expected}"
+                if actual >= expected:
+                    score += 25
+                elif actual > 0:
+                    score += int(25 * actual / max(expected, 1))
+
+            # Chart type check for worksheets
+            if src["type"] == "worksheet" and match.get("visuals"):
+                expected_type = src.get("expected_pbi_type", "")
+                actual_type = match["visuals"][0].get("visualType", "")
+                checks["chart_type"] = f"{actual_type} (expected {expected_type})"
+                if expected_type == actual_type:
+                    score += 25
+                else:
+                    repairs.append({
+                        "action": "fix_chart_type",
+                        "page": src["name"],
+                        "expected": expected_type,
+                        "actual": actual_type,
+                    })
+
+            # Has at least one visual with data bindings
+            has_data = any(
+                v.get("has_fields") for v in match.get("visuals", [])
+            )
+            checks["has_data_bindings"] = has_data
+            if has_data:
+                score += 25
+            elif match.get("visuals"):
+                score += 10
+
+            # Has proper size
+            has_size = any(
+                v.get("width", 0) > 100 and v.get("height", 0) > 100
+                for v in match.get("visuals", [])
+            )
+            checks["has_proper_size"] = has_size
+            if has_size:
+                score += 25
+
+            tab_scores.append({
+                "name": src["name"],
+                "score": min(score, 100),
+                "checks": checks,
+            })
+
+        total = (
+            sum(t["score"] for t in tab_scores) / max(len(tab_scores), 1)
+        )
+
+        return repairs, {"total": total, "tab_scores": tab_scores}
+
+    def _read_pbip_manifest(self, pbip_dir):
+        """Read generated PBIP folder and return page + visual manifest."""
+        pages = []
+        # Find the .Report folder
+        report_dirs = glob.glob(os.path.join(pbip_dir, "*.Report"))
+        if not report_dirs:
+            return pages
+
+        pages_dir = os.path.join(report_dirs[0], "definition", "pages")
+        if not os.path.isdir(pages_dir):
+            return pages
+
+        for page_folder in sorted(os.listdir(pages_dir)):
+            page_path = os.path.join(pages_dir, page_folder)
+            if not os.path.isdir(page_path):
+                continue
+            page_json = os.path.join(page_path, "page.json")
+            if not os.path.exists(page_json):
+                continue
+            try:
+                with open(page_json) as f:
+                    page_data = json.load(f)
+            except Exception:
+                continue
+
+            visuals = []
+            visuals_dir = os.path.join(page_path, "visuals")
+            if os.path.isdir(visuals_dir):
+                for viz_folder in os.listdir(visuals_dir):
+                    viz_json = os.path.join(
+                        visuals_dir, viz_folder, "visual.json"
+                    )
+                    if not os.path.exists(viz_json):
+                        continue
+                    try:
+                        with open(viz_json) as f:
+                            vdata = json.load(f)
+                        vis = vdata.get("visual", {})
+                        qs = vis.get("query", {}).get("queryState", {})
+                        pos = vdata.get("position", {})
+                        visuals.append({
+                            "visualType": vis.get("visualType", ""),
+                            "title": "",
+                            "width": pos.get("width", 0),
+                            "height": pos.get("height", 0),
+                            "has_fields": bool(qs),
+                        })
+                    except Exception:
+                        continue
+
+            pages.append({
+                "displayName": page_data.get("displayName", page_folder),
+                "visuals": visuals,
+            })
+
+        return pages

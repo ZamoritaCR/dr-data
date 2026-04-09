@@ -11,9 +11,8 @@ PBIPGenerator.generate() expects, so it plugs in as a drop-in
 replacement for the OpenAI engine output.
 """
 
-import json
-import logging
 import re
+import json
 
 from core.design_translator import (
     translate_chart_type,
@@ -416,9 +415,9 @@ def _classify_fields_for_chart(ws, chart_type, profile_col_names, col_types):
             print(f"    [DIRECT-MAPPER] Auto-assigned fallback fields for "
                   f"'{ws_name}': dims={all_dims}, measures={all_measures}")
 
-    # For map visuals with no geographic dims, pick a geographic-looking
-    # column (state, region, country, city, etc.) from the profile
-    if chart_type in ("map", "filledMap") and not all_dims and profile_col_names:
+    # For former map visuals (now table fallback), pick a geographic-looking
+    # column as a dimension so the table shows location data
+    if chart_type in ("tableEx",) and not all_dims and profile_col_names:
         geo_keywords = ["state", "region", "country", "city", "province",
                         "county", "zip", "postal", "location", "area", "territory"]
         for col in sorted(profile_col_names):
@@ -427,7 +426,7 @@ def _classify_fields_for_chart(ws, chart_type, profile_col_names, col_types):
                 if any(kw in col_lower for kw in geo_keywords):
                     all_dims = [col]
                     print(f"    [DIRECT-MAPPER] Auto-assigned geographic field "
-                          f"'{col}' for map visual '{ws_name}'")
+                          f"'{col}' for table visual '{ws_name}'")
                     break
 
     category = []
@@ -455,9 +454,9 @@ def _classify_fields_for_chart(ws, chart_type, profile_col_names, col_types):
             values = all_dims[1:2]
 
     elif chart_type in ("map", "filledMap"):
-        # Maps: geographic field -> category, measure -> values
-        category = all_dims[:1]
-        values = all_measures[:1]
+        # Former map visuals (should not reach here after remapping to tableEx)
+        # Treat as table: all fields as values
+        values = all_dims + all_measures
 
     elif chart_type in ("scatterChart",):
         # Scatter: dims -> category, first two measures -> values
@@ -474,130 +473,16 @@ def _classify_fields_for_chart(ws, chart_type, profile_col_names, col_types):
         if not values and len(all_dims) > 1:
             values = all_dims[1:]
 
-        # When Tableau has multiple dimensions on one shelf (e.g. cols=[Category, Branch]),
-        # the second dimension acts as the legend/series (stacked or grouped bar).
-        # Promote all_dims[1:] to series so the chart breaks down by that dimension.
-        if len(all_dims) >= 2 and not series:
-            series = all_dims[1:2]  # first extra dim becomes the series/legend
-
     # Series: color field if it's a dimension and not already used
-    used = set(category + values + series)
+    used = set(category + values)
     if color_field and color_field not in used and not is_measure(color_field):
         series = [color_field]
-
-    # Upgrade clustered chart to stacked when there's a series field.
-    # In Tableau, a categorical color field on a bar = stacked bars.
-    if series:
-        if chart_type == "clusteredBarChart":
-            chart_type = "stackedBarChart"
-        elif chart_type == "clusteredColumnChart":
-            chart_type = "stackedColumnChart"
 
     return {
         "category": category,
         "values": values,
         "series": series,
-        "chart_type": chart_type,  # may be upgraded to stacked
     }
-
-
-# ------------------------------------------------------------------ #
-#  Deterministic formula transpilation                                  #
-# ------------------------------------------------------------------ #
-
-_logger = logging.getLogger(__name__)
-
-
-def _transpile_formulas(measures, table_name, field_resolution_map=None):
-    """Deterministic Tableau-to-DAX transpilation using AST parser.
-
-    Uses core.formula_transpiler (Lark grammar + DAXEmitter) for every
-    measure that has needs_ai=True and an original_formula. No AI, no
-    randomness -- same input always produces same output.
-    """
-    from core.formula_transpiler import TableauFormulaTranspiler
-
-    needs_translation = [
-        m for m in measures
-        if m.get("needs_ai") and m.get("original_formula")
-    ]
-    if not needs_translation:
-        return measures
-
-    transpiler = TableauFormulaTranspiler(
-        field_resolution_map=field_resolution_map,
-        table_name=table_name,
-    )
-
-    translated = 0
-    unsupported = 0
-    for m in needs_translation:
-        result = transpiler.transpile(m["original_formula"])
-        dax = result.get("dax", "").strip()
-
-        if dax and dax != "BLANK()" and result.get("confidence", 0) > 0:
-            m["dax"] = dax
-            m["needs_ai"] = False
-            m["confidence"] = result["confidence"]
-            m["translation_method"] = "deterministic_transpiler"
-            if result.get("warnings"):
-                m["warnings"] = result["warnings"]
-            translated += 1
-            print(f"    [TRANSPILE OK] {m['name']}: {dax[:80]}")
-        else:
-            reason = "; ".join(result.get("warnings", ["unknown"]))
-            m["dax"] = "BLANK()"
-            m["unsupported_reason"] = reason
-            unsupported += 1
-            print(f"    [TRANSPILE SKIP] {m['name']}: {reason[:80]}")
-
-    _logger.info("[TRANSPILE] %d translated, %d unsupported out of %d", translated, unsupported, len(needs_translation))
-    print(f"    [TRANSPILE] {translated}/{len(needs_translation)} deterministic, {unsupported} unsupported")
-
-    return measures
-
-
-# ------------------------------------------------------------------ #
-#  Chart type inference for "automatic" marks                          #
-# ------------------------------------------------------------------ #
-
-def _infer_chart_type(ws_info):
-    """Infer PBI chart type from Tableau shelf structure when mark is 'automatic'.
-
-    Uses field roles and date detection to pick the most appropriate visual.
-    """
-    rows = ws_info.get("rows_fields", []) or []
-    cols = ws_info.get("cols_fields", []) or []
-    all_fields = rows + cols
-
-    has_date = any(
-        any(k in f.lower() for k in ("date", "year", "month", "quarter", "week", "day"))
-        for f in all_fields
-    )
-
-    dims = ws_info.get("dimensions", []) or []
-    meas = ws_info.get("measures", []) or []
-
-    # Also check shelf expressions for aggregated refs
-    agg_in_shelves = any(
-        any(a in f.lower() for a in ("sum(", "avg(", "count(", "min(", "max("))
-        for f in all_fields
-    )
-    if agg_in_shelves and not meas:
-        meas = [f for f in all_fields if any(a in f.lower() for a in ("sum(", "avg(", "count("))]
-
-    if has_date and (meas or agg_in_shelves):
-        return "lineChart"
-    if len(meas) >= 2 and len(dims) == 0 and len(all_fields) <= 2:
-        return "card"
-    if len(meas) >= 2 and len(dims) >= 1:
-        return "scatterChart"
-    if dims and not meas and not agg_in_shelves:
-        return "tableEx"
-    if (dims or all_fields) and (meas or agg_in_shelves):
-        return "clusteredColumnChart"
-
-    return "clusteredColumnChart"
 
 
 # ------------------------------------------------------------------ #
@@ -747,6 +632,213 @@ def _guess_format(dax_agg):
     return "#,0"
 
 
+def _translate_spatial_formula(formula, table_name):
+    """Translate Tableau spatial functions to Power BI equivalents.
+
+    Returns (dax_expression, is_map_visual) or (None, False) if not spatial.
+    """
+    f_upper = formula.strip().upper()
+
+    # MAKEPOINT(lat, lon) -> map visual with lat/lon columns
+    mp = re.match(r'MAKEPOINT\s*\(\s*(.+?)\s*,\s*(.+?)\s*\)', formula, re.IGNORECASE)
+    if mp:
+        lat_field = _clean_field_name(mp.group(1).strip().strip('[]'))
+        lon_field = _clean_field_name(mp.group(2).strip().strip('[]'))
+        dax = f"/* MAP_POINT: lat='{table_name}'[{lat_field}] lon='{table_name}'[{lon_field}] */"
+        return dax, True
+
+    # MAKELINE(point1, point2) -> map visual with route layer
+    ml = re.match(r'MAKELINE\s*\(\s*(.+?)\s*,\s*(.+?)\s*\)', formula, re.IGNORECASE)
+    if ml:
+        dax = (f"/* MAP_LINE: connect {ml.group(1).strip()} to {ml.group(2).strip()} "
+               f"- use Azure Maps route layer */")
+        return dax, True
+
+    # DISTANCE(p1, p2, units) -> Haversine DAX
+    dist = re.match(
+        r'DISTANCE\s*\(\s*(.+?)\s*,\s*(.+?)\s*,\s*["\']?(km|miles?|mi)["\']?\s*\)',
+        formula, re.IGNORECASE,
+    )
+    if dist:
+        units = dist.group(3).lower()
+        R = "6371" if "km" in units else "3959"
+        dax = (
+            f"VAR _R = {R} "
+            f"RETURN _R * ACOS(MAX(-1, MIN(1, "
+            f"SIN(RADIANS(SELECTEDVALUE('{table_name}'[_lat1]))) * "
+            f"SIN(RADIANS(SELECTEDVALUE('{table_name}'[_lat2]))) + "
+            f"COS(RADIANS(SELECTEDVALUE('{table_name}'[_lat1]))) * "
+            f"COS(RADIANS(SELECTEDVALUE('{table_name}'[_lat2]))) * "
+            f"COS(RADIANS(SELECTEDVALUE('{table_name}'[_lon2]) - "
+            f"SELECTEDVALUE('{table_name}'[_lon1]))))))"
+        )
+        return dax, False
+
+    # BUFFER, AREA, INTERSECTS, COLLECT, GEOMETRY -> manual with comment
+    for spatial_fn in ('BUFFER', 'AREA', 'INTERSECTS', 'COLLECT', 'GEOMETRY'):
+        if re.match(rf'{spatial_fn}\s*\(', f_upper):
+            return (f"/* SPATIAL_{spatial_fn}: no Power BI DAX equivalent "
+                    f"-- requires custom visual */"), False
+
+    return None, False
+
+
+def _translate_complex_measures(measures, table_name, profile_col_names):
+    """Translate complex Tableau formulas to DAX via heuristic + AI fallback.
+
+    0. Run spatial translation first (MAKEPOINT, DISTANCE, etc.)
+    1. Run heuristic translation on each needs_ai measure
+    2. If heuristic produces a non-BLANK result, use it
+    3. Remaining measures get sent to Claude API in a single batch
+    4. Falls back to BLANK() if anything fails (never crashes)
+
+    Mutates the measures list in-place and returns it.
+    """
+    needs_ai = [m for m in measures if m.get("needs_ai") and m.get("original_formula")]
+    if not needs_ai:
+        return measures
+
+    # Phase 0: spatial pre-filter
+    still_needs_translation = []
+    for m in needs_ai:
+        spatial_dax, is_map = _translate_spatial_formula(m["original_formula"], table_name)
+        if spatial_dax is not None:
+            m["dax"] = spatial_dax
+            m["needs_ai"] = False
+            m["translation_method"] = "spatial"
+            if is_map:
+                m["is_map_visual"] = True
+            print(f"    [DAX-SPATIAL] {m['name']}: spatial translation applied")
+        else:
+            still_needs_translation.append(m)
+
+    needs_ai = still_needs_translation
+
+    # Phase 1: heuristic pre-filter
+    still_needs_ai = []
+    for m in needs_ai:
+        heuristic_dax = _translate_formula_heuristic(
+            m["original_formula"], table_name, profile_col_names
+        )
+        # If heuristic returned something different from the raw formula
+        # and it doesn't look like untranslated Tableau syntax
+        if (heuristic_dax
+                and heuristic_dax != m["original_formula"]
+                and "THEN" not in heuristic_dax
+                and "ELSEIF" not in heuristic_dax
+                and "END" not in heuristic_dax.split("(")[0]):
+            m["dax"] = heuristic_dax
+            m["needs_ai"] = False
+            m["translation_method"] = "heuristic"
+            print(f"    [DAX-HEURISTIC] {m['name']}: heuristic translation applied")
+        else:
+            still_needs_ai.append(m)
+
+    if not still_needs_ai:
+        return measures
+
+    # Phase 2: AI translation via Claude (process all measures in batches of 20)
+    print(f"    [DAX-AI] Sending {len(still_needs_ai)} complex measures to Claude for translation")
+    try:
+        import os
+        api_key = os.getenv("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            print("    [DAX-AI] No ANTHROPIC_API_KEY -- skipping AI translation")
+            return measures
+
+        from anthropic import Anthropic
+        client = Anthropic(api_key=api_key)
+
+        system_prompt = (
+            "You are a DAX expert. Translate Tableau calculated field formulas to DAX.\n"
+            "Return ONLY a JSON array: [{\"name\": \"field_name\", \"dax\": \"DAX_EXPRESSION\"}].\n"
+            "Rules:\n"
+            "- {FIXED [dim] : AGG([field])} -> CALCULATE(AGG(Table[field]), ALLEXCEPT(Table, Table[dim]))\n"
+            "- {FIXED : AGG([field])} -> CALCULATE(AGG(Table[field]), ALL(Table))\n"
+            "- IF condition THEN x ELSE y END -> IF(condition, x, y)\n"
+            "- IIF(cond, x, y) -> IF(cond, x, y)\n"
+            "- CASE WHEN -> SWITCH(TRUE(), ...)\n"
+            "- ZN(expr) -> IF(ISBLANK(expr), 0, expr)\n"
+            "- ISNULL(expr) -> ISBLANK(expr)\n"
+            "- IFNULL(expr, val) -> IF(ISBLANK(expr), val, expr)\n"
+            "- COUNTD -> DISTINCTCOUNT\n"
+            "- STR(x) -> FORMAT(x, \"0\")\n"
+            "- CONTAINS(str, sub) -> NOT(ISERROR(SEARCH(sub, str)))\n"
+            "- DATEDIFF('unit', start, end) -> DATEDIFF(start, end, UNIT)\n"
+            "- DATEPART('unit', date) -> YEAR/MONTH/DAY/QUARTER(date)\n"
+            "- RUNNING_SUM -> use CALCULATE with window functions\n"
+            "- RANK -> RANKX(ALL(Table), expression)\n"
+            f"- Use table name '{table_name}' for all column references.\n"
+            "- [FieldName] becomes 'TableName'[FieldName].\n"
+            "- If you cannot translate, return BLANK() for that field.\n"
+            "- Return ONLY the JSON array, no explanation."
+        )
+
+        total_applied = 0
+        batch_size = 20
+        for batch_start in range(0, len(still_needs_ai), batch_size):
+            batch = still_needs_ai[batch_start:batch_start + batch_size]
+            if batch_start > 0:
+                print(f"    [DAX-AI] Batch {batch_start // batch_size + 1}: "
+                      f"sending {len(batch)} more measures")
+
+            payload = [
+                {
+                    "name": m["name"],
+                    "formula": m["original_formula"],
+                    "table_name": table_name,
+                }
+                for m in batch
+            ]
+
+            response = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=4096,
+                system=system_prompt,
+                messages=[{"role": "user", "content": json.dumps(payload)}],
+            )
+
+            response_text = response.content[0].text.strip()
+
+            # Parse JSON from response (handle markdown code blocks)
+            if response_text.startswith("```"):
+                lines = response_text.split("\n")
+                lines = [l for l in lines if not l.startswith("```")]
+                response_text = "\n".join(lines)
+
+            ai_results = json.loads(response_text)
+            if not isinstance(ai_results, list):
+                ai_results = []
+
+            # Apply AI translations
+            ai_lookup = {r["name"]: r["dax"] for r in ai_results if r.get("name") and r.get("dax")}
+            applied = 0
+            for m in batch:
+                ai_dax = ai_lookup.get(m["name"], "")
+                if ai_dax and ai_dax.strip() and ai_dax.strip() != "BLANK()":
+                    m["dax"] = ai_dax
+                    m["needs_ai"] = False
+                    m["translation_method"] = "ai_claude"
+                    applied += 1
+                    print(f"    [DAX-AI] {m['name']}: AI translation applied")
+                else:
+                    m["translation_method"] = "ai_failed"
+                    print(f"    [DAX-AI] {m['name']}: AI returned BLANK or no result, keeping BLANK()")
+
+            total_applied += applied
+
+        print(f"    [DAX-AI] Applied {total_applied}/{len(still_needs_ai)} AI translations")
+
+    except ImportError:
+        print("    [DAX-AI] anthropic package not installed -- skipping AI translation")
+    except json.JSONDecodeError as e:
+        print(f"    [DAX-AI] Failed to parse AI response as JSON: {e}")
+    except Exception as e:
+        print(f"    [DAX-AI] AI translation failed (non-fatal): {e}")
+
+    return measures
+
+
 # ------------------------------------------------------------------ #
 #  Dashboard -> Page mapping                                           #
 # ------------------------------------------------------------------ #
@@ -810,16 +902,15 @@ def _build_page_from_dashboard(dashboard, worksheets_by_name, profile_col_names,
 
         added_ws_names.add(ws_name)
 
-        raw_mark = ws.get("chart_type", ws.get("mark_type", "automatic"))
-        chart_type = translate_chart_type(raw_mark)
-        # If mark is "automatic" or unknown, infer from shelf structure
-        if not raw_mark or raw_mark.lower() in ("automatic", ""):
-            chart_type = _infer_chart_type(ws)
+        chart_type = translate_chart_type(ws.get("chart_type", "automatic"))
+
+        # Skip UI decorations (zoom buttons, shape icons with no data)
+        if chart_type == "skip":
+            continue
+
         data_roles = _classify_fields_for_chart(
             ws, chart_type, profile_col_names, col_types
         )
-        # _classify_fields_for_chart may upgrade chart_type (e.g. clustered → stacked)
-        chart_type = data_roles.pop("chart_type", chart_type)
 
         # Position: look up from zones by exact name, then case-insensitive
         pos = pbi_positions.get(ws_name)
@@ -882,14 +973,15 @@ def _build_page_for_orphan_worksheets(worksheets, profile_col_names,
         row = idx // cols
         col = idx % cols
 
-        raw_mark = ws.get("chart_type", ws.get("mark_type", "automatic"))
-        chart_type = translate_chart_type(raw_mark)
-        if not raw_mark or raw_mark.lower() in ("automatic", ""):
-            chart_type = _infer_chart_type(ws)
+        chart_type = translate_chart_type(ws.get("chart_type", "automatic"))
+
+        # Skip UI decorations (zoom buttons, shape icons with no data)
+        if chart_type == "skip":
+            continue
+
         data_roles = _classify_fields_for_chart(
             ws, chart_type, profile_col_names, col_types
         )
-        chart_type = data_roles.pop("chart_type", chart_type)
 
         config = {
             "visualType": chart_type,
@@ -937,6 +1029,7 @@ def build_pbip_config_from_tableau(tableau_spec, data_profile, table_name="Data"
                               "measures": [...], "design": {...}, ...}
     """
     # Build lookup structures
+    data_profile = data_profile or {}
     worksheets_by_name = {}
     for ws in tableau_spec.get("worksheets", []):
         worksheets_by_name[ws["name"]] = ws
@@ -952,63 +1045,202 @@ def build_pbip_config_from_tableau(tableau_spec, data_profile, table_name="Data"
         tableau_spec, table_name, profile_col_names
     )
 
-    # -- AI translate complex formulas (needs_ai=True) --
-    blank_count = sum(1 for m in measures if m.get("needs_ai"))
-    if blank_count > 0:
-        print(f"    [DIRECT-MAPPER] {blank_count} complex formulas need transpilation...")
-        measures = _transpile_formulas(measures, table_name)
+    # -- Translate complex measures (heuristic + AI) --
+    measures = _translate_complex_measures(measures, table_name, profile_col_names)
 
-    # -- Build pages from dashboards --
-    sections = []
+    # -- Post-process: syntax validation + column name reconciliation --
+    try:
+        from core.dax_postprocess import postprocess_measures
+        pp_stats = postprocess_measures(measures, table_name, profile_col_names)
+        if pp_stats["syntax_fixed"] or pp_stats["columns_fixed"]:
+            print(f"    [DAX-POSTPROCESS] {pp_stats['syntax_fixed']} syntax fixes, "
+                  f"{pp_stats['columns_fixed']} column name fixes "
+                  f"({pp_stats['total_processed']} measures processed)")
+    except Exception as _pp_err:
+        print(f"    [DAX-POSTPROCESS] Skipped (non-fatal): {_pp_err}")
+
+    # -- Build pages: TAB-DRIVEN (from <windows>) or DASHBOARD-DRIVEN (legacy) --
+    windows = tableau_spec.get("windows", [])
+    visible_tabs = [w for w in windows if not w.get("hidden", False)]
     dashboards = tableau_spec.get("dashboards", [])
-    used_ws_names = set()
+    dashboards_by_name = {d["name"]: d for d in dashboards}
 
-    for db in dashboards:
-        section = _build_page_from_dashboard(
-            db, worksheets_by_name, profile_col_names, col_types, table_name
-        )
-        # Safety: if zone matching produced 0 visuals but the dashboard
-        # has worksheets_used, create visuals from those worksheets directly
-        if (not section.get("visualContainers")
-                and db.get("worksheets_used")):
-            ws_list = [
-                worksheets_by_name[n]
-                for n in db.get("worksheets_used", [])
-                if n in worksheets_by_name
-            ]
-            if ws_list:
-                fallback = _build_page_for_orphan_worksheets(
-                    ws_list, profile_col_names, col_types, table_name
+    sections = []
+
+    if visible_tabs:
+        # TAB-DRIVEN: one PBI page per visible Tableau tab
+        print(f"    [MAPPER] Tab-driven mode: {len(visible_tabs)} visible tabs")
+        for tab in visible_tabs:
+            tab_name = tab["name"]
+            tab_type = tab["type"]
+
+            if tab_type == "dashboard":
+                db = dashboards_by_name.get(tab_name)
+                if db:
+                    section = _build_page_from_dashboard(
+                        db, worksheets_by_name, profile_col_names,
+                        col_types, table_name
+                    )
+                    if (not section.get("visualContainers")
+                            and db.get("worksheets_used")):
+                        ws_list = [
+                            worksheets_by_name[n]
+                            for n in db.get("worksheets_used", [])
+                            if n in worksheets_by_name
+                        ]
+                        if ws_list:
+                            fb = _build_page_for_orphan_worksheets(
+                                ws_list, profile_col_names, col_types, table_name
+                            )
+                            if fb and fb.get("visualContainers"):
+                                section["visualContainers"] = fb["visualContainers"]
+                    sections.append(section)
+                    print(f"    [MAPPER] Tab '{tab_name}' -> dashboard page "
+                          f"({len(section.get('visualContainers', []))} visuals)")
+
+            elif tab_type == "worksheet":
+                ws = worksheets_by_name.get(tab_name)
+                if ws:
+                    chart_type = translate_chart_type(
+                        ws.get("chart_type", "automatic")
+                    )
+                    data_roles = _classify_fields_for_chart(
+                        ws, chart_type, profile_col_names, col_types
+                    )
+                    section = {
+                        "displayName": tab_name,
+                        "width": 1280,
+                        "height": 720,
+                        "visualContainers": [{
+                            "x": 12, "y": 12, "width": 1256, "height": 696,
+                            "config": {
+                                "visualType": chart_type,
+                                "title": tab_name,
+                                "dataRoles": data_roles,
+                                "worksheet_name": tab_name,
+                            },
+                        }],
+                    }
+                    sections.append(section)
+                    print(f"    [MAPPER] Tab '{tab_name}' -> worksheet page "
+                          f"(type={chart_type})")
+
+            elif tab_type == "story":
+                stories = tableau_spec.get("stories", [])
+                story = next(
+                    (s for s in stories if s["name"] == tab_name), None
                 )
-                if fallback and fallback.get("visualContainers"):
-                    section["visualContainers"] = fallback["visualContainers"]
-                    print(f"    [DIRECT-MAPPER] Zone matching failed for "
-                          f"'{db.get('name','')}' -- used worksheets_used fallback "
-                          f"({len(section['visualContainers'])} visuals)")
+                if story and story.get("storypoints"):
+                    for sp in story["storypoints"]:
+                        sp_sheet = sp.get("sheet", "")
+                        sp_caption = sp.get("caption", sp_sheet or tab_name)
+                        if sp_sheet in dashboards_by_name:
+                            db = dashboards_by_name[sp_sheet]
+                            sec = _build_page_from_dashboard(
+                                db, worksheets_by_name, profile_col_names,
+                                col_types, table_name
+                            )
+                            sec["displayName"] = sp_caption
+                            sections.append(sec)
+                        elif sp_sheet in worksheets_by_name:
+                            ws = worksheets_by_name[sp_sheet]
+                            ct = translate_chart_type(
+                                ws.get("chart_type", "automatic")
+                            )
+                            dr = _classify_fields_for_chart(
+                                ws, ct, profile_col_names, col_types
+                            )
+                            sections.append({
+                                "displayName": sp_caption,
+                                "width": 1280, "height": 720,
+                                "visualContainers": [{
+                                    "x": 12, "y": 12,
+                                    "width": 1256, "height": 696,
+                                    "config": {
+                                        "visualType": ct, "title": sp_caption,
+                                        "dataRoles": dr,
+                                        "worksheet_name": sp_sheet,
+                                    },
+                                }],
+                            })
+                    print(f"    [MAPPER] Tab '{tab_name}' -> story "
+                          f"({len(story['storypoints'])} pages)")
 
-        sections.append(section)
-        used_ws_names.update(db.get("worksheets_used", []))
+    else:
+        # LEGACY: dashboard-driven (no <windows> section)
+        print(f"    [MAPPER] Legacy mode: no <windows> section")
+        used_ws_names = set()
+        for db in dashboards:
+            section = _build_page_from_dashboard(
+                db, worksheets_by_name, profile_col_names, col_types, table_name
+            )
+            if (not section.get("visualContainers")
+                    and db.get("worksheets_used")):
+                ws_list = [
+                    worksheets_by_name[n]
+                    for n in db.get("worksheets_used", [])
+                    if n in worksheets_by_name
+                ]
+                if ws_list:
+                    fb = _build_page_for_orphan_worksheets(
+                        ws_list, profile_col_names, col_types, table_name
+                    )
+                    if fb and fb.get("visualContainers"):
+                        section["visualContainers"] = fb["visualContainers"]
+            sections.append(section)
+            used_ws_names.update(db.get("worksheets_used", []))
 
-    # -- Handle orphan worksheets (not in any dashboard) --
-    orphan_ws = [
-        ws for ws in tableau_spec.get("worksheets", [])
-        if ws["name"] not in used_ws_names
-    ]
-    if orphan_ws:
-        orphan_section = _build_page_for_orphan_worksheets(
-            orphan_ws, profile_col_names, col_types, table_name
-        )
-        if orphan_section:
-            sections.append(orphan_section)
+        orphan_ws = [
+            ws for ws in tableau_spec.get("worksheets", [])
+            if ws["name"] not in used_ws_names
+        ]
+        if orphan_ws:
+            orphan_section = _build_page_for_orphan_worksheets(
+                orphan_ws, profile_col_names, col_types, table_name
+            )
+            if orphan_section:
+                if not dashboards:
+                    if len(orphan_ws) == 1:
+                        orphan_section["displayName"] = orphan_ws[0].get(
+                            "name", "Sheet"
+                        )
+                    else:
+                        orphan_section["displayName"] = "Dashboard"
+                sections.append(orphan_section)
 
-    # If no dashboards and no worksheets, create an empty page
+    # If no dashboards and no worksheets, create a placeholder page
+    # with at least one visual so the PBI file is never empty.
     if not sections:
         sections.append({
             "displayName": "Dashboard",
             "width": 1280,
             "height": 720,
-            "visualContainers": [],
+            "visualContainers": [{
+                "x": 12, "y": 12, "width": 1256, "height": 696,
+                "config": {
+                    "visualType": "tableEx",
+                    "title": "Data",
+                    "dataRoles": {"Values": list(profile_col_names)[:10] if profile_col_names else []},
+                    "worksheet_name": "",
+                },
+            }],
         })
+        print("    [MAPPER] No dashboards or worksheets -- created placeholder table visual")
+
+    # Safety: strip out any sections with 0 visuals and rebuild them as tables
+    for section in sections:
+        if not section.get("visualContainers"):
+            section["visualContainers"] = [{
+                "x": 12, "y": 12, "width": 1256, "height": 696,
+                "config": {
+                    "visualType": "tableEx",
+                    "title": section.get("displayName", "Data"),
+                    "dataRoles": {"Values": list(profile_col_names)[:10] if profile_col_names else []},
+                    "worksheet_name": "",
+                },
+            }]
+            print(f"    [MAPPER] Page '{section.get('displayName', '?')}' had 0 visuals"
+                  f" -- injected table visual as fallback")
 
     # -- Build the config dict matching PBIPGenerator.generate() expectations --
     config = {
@@ -1064,10 +1296,10 @@ def build_pbip_config_from_tableau(tableau_spec, data_profile, table_name="Data"
                 except (json.JSONDecodeError, TypeError):
                     cfg = {}
             visuals.append({
-                "visualType": cfg.get("visualType", "unknown"),
+                "type": cfg.get("visualType", "unknown"),
                 "title": cfg.get("title", ""),
                 "source_worksheet": cfg.get("worksheet_name", ""),
-                "dataRoles": cfg.get("dataRoles", {}),
+                "data_roles": cfg.get("dataRoles", {}),
             })
         pages.append({
             "name": section["displayName"],
@@ -1082,6 +1314,7 @@ def build_pbip_config_from_tableau(tableau_spec, data_profile, table_name="Data"
             {"name": m["name"], "dax": m["dax"], "format": m.get("format", "#,0")}
             for m in measures
         ],
+        "measures_full": measures,
         "design": design,
         "worksheet_designs": ws_designs,
         "worksheet_chart_types": ws_chart_types,

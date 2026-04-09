@@ -105,3 +105,4 @@ secrets*
 node_modules/
 nohup.out
 *.db
+.env.drdata

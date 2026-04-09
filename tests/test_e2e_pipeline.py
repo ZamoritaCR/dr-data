@@ -186,7 +186,9 @@ class TestParserStage:
             ws_map = {ws["name"]: ws for ws in spec["worksheets"]}
             assert ws_map["Sales Over Time"]["chart_type"] == "line"
             assert ws_map["Category Breakdown"]["chart_type"] == "bar"
-            assert ws_map["Quarterly Trend"]["chart_type"] == "automatic"
+            # Quarterly Trend has tqr:Order Date (date) + sum:Sales (measure) ->
+            # smart inference correctly identifies this as a line chart
+            assert ws_map["Quarterly Trend"]["chart_type"] == "line"
             assert ws_map["Map View"]["chart_type"] == "map"
         finally:
             os.unlink(path)

@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dr. Data v2 -- Tableau to Power BI</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --sapphire: #1B365D;
+  --sapphire-light: #2A4A7F;
+  --gold: #B8963E;
+  --gold-light: #D4B366;
+  --emerald: #1D7A4B;
+  --emerald-light: #25996D;
+  --bg: #F7F6F3;
+  --surface: #FFFFFF;
+  --surface-frosted: rgba(255,255,255,0.85);
+  --border: #E5E3DF;
+  --text: #1C1917;
+  --text-dim: #78716C;
+  --text-muted: #A8A29E;
+  --mono: 'JetBrains Mono', monospace;
+  --ui: 'Plus Jakarta Sans', sans-serif;
+  --display: 'Outfit', sans-serif;
+  --radius: 12px;
+  --radius-sm: 8px;
+}
+
+html, body { height: 100%; font-family: var(--ui); background: var(--bg); color: var(--text); }
+
+/* -- Layout: sidebar + three panels -- */
+.app { display: flex; height: 100vh; overflow: hidden; }
+
+/* Sidebar */
+.sidebar {
+  width: 52px; background: var(--sapphire); display: flex; flex-direction: column;
+  align-items: center; padding: 16px 0; gap: 20px; flex-shrink: 0;
+}
+.sidebar-logo {
+  width: 32px; height: 32px; background: var(--gold); border-radius: 6px;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--display); font-weight: 800; font-size: 14px; color: var(--sapphire);
+}
+.sidebar-icon {
+  width: 36px; height: 36px; border-radius: 8px; display: flex;
+  align-items: center; justify-content: center; cursor: pointer;
+  transition: background 0.15s; color: rgba(255,255,255,0.5);
+}
+.sidebar-icon:hover, .sidebar-icon.active { background: rgba(255,255,255,0.12); color: #fff; }
+.sidebar-icon svg { width: 20px; height: 20px; fill: currentColor; }
+
+/* Main area */
+.main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+/* Top bar */
+.topbar {
+  height: 52px; background: var(--surface); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; padding: 0 24px; gap: 16px; flex-shrink: 0;
+}
+.topbar-title { font-family: var(--display); font-weight: 700; font-size: 16px; color: var(--sapphire); }
+.topbar-sub { font-size: 12px; color: var(--text-muted); }
+.topbar-status {
+  margin-left: auto; font-family: var(--mono); font-size: 11px;
+  padding: 4px 10px; border-radius: 4px; background: #DCFCE7; color: var(--emerald);
+}
+
+/* Content */
+.content { flex: 1; display: flex; overflow: hidden; gap: 1px; background: var(--border); }
+
+/* Panel base */
+.panel {
+  background: var(--surface); display: flex; flex-direction: column; overflow: hidden;
+}
+.panel-header {
+  padding: 16px 20px 12px; border-bottom: 1px solid var(--border);
+  font-family: var(--display); font-weight: 700; font-size: 14px; color: var(--sapphire);
+  display: flex; align-items: center; gap: 8px; flex-shrink: 0;
+}
+.panel-header .badge {
+  font-family: var(--mono); font-size: 10px; font-weight: 600;
+  padding: 2px 8px; border-radius: 4px; background: var(--bg); color: var(--text-muted);
+}
+.panel-body { flex: 1; overflow-y: auto; padding: 16px 20px; }
+
+/* Left panel: pipeline */
+.panel-pipeline { width: 340px; flex-shrink: 0; }
+
+/* Center panel: canvas */
+.panel-canvas { flex: 1; }
+
+/* Right panel: chat */
+.panel-chat { width: 360px; flex-shrink: 0; }
+
+/* -- Upload zone -- */
+.upload-zone {
+  border: 2px dashed var(--border); border-radius: var(--radius);
+  padding: 40px 20px; text-align: center; cursor: pointer;
+  transition: border-color 0.2s, background 0.2s; margin-bottom: 16px;
+}
+.upload-zone:hover { border-color: var(--sapphire); background: rgba(27,54,93,0.03); }
+.upload-zone.dragover { border-color: var(--gold); background: rgba(184,150,62,0.06); }
+.upload-zone h3 { font-family: var(--display); font-size: 15px; font-weight: 700; color: var(--sapphire); margin-bottom: 4px; }
+.upload-zone p { font-size: 12px; color: var(--text-muted); }
+.upload-zone input { display: none; }
+
+/* -- Pipeline steps -- */
+.step {
+  display: flex; align-items: flex-start; gap: 12px; padding: 10px 0;
+  border-bottom: 1px solid var(--bg);
+}
+.step-dot {
+  width: 24px; height: 24px; border-radius: 50%; flex-shrink: 0; margin-top: 2px;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--mono); font-size: 10px; font-weight: 700;
+}
+.step-dot.pending { background: var(--bg); color: var(--text-muted); border: 1px solid var(--border); }
+.step-dot.active { background: var(--sapphire); color: #fff; animation: pulse 1.5s ease infinite; }
+.step-dot.done { background: var(--emerald); color: #fff; }
+.step-dot.error { background: #DC2626; color: #fff; }
+@keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(27,54,93,0.3); } 50% { box-shadow: 0 0 0 6px rgba(27,54,93,0); } }
+
+.step-info { flex: 1; }
+.step-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.step-detail { font-size: 11px; color: var(--text-dim); margin-top: 2px; font-family: var(--mono); line-height: 1.5; }
+
+/* -- Fidelity score -- */
+.fidelity {
+  background: var(--bg); border-radius: var(--radius); padding: 16px; margin-top: 16px;
+}
+.fidelity-score {
+  font-family: var(--mono); font-size: 36px; font-weight: 800; color: var(--sapphire);
+  text-align: center;
+}
+.fidelity-label { text-align: center; font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; }
+.fidelity-bars { display: flex; gap: 8px; margin-top: 12px; }
+.fidelity-bar { flex: 1; }
+.fidelity-bar-label { font-size: 10px; color: var(--text-muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.05em; }
+.fidelity-bar-track { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+.fidelity-bar-fill { height: 100%; border-radius: 3px; transition: width 0.5s ease; }
+.fidelity-bar-fill.data { background: var(--sapphire); }
+.fidelity-bar-fill.structure { background: var(--gold); }
+.fidelity-bar-fill.quality { background: var(--emerald); }
+
+/* -- Action button -- */
+.btn-pbi {
+  display: block; width: 100%; padding: 12px; margin-top: 12px;
+  background: var(--sapphire); color: #fff; border: none; border-radius: var(--radius-sm);
+  font-family: var(--ui); font-size: 13px; font-weight: 700; cursor: pointer;
+  text-align: center; text-decoration: none; transition: background 0.15s;
+}
+.btn-pbi:hover { background: var(--sapphire-light); }
+.btn-pbi:disabled { background: var(--border); color: var(--text-muted); cursor: not-allowed; }
+
+/* -- Canvas placeholder -- */
+.canvas-empty {
+  display: flex; align-items: center; justify-content: center;
+  height: 100%; text-align: center; padding: 40px;
+}
+.canvas-empty h2 { font-family: var(--display); font-size: 22px; font-weight: 800; color: var(--sapphire); margin-bottom: 8px; }
+.canvas-empty p { font-size: 13px; color: var(--text-dim); line-height: 1.6; max-width: 400px; }
+
+/* Canvas iframe */
+.canvas-iframe { width: 100%; height: 100%; border: none; }
+
+/* -- Chat -- */
+.chat-messages { display: flex; flex-direction: column; gap: 10px; }
+.chat-msg {
+  max-width: 90%; padding: 10px 14px; border-radius: 10px;
+  font-size: 13px; line-height: 1.55;
+}
+.chat-msg.user { align-self: flex-end; background: var(--sapphire); color: #fff; border-bottom-right-radius: 4px; }
+.chat-msg.assistant { align-self: flex-start; background: var(--bg); color: var(--text); border-bottom-left-radius: 4px; }
+.chat-msg.agent {
+  align-self: flex-start; background: rgba(184,150,62,0.08); color: var(--text);
+  border-left: 3px solid var(--gold); font-family: var(--mono); font-size: 11px;
+}
+.chat-msg code { font-family: var(--mono); font-size: 11px; background: rgba(0,0,0,0.06); padding: 1px 5px; border-radius: 3px; }
+
+.chat-input-area {
+  padding: 12px 20px; border-top: 1px solid var(--border);
+  display: flex; gap: 8px; flex-shrink: 0;
+}
+.chat-input {
+  flex: 1; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 10px 14px; font-size: 13px; font-family: var(--ui); outline: none;
+}
+.chat-input:focus { border-color: var(--sapphire); }
+.chat-send {
+  background: var(--sapphire); color: #fff; border: none; border-radius: var(--radius-sm);
+  padding: 10px 16px; font-weight: 600; font-size: 13px; cursor: pointer;
+}
+.chat-send:hover { background: var(--sapphire-light); }
+
+/* Suggested prompts */
+.prompts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.prompt-chip {
+  padding: 6px 12px; background: var(--bg); border: 1px solid var(--border);
+  border-radius: 20px; font-size: 11px; color: var(--text-dim); cursor: pointer;
+  transition: all 0.15s;
+}
+.prompt-chip:hover { border-color: var(--sapphire); color: var(--sapphire); }
+
+/* -- File info -- */
+.file-info {
+  background: var(--bg); border-radius: var(--radius-sm); padding: 12px; margin-bottom: 12px;
+  font-size: 12px;
+}
+.file-info strong { color: var(--sapphire); }
+.file-info .meta { color: var(--text-muted); font-family: var(--mono); font-size: 11px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- Sidebar -->
+  <nav class="sidebar">
+    <div class="sidebar-logo">Dr</div>
+    <div class="sidebar-icon active" title="Pipeline">
+      <svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14H6v-2h6v2zm4-4H6v-2h10v2zm0-4H6V7h10v2z"/></svg>
+    </div>
+  </nav>
+
+  <div class="main">
+    <!-- Top bar -->
+    <header class="topbar">
+      <span class="topbar-title">Dr. Data v2</span>
+      <span class="topbar-sub">Tableau to Power BI</span>
+      <span class="topbar-status" id="statusBadge">Ready</span>
+    </header>
+
+    <!-- Three-panel content -->
+    <div class="content">
+      <!-- LEFT: Pipeline -->
+      <div class="panel panel-pipeline">
+        <div class="panel-header">Pipeline <span class="badge" id="pipelineBadge">Idle</span></div>
+        <div class="panel-body" id="pipelineBody">
+          <!-- Upload zone -->
+          <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
+            <h3>Drop Tableau workbook</h3>
+            <p>.twbx / .twb / .xlsx</p>
+            <input type="file" id="fileInput" accept=".twbx,.twb,.xlsx,.csv">
+          </div>
+
+          <!-- File info (hidden until upload) -->
+          <div class="file-info" id="fileInfo" style="display:none"></div>
+
+          <!-- Steps -->
+          <div id="steps">
+            <div class="step" id="step-parse"><div class="step-dot pending">1</div><div class="step-info"><div class="step-title">Parse</div><div class="step-detail" id="detail-parse">Waiting for file</div></div></div>
+            <div class="step" id="step-translate"><div class="step-dot pending">2</div><div class="step-info"><div class="step-title">Translate</div><div class="step-detail" id="detail-translate">--</div></div></div>
+            <div class="step" id="step-build"><div class="step-dot pending">3</div><div class="step-info"><div class="step-title">Build PBIP</div><div class="step-detail" id="detail-build">--</div></div></div>
+            <div class="step" id="step-validate"><div class="step-dot pending">4</div><div class="step-info"><div class="step-title">Validate</div><div class="step-detail" id="detail-validate">--</div></div></div>
+            <div class="step" id="step-publish"><div class="step-dot pending">5</div><div class="step-info"><div class="step-title">Publish</div><div class="step-detail" id="detail-publish">--</div></div></div>
+          </div>
+
+          <!-- Fidelity (hidden until done) -->
+          <div class="fidelity" id="fidelityCard" style="display:none">
+            <div class="fidelity-label">Migration Fidelity</div>
+            <div class="fidelity-score" id="fidelityScore">--</div>
+            <div class="fidelity-bars">
+              <div class="fidelity-bar"><div class="fidelity-bar-label">Data</div><div class="fidelity-bar-track"><div class="fidelity-bar-fill data" id="barData" style="width:0%"></div></div></div>
+              <div class="fidelity-bar"><div class="fidelity-bar-label">Structure</div><div class="fidelity-bar-track"><div class="fidelity-bar-fill structure" id="barStructure" style="width:0%"></div></div></div>
+              <div class="fidelity-bar"><div class="fidelity-bar-label">Quality</div><div class="fidelity-bar-track"><div class="fidelity-bar-fill quality" id="barQuality" style="width:0%"></div></div></div>
+            </div>
+          </div>
+
+          <a class="btn-pbi" id="pbiButton" href="#" target="_blank" style="display:none">Open in Power BI</a>
+        </div>
+      </div>
+
+      <!-- CENTER: Canvas -->
+      <div class="panel panel-canvas">
+        <div class="panel-header">Dashboard <span class="badge" id="canvasBadge">Preview</span></div>
+        <div class="panel-body" id="canvasBody">
+          <div class="canvas-empty" id="canvasEmpty">
+            <div>
+              <h2>Tableau to Power BI.</h2>
+              <p>Upload a workbook in the pipeline panel. Watch every field get parsed, translated, and published -- live. The dashboard appears here when ready.</p>
+            </div>
+          </div>
+          <iframe class="canvas-iframe" id="canvasFrame" style="display:none" sandbox="allow-scripts allow-same-origin allow-popups"></iframe>
+        </div>
+      </div>
+
+      <!-- RIGHT: Chat -->
+      <div class="panel panel-chat">
+        <div class="panel-header">Dr. Data <span class="badge">AI</span></div>
+        <div class="panel-body" id="chatBody">
+          <div class="chat-messages" id="chatMessages">
+            <div class="chat-msg assistant">Ready. Upload a Tableau workbook and I will handle everything -- parsing, translation, PBIP generation, and publish to Power BI.</div>
+          </div>
+          <div class="prompts">
+            <span class="prompt-chip" onclick="sendChat(this.textContent)">Explain the migration</span>
+            <span class="prompt-chip" onclick="sendChat(this.textContent)">Show DAX translations</span>
+            <span class="prompt-chip" onclick="sendChat(this.textContent)">What fields were mapped?</span>
+            <span class="prompt-chip" onclick="sendChat(this.textContent)">Check data quality</span>
+          </div>
+        </div>
+        <div class="chat-input-area">
+          <input class="chat-input" id="chatInput" placeholder="Ask Dr. Data..." autocomplete="off">
+          <button class="chat-send" id="chatSend" onclick="sendChat()">Send</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// -- State --
+let fileId = null;
+let jobId = null;
+let reportUrl = null;
+
+const API = '';  // Same origin
+
+// -- Upload --
+const uploadZone = document.getElementById('uploadZone');
+const fileInput = document.getElementById('fileInput');
+
+['dragover','dragenter'].forEach(e => uploadZone.addEventListener(e, ev => { ev.preventDefault(); uploadZone.classList.add('dragover'); }));
+['dragleave','drop'].forEach(e => uploadZone.addEventListener(e, ev => { ev.preventDefault(); uploadZone.classList.remove('dragover'); }));
+uploadZone.addEventListener('drop', ev => { if (ev.dataTransfer.files.length) handleFile(ev.dataTransfer.files[0]); });
+fileInput.addEventListener('change', ev => { if (ev.target.files.length) handleFile(ev.target.files[0]); });
+
+async function handleFile(file) {
+  document.getElementById('statusBadge').textContent = 'Uploading...';
+  document.getElementById('pipelineBadge').textContent = 'Running';
+
+  const form = new FormData();
+  form.append('file', file);
+
+  try {
+    const r = await fetch(`${API}/api/upload`, { method: 'POST', body: form });
+    const data = await r.json();
+    fileId = data.file_id;
+
+    document.getElementById('fileInfo').style.display = 'block';
+    document.getElementById('fileInfo').innerHTML = `<strong>${data.filename}</strong><div class="meta">${(data.size/1024).toFixed(0)} KB / ID: ${fileId}</div>`;
+    uploadZone.style.display = 'none';
+
+    addChat('agent', `Uploaded ${data.filename} (${(data.size/1024).toFixed(0)} KB). Starting pipeline...`);
+
+    // Start processing
+    const r2 = await fetch(`${API}/api/process/${fileId}`, { method: 'POST' });
+    const job = await r2.json();
+    jobId = job.job_id;
+
+    // Connect SSE
+    connectSSE(jobId);
+  } catch(e) {
+    document.getElementById('statusBadge').textContent = 'Error';
+    addChat('assistant', `Upload failed: ${e.message}`);
+  }
+}
+
+// -- SSE --
+function connectSSE(jid) {
+  const es = new EventSource(`${API}/api/stream/${jid}`);
+
+  es.onmessage = function(ev) {
+    const d = JSON.parse(ev.data);
+    if (d.phase === 'heartbeat') return;
+
+    // Update step indicators
+    const phases = ['parse','translate','build','validate','publish'];
+    const idx = phases.indexOf(d.phase);
+
+    if (idx >= 0) {
+      // Mark previous as done
+      for (let i = 0; i < idx; i++) setStep(phases[i], 'done', '');
+      // Mark current
+      if (d.status === 'complete') {
+        setStep(d.phase, 'done', d.detail);
+      } else if (d.status === 'error') {
+        setStep(d.phase, 'error', d.detail);
+      } else {
+        setStep(d.phase, 'active', d.detail);
+      }
+
+      document.getElementById('statusBadge').textContent = d.phase.charAt(0).toUpperCase() + d.phase.slice(1) + '...';
+    }
+
+    // Stream to chat
+    if (d.detail && d.phase !== 'heartbeat') {
+      addChat('agent', `[${d.phase}] ${d.detail}`);
+    }
+
+    // Done
+    if (d.phase === 'done') {
+      es.close();
+      reportUrl = d.report_url;
+      document.getElementById('statusBadge').textContent = 'Complete';
+      document.getElementById('pipelineBadge').textContent = 'Done';
+
+      // Fidelity
+      if (d.fidelity) {
+        const f = d.fidelity;
+        document.getElementById('fidelityCard').style.display = 'block';
+        document.getElementById('fidelityScore').textContent = f.score + '%';
+        document.getElementById('barData').style.width = (f.data / 40 * 100) + '%';
+        document.getElementById('barStructure').style.width = (f.structure / 30 * 100) + '%';
+        document.getElementById('barQuality').style.width = (f.quality / 30 * 100) + '%';
+      }
+
+      // PBI button
+      if (reportUrl) {
+        const btn = document.getElementById('pbiButton');
+        btn.style.display = 'block';
+        btn.href = reportUrl;
+        btn.textContent = 'Open in Power BI';
+
+        // Embed in canvas
+        document.getElementById('canvasEmpty').style.display = 'none';
+        document.getElementById('canvasFrame').style.display = 'block';
+        document.getElementById('canvasFrame').src = reportUrl;
+        document.getElementById('canvasBadge').textContent = 'Live';
+      }
+
+      addChat('assistant', reportUrl
+        ? `Dashboard published. ${d.visuals || '?'} visuals across ${d.pages || '?'} pages. Open it in the canvas or click "Open in Power BI".`
+        : 'Pipeline complete. Check the pipeline panel for details.'
+      );
+    }
+
+    if (d.phase === 'error') {
+      es.close();
+      document.getElementById('statusBadge').textContent = 'Error';
+      addChat('assistant', `Pipeline error: ${d.detail}`);
+    }
+  };
+
+  es.onerror = function() { es.close(); };
+}
+
+function setStep(phase, state, detail) {
+  const dot = document.querySelector(`#step-${phase} .step-dot`);
+  if (!dot) return;
+  dot.className = 'step-dot ' + state;
+  if (state === 'done') dot.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="white"><path d="M9 16.2L4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4L9 16.2z"/></svg>';
+  if (state === 'error') dot.innerHTML = '!';
+  if (detail) document.getElementById(`detail-${phase}`).textContent = detail;
+}
+
+// -- Chat --
+function addChat(role, text) {
+  const msgs = document.getElementById('chatMessages');
+  const div = document.createElement('div');
+  div.className = 'chat-msg ' + role;
+  div.textContent = text;
+  msgs.appendChild(div);
+  const body = document.getElementById('chatBody');
+  body.scrollTop = body.scrollHeight;
+}
+
+async function sendChat(text) {
+  const input = document.getElementById('chatInput');
+  const msg = text || input.value.trim();
+  if (!msg) return;
+  input.value = '';
+
+  addChat('user', msg);
+
+  try {
+    const r = await fetch(`${API}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: msg, file_id: fileId || '', context: '' }),
+    });
+    const data = await r.json();
+    addChat('assistant', data.response || 'No response.');
+  } catch(e) {
+    addChat('assistant', `Chat error: ${e.message}`);
+  }
+}
+
+document.getElementById('chatInput').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
+});
+</script>
+</body>
+</html>

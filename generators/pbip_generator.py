@@ -96,26 +96,36 @@ class PBIPGenerator:
 
     def generate(self, config, data_profile, dashboard_spec, data_file_path=None,
                  sheet_name=None, relationships=None, snowflake_config=None,
-                 dataframe=None):
+                 csv_url=None, dataframe=None):
         """Create the full PBIP project.
 
         Args:
             config:           dict from OpenAIEngine (report_layout + tmdl_model).
-            data_profile:     dict from DataAnalyzer.
+            data_profile:     dict from DataAnalyzer (auto-generated if None + dataframe).
             dashboard_spec:   dict from ClaudeInterpreter (for title/theme).
             data_file_path:   optional path to the source data file.
             sheet_name:       Excel sheet name that was loaded (for M expression).
-            dataframe:        optional pd.DataFrame — if provided and data_file_path
-                              is absent or points to a Tableau archive, the DataFrame
-                              is written as Data.csv inside the project and the M
-                              query is wired to it automatically.
             relationships:    optional list of relationship dicts for TMDL model.
             snowflake_config: optional dict with account/warehouse/database/schema
                               for Snowflake DirectQuery M expression.
+            dataframe:        optional pandas DataFrame. When provided with no
+                              data_file_path/csv_url/snowflake, data is embedded
+                              inline in TMDL via #table() M expression.
 
         Returns:
-            str: path to the clean project directory containing ONLY the PBIP files.
+            dict with path, field_audit, table_names, valid_measures, etc.
         """
+        # Auto-profile DataFrame if data_profile not provided
+        if data_profile is None and dataframe is not None:
+            from core.deep_analyzer import DeepAnalyzer
+            analyzer = DeepAnalyzer()
+            data_profile = analyzer.profile(dataframe)
+            table_name_hint = config.get("table_name", "Data")
+            data_profile["table_name"] = table_name_hint
+
+        # Store dataframe for inline embedding if no external data source
+        self._inline_dataframe = dataframe
+
         title = dashboard_spec.get("dashboard_title", "Dashboard")
         safe = self._safe_name(title)
 
@@ -124,11 +134,6 @@ class PBIPGenerator:
         if project_dir.exists():
             self._safe_remove(project_dir)
         project_dir.mkdir(parents=True, exist_ok=True)
-
-        # When a DataFrame is available, data will be embedded inline in the
-        # TMDL partition as #table(type table [...], {...rows...}).
-        # This makes the PBIP self-contained — no external file dependency,
-        # works on any machine without path patching.
 
         # Create folder structure inside the clean project directory
         report_root = project_dir / f"{safe}.Report"
@@ -144,14 +149,20 @@ class PBIPGenerator:
             d.mkdir(parents=True, exist_ok=True)
 
         # Gather info -- table_name must match what _write_tables_tmdl uses.
-        # When a DataFrame is provided (Tableau migration), always use "Data" so
-        # the TMDL table name matches the Entity="Data" in all visual JSON files.
-        # data_profile.table_name may be "synthetic_tableau_data" or a CSV filename
-        # — those break the visual bindings.
-        if dataframe is not None:
+        # Force "Data" when csv_url provided so TMDL table name
+        # matches Entity="Data" in all visual JSON files.
+        if csv_url is not None:
             table_name = "Data"
         else:
             table_name = data_profile.get("table_name", self._primary_table(config))
+            # Defensive: never allow internal synthetic filename through
+            if table_name == "synthetic_tableau_data":
+                table_name = "Data"
+
+        # Propagate normalized name back into the profile so _write_tables_tmdl
+        # and all other downstream readers agree on the table name.
+        if data_profile.get("table_name") != table_name:
+            data_profile = {**data_profile, "table_name": table_name}
 
         # Column semantic types (dimension vs measure) from data profile
         col_types = {}
@@ -182,7 +193,7 @@ class PBIPGenerator:
         table_names, valid_measure_names = self._write_tables_tmdl(
             tables_dir, tm, data_profile, data_file_path, sheet_name,
             snowflake_config=snowflake_config,
-            dataframe=dataframe,
+            csv_url=csv_url,
         )
 
         # 14. model.tmdl (with relationships if provided)
@@ -226,12 +237,19 @@ class PBIPGenerator:
         # 7. pages.json
         self._write_pages_json(pages_dir, page_ids)
 
-        # 8. Theme file -- always write a custom theme with good colors.
-        # Tableau categorical colors are rarely stored in the TWB XML,
-        # so we use a professional palette that looks good in PBI.
-        from core.design_translator import build_pbi_theme
+        # 8. Theme file -- Sprint 2: use color_extractor + visual_styler for
+        # enhanced theme when deep color data is available, fallback to
+        # design_translator for basic cases.
         tableau_design = dashboard_spec.get("design") or {}
-        custom_theme = build_pbi_theme(tableau_design, title)
+        unified_palette = dashboard_spec.get("_unified_palette", [])
+        if unified_palette:
+            from core.visual_styler import build_enhanced_theme
+            from core.design_translator import translate_fonts
+            fonts = translate_fonts(tableau_design.get("global_fonts", {}))
+            custom_theme = build_enhanced_theme(unified_palette, fonts, title)
+        else:
+            from core.design_translator import build_pbi_theme
+            custom_theme = build_pbi_theme(tableau_design, title)
         self._write_json(theme_dir / "CY25SU12.json", custom_theme)
 
         # 15. Auto-launcher .bat (patches data path + opens .pbip)
@@ -250,6 +268,9 @@ class PBIPGenerator:
         total = sum(1 for _ in project_dir.rglob("*") if _.is_file())
         print(f"[OK] PBIP project generated: {project_dir}")
         print(f"     {total} files created")
+
+        if not page_ids:
+            print("[ERROR] PBIP has 0 pages -- output will be empty in Power BI")
 
         return {
             "path": str(project_dir),
@@ -525,24 +546,18 @@ class PBIPGenerator:
         if dashboard_spec is None:
             dashboard_spec = {}
 
-        # Pre-build per-page zone position lookups from tableau_dashboards.
-        # Each section (page) corresponds to one dashboard in order.
-        # Positions are computed per-page so pages with canvas=0 fall back gracefully.
+        # Pre-compute Tableau zone positions if available
+        tableau_positions = {}
         tableau_dashboards = dashboard_spec.get("tableau_dashboards", [])
-        per_page_positions = []  # list of dicts (may be empty for pages with no valid zones)
-        for db in tableau_dashboards:
-            positions = {}
+        if tableau_dashboards:
+            from core.design_translator import translate_positions
+            db = tableau_dashboards[0]  # primary dashboard
             zones = db.get("zones", [])
             canvas = db.get("canvas", {})
             if zones and canvas.get("width") and canvas.get("height"):
-                try:
-                    from core.design_translator import translate_positions
-                    pbi_pos = translate_positions(zones, canvas)
-                    for p in pbi_pos:
-                        positions[p["name"]] = p
-                except Exception:
-                    pass
-            per_page_positions.append(positions)
+                pbi_positions = translate_positions(zones, canvas)
+                for p in pbi_positions:
+                    tableau_positions[p["name"]] = p
 
         # Pre-compute worksheet designs for visual formatting
         ws_designs = dashboard_spec.get("worksheet_designs", {})
@@ -565,6 +580,7 @@ class PBIPGenerator:
             page = deepcopy(PAGE_JSON_TEMPLATE)
             page["name"] = page_id
             page["displayName"] = display_name
+            page["ordinal"] = idx
             page["width"] = int(raw.get("width", 1280))
             page["height"] = int(raw.get("height", 720))
             self._write_json(page_dir / "page.json", page)
@@ -572,13 +588,12 @@ class PBIPGenerator:
             containers = list(raw.get("visualContainers", []))
 
             # --- Layout pass ---
-            # Use per-page zone positions (matched by dashboard index).
-            # Fall back to deterministic grid when positions are not available.
+            # If Tableau zone positions are available, apply them by matching
+            # zone names to visual titles. Otherwise use deterministic grid.
             applied_tableau_layout = False
-            page_positions = per_page_positions[idx] if idx < len(per_page_positions) else {}
-            if page_positions:
+            if tableau_positions:
                 applied_tableau_layout = self._apply_tableau_positions(
-                    containers, page_positions
+                    containers, tableau_positions
                 )
 
             if not applied_tableau_layout:
@@ -624,7 +639,10 @@ class PBIPGenerator:
                 vc_count += 1
 
             layout_src = "Tableau zones" if applied_tableau_layout else "deterministic grid"
-            print(f"    [+] page '{display_name}': {vc_count} visuals ({layout_src})")
+            if vc_count == 0:
+                print(f"    [WARNING] page '{display_name}': 0 visuals -- page will be empty in Power BI")
+            else:
+                print(f"    [+] page '{display_name}': {vc_count} visuals ({layout_src})")
 
         return page_ids, audit_totals
 
@@ -688,25 +706,13 @@ class PBIPGenerator:
         else:
             cfg_obj = raw_cfg
 
-        # Chart type: prefer Tableau-translated type over GPT-4 guess,
-        # but do NOT let a generic "automatic" mark override an already-correct
-        # stacked/upgraded type that direct_mapper set via dataRoles["chart_type"].
+        # Chart type: prefer Tableau-translated type over GPT-4 guess
         tableau_mark = cfg_obj.get("tableau_mark_type", "")
-        cfg_visual_type = cfg_obj.get("visualType", "card")
         if tableau_mark:
             from core.design_translator import translate_chart_type
-            translated = translate_chart_type(tableau_mark)
-            # If the config already carries a more specific (stacked) type,
-            # keep it — "automatic" → clusteredXxx should not win.
-            stacked_types = {"stackedColumnChart", "stackedBarChart",
-                             "hundredPercentStackedBarChart",
-                             "hundredPercentStackedColumnChart"}
-            if cfg_visual_type in stacked_types:
-                visual_type = cfg_visual_type
-            else:
-                visual_type = translated
+            visual_type = translate_chart_type(tableau_mark)
         else:
-            visual_type = cfg_visual_type
+            visual_type = cfg_obj.get("visualType", "card")
 
         title_text = cfg_obj.get("title", "")
         data_roles = cfg_obj.get("dataRoles", {})
@@ -736,10 +742,16 @@ class PBIPGenerator:
             }
 
         # Apply Tableau worksheet design formatting if available
+        # Sprint 2: use visual_styler for enhanced formatting when palette available
         ws_name = cfg_obj.get("worksheet_name", "")
         if ws_name and ws_name in ws_designs:
-            from core.design_translator import build_visual_formatting
-            formatting = build_visual_formatting(ws_designs[ws_name])
+            color_palette = vc.get("_color_palette", [])
+            if color_palette:
+                from core.visual_styler import style_visual
+                formatting = style_visual(ws_designs[ws_name], color_palette, visual_type)
+            else:
+                from core.design_translator import build_visual_formatting
+                formatting = build_visual_formatting(ws_designs[ws_name])
             if formatting:
                 existing_objects = doc["visual"].get("objects", {})
                 # Merge: formatting keys that don't already exist
@@ -1304,7 +1316,7 @@ class PBIPGenerator:
 
     def _write_tables_tmdl(self, tables_dir, tmdl_model, data_profile,
                            data_file_path, sheet_name=None,
-                           snowflake_config=None, dataframe=None):
+                           snowflake_config=None, csv_url=None):
         """Write one .tmdl file per table.
 
         Returns:
@@ -1387,7 +1399,7 @@ class PBIPGenerator:
         valid_measure_names = set()
         for m in all_measures:
             m_name = self._strip_control_chars(m["name"])
-            dax = self._strip_control_chars(
+            dax = self._sanitize_dax(
                 m.get("dax", m.get("expression", "BLANK()"))
             )
             fmt = self._strip_control_chars(
@@ -1454,9 +1466,18 @@ class PBIPGenerator:
                     for c in profile_columns
                 ],
             }
-            if dataframe is not None:
-                m_expr = self._build_inline_m_expression(dataframe, profile_table_cfg)
-                print(f"    [INLINE] Embedded {len(dataframe)} rows inline in TMDL")
+            if csv_url is not None:
+                m_expr = self._build_web_contents_m_expression(csv_url, profile_table_cfg)
+                print(f"    [WEB] M query -> Web.Contents({csv_url})")
+            elif self._inline_dataframe is not None:
+                # Inline data ALWAYS wins over File.Contents when a dataframe
+                # is available. This prevents broken C:\Users paths in TMDL.
+                m_expr = self._build_inline_m_table(
+                    self._inline_dataframe, profile_table_cfg
+                )
+                print(f"    [INLINE] M query -> #table() with "
+                      f"{len(self._inline_dataframe)} rows embedded "
+                      f"(data_file_path={'set' if data_file_path else 'none'} -- inline wins)")
             else:
                 m_expr = self._build_m_expression(
                     profile_table_cfg, data_file_path, sheet_name
@@ -1466,7 +1487,10 @@ class PBIPGenerator:
         lines.append(f"\t\tmode: {partition_mode}")
         lines.append("\t\tsource =")
         for m_line in m_expr:
-            lines.append(f"\t\t\t\t{m_line}")
+            # Convert any remaining 4-space indents to tabs for TMDL compliance,
+            # then prepend 4 tabs to place inside the partition block.
+            _cleaned = m_line.replace("    ", "\t")
+            lines.append(f"\t\t\t\t{_cleaned}")
         lines.append("")
 
         lines.append("\tannotation PBI_ResultType = Table")
@@ -1479,88 +1503,41 @@ class PBIPGenerator:
 
         return table_names, valid_measure_names
 
-    def _build_inline_m_expression(self, df, table_cfg):
-        """Build an inline M expression embedding all rows as a typed #table.
+    def _build_web_contents_m_expression(self, csv_url, table_cfg):
+        """Build M expression that fetches data from a live CSV URL via Web.Contents().
 
         Produces:
             let
-                Source = #table(type table [Col1 = text, Col2 = number, ...],
-                    {{"val1", 123}, {"val2", 456}, ...})
+                Source = Csv.Document(Web.Contents("https://..."), [...]),
+                #"Promoted Headers" = Table.PromoteHeaders(Source, [...]),
+                #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers", {...})
             in
-                Source
-
-        Self-contained — no external file reference, works on any machine.
+                #"Changed Type"
         """
-        import math
-
-        pbi_to_m = {
-            "string": "text",
-            "int64": "number",
-            "double": "number",
-            "dateTime": "date",   # Use proper M #datetime() literals
-            "date": "date",
-            "boolean": "logical",
+        pbi_to_m_type = {
+            "string": "type text",
+            "int64": "type number",
+            "double": "type number",
+            "dateTime": "type datetime",
+            "date": "type datetime",
+            "boolean": "type logical",
         }
-
         cols = table_cfg.get("columns", [])
-        col_names = [c["name"] for c in cols]
-        col_types = [pbi_to_m.get(c.get("dataType", "string"), "text") for c in cols]
-
-        # Build untyped schema: {"Col1", "Col2", ...} — PBI infers types, avoids M schema errors
-        schema = "{" + ", ".join(f'"{n}"' for n in col_names) + "}"
-
-        def _m_value(v, t):
-            """Serialize a single cell value for M inline table."""
-            if v is None or (isinstance(v, float) and math.isnan(v)):
-                return "null"
-            if t == "text":
-                return '"' + str(v).replace("\\", "\\\\").replace('"', '""') + '"'
-            if t == "date":
-                try:
-                    import pandas as pd
-                    dt = pd.to_datetime(v)
-                    return (f"#datetime({dt.year}, {dt.month}, {dt.day}, "
-                            f"{dt.hour}, {dt.minute}, {dt.second})")
-                except Exception:
-                    return '"' + str(v).replace('"', '""') + '"'
-            if t in ("number",):
-                try:
-                    fv = float(v)
-                    return str(int(fv)) if fv == int(fv) else str(fv)
-                except (ValueError, TypeError):
-                    return "null"
-            if t == "logical":
-                return "true" if v else "false"
-            # other — wrap as text
-            return '"' + str(v).replace('"', '""') + '"'
-
-        row_strings = []
-        for _, row in df[col_names].iterrows():
-            cells = ", ".join(
-                _m_value(row[n], t) for n, t in zip(col_names, col_types)
-            )
-            row_strings.append(f"{{{cells}}}")
-
-        # Return ONE list item per line — the caller prefixes each with \t\t\t\t.
-        # Using tabs for internal indentation to satisfy TMDL parser requirements.
-        # rows_block as a single joined string caused only the first row to receive
-        # the tab prefix; all subsequent rows had spaces only → TMDL parse error.
-        result_lines = [
+        n_cols = len(cols) if cols else None
+        cols_arg = str(n_cols) if n_cols else "null"
+        type_list = ", ".join(
+            '{{"' + c["name"] + '", ' + pbi_to_m_type.get(c.get("dataType", "string"), "type text") + "}}"
+            for c in cols
+        )
+        return [
             "let",
-            "\tSource = #table(",
-            f"\t\t{schema},",
-            "\t\t{",
-        ]
-        last = len(row_strings) - 1
-        for i, r in enumerate(row_strings):
-            comma = "," if i < last else ""
-            result_lines.append(f"\t\t\t{r}{comma}")
-        result_lines.extend([
-            "\t\t})",
+            f'    Source = Csv.Document(Web.Contents("{csv_url}"),',
+            f'        [Delimiter=",", Columns={cols_arg}, Encoding=65001, QuoteStyle=QuoteStyle.None]),',
+            '    #"Promoted Headers" = Table.PromoteHeaders(Source, [PromoteAllScalars=true]),',
+            f'    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers", {{{type_list}}})',
             "in",
-            "\tSource",
-        ])
-        return result_lines
+            '    #"Changed Type"',
+        ]
 
     def _build_m_expression(self, table_cfg, data_file_path, sheet_name=None):
         """Build Power Query M expression lines for a table partition.
@@ -1596,37 +1573,134 @@ class PBIPGenerator:
             if is_excel:
                 if sheet_name:
                     nav_line = (
-                        f'\tNavigation = Source{{[Item="{sheet_name}",'
+                        f'    Navigation = Source{{[Item="{sheet_name}",'
                         f'Kind="Sheet"]}}[Data],'
                     )
                 else:
-                    nav_line = '\tNavigation = Source{0}[Data],'
+                    nav_line = '    Navigation = Source{0}[Data],'
                 return [
                     "let",
-                    f'\tSource = Excel.Workbook(File.Contents("{file_path_for_m}"), null, true),',
+                    f'    Source = Excel.Workbook(File.Contents("{file_path_for_m}"), null, true),',
                     nav_line,
-                    f'\t#"Promoted Headers" = Table.PromoteHeaders(Navigation, [PromoteAllScalars=true]),',
-                    f'\t#"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{self._build_type_transforms(table_cfg)})',
+                    f'    #"Promoted Headers" = Table.PromoteHeaders(Navigation, [PromoteAllScalars=true]),',
+                    f'    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{self._build_type_transforms(table_cfg)})',
                     "in",
-                    '\t#"Changed Type"',
+                    '    #"Changed Type"',
                 ]
             else:
                 return [
                     "let",
-                    f'\tSource = Csv.Document(File.Contents("{file_path_for_m}"),[Delimiter=",",Columns={len(table_cfg.get("columns", []))},Encoding=65001,QuoteStyle=QuoteStyle.None]),',
-                    f'\t#"Promoted Headers" = Table.PromoteHeaders(Source, [PromoteAllScalars=true]),',
-                    f'\t#"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{self._build_type_transforms(table_cfg)})',
+                    f'    Source = Csv.Document(File.Contents("{file_path_for_m}"),[Delimiter=",",Columns={len(table_cfg.get("columns", []))},Encoding=65001,QuoteStyle=QuoteStyle.None]),',
+                    f'    #"Promoted Headers" = Table.PromoteHeaders(Source, [PromoteAllScalars=true]),',
+                    f'    #"Changed Type" = Table.TransformColumnTypes(#"Promoted Headers",{self._build_type_transforms(table_cfg)})',
                     "in",
-                    '\t#"Changed Type"',
+                    '    #"Changed Type"',
                 ]
 
         # Last resort: empty table
         return [
             "let",
-            '\tSource = #table({"Col"}, {})',
+            '    Source = #table({"Col"}, {})',
             "in",
-            "\tSource",
+            "    Source",
         ]
+
+    def _build_inline_m_table(self, df, table_cfg):
+        """Build a #table() M expression with data rows embedded inline.
+
+        Produces a complete M let/in expression that creates a typed table
+        from literal values. No external file reference needed.
+
+        Args:
+            df: pandas DataFrame with the actual data.
+            table_cfg: dict with columns[{name, dataType}] for type schema.
+
+        Returns:
+            list of M expression lines (tab-indented, no leading spaces).
+        """
+        import pandas as pd
+        import numpy as np
+
+        columns = table_cfg.get("columns", [])
+        col_names = [c["name"] for c in columns]
+
+        # Build type schema using M "type table" syntax:
+        #   type table [#"Col Name" = text, Col2 = number]
+        pbi_to_m = {
+            "string": "text",
+            "int64": "number",
+            "double": "number",
+            "dateTime": "date",
+            "boolean": "logical",
+        }
+        type_cols = []
+        for c in columns:
+            m_type = pbi_to_m.get(c.get("dataType", "string"), "text")
+            col_name = c["name"]
+            # Quote column names that contain spaces or special chars
+            if " " in col_name or "-" in col_name or not col_name.isidentifier():
+                type_cols.append(f'#"{col_name}" = {m_type}')
+            else:
+                type_cols.append(f'{col_name} = {m_type}')
+        type_schema = "type table [" + ", ".join(type_cols) + "]"
+
+        # Build data rows -- limit to 500 rows to keep TMDL size reasonable
+        max_rows = min(len(df), 500)
+        row_lines = []
+        for idx in range(max_rows):
+            vals = []
+            for c in columns:
+                col_name = c["name"]
+                if col_name not in df.columns:
+                    vals.append('""')
+                    continue
+                raw = df[col_name].iloc[idx]
+
+                # Handle null/NaN
+                if pd.isna(raw):
+                    vals.append("null")
+                    continue
+
+                dt = c.get("dataType", "string")
+                if dt in ("double", "int64"):
+                    vals.append(str(raw))
+                elif dt == "dateTime":
+                    # M date literal: #date(year, month, day)
+                    try:
+                        ts = pd.Timestamp(raw)
+                        vals.append(
+                            f"#date({ts.year}, {ts.month}, {ts.day})"
+                        )
+                    except Exception:
+                        vals.append(f'"{raw}"')
+                elif dt == "boolean":
+                    vals.append("true" if raw else "false")
+                else:
+                    # String -- escape double quotes, strip control chars
+                    s = str(raw).replace('"', '""')
+                    s = s.replace("\t", " ").replace("\n", " ").replace("\r", "")
+                    vals.append(f'"{s}"')
+
+            # Sanitize entire row: strip any remaining control chars
+            clean_vals = ", ".join(vals).replace("\t", " ").replace("\n", " ").replace("\r", "")
+            row_lines.append("{" + clean_vals + "}")
+
+        # Build the M expression -- each line is a separate list element.
+        # Use tab indentation throughout -- the caller (_write_tables_tmdl)
+        # prepends 4 tabs. TMDL requires pure tab indentation; any spaces
+        # in leading whitespace cause Fabric API "Indentation" errors.
+        lines = [
+            "let",
+            "\tSource = #table(" + type_schema + ",",
+            "\t{",
+        ]
+        for i, row in enumerate(row_lines):
+            suffix = "," if i < len(row_lines) - 1 else ""
+            lines.append("\t" + row + suffix)
+        lines.append("\t})")
+        lines.append("in")
+        lines.append("\tSource")
+        return lines
 
     @staticmethod
     def _build_snowflake_m_expression(sf_config, table_name):
@@ -1648,30 +1722,24 @@ class PBIPGenerator:
 
         return [
             "let",
-            f'\tSource = Snowflake.Databases("{server}", "{wh}"),',
-            f'\tDatabase = Source{{[Name="{db}"]}}[Data],',
-            f'\tSchema = Database{{[Name="{schema}"]}}[Data],',
-            f'\tTable = Schema{{[Name="{table_name}"]}}[Data]',
+            f'    Source = Snowflake.Databases("{server}", "{wh}"),',
+            f'    Database = Source{{[Name="{db}"]}}[Data],',
+            f'    Schema = Database{{[Name="{schema}"]}}[Data],',
+            f'    Table = Schema{{[Name="{table_name}"]}}[Data]',
             "in",
-            "\tTable",
+            "    Table",
         ]
 
     @staticmethod
     def _windows_path_for_m(data_file_path, filename):
         """Return a valid Windows absolute path for PBI M expressions.
 
-        - Bare filename (no directory): return as-is — CSV is bundled alongside
-          the report, File.Contents("Data.csv") is portable on any machine.
         - On Windows with a real local path: use as-is (resolved).
         - On Linux / temp paths / Streamlit Cloud: use C:\\PBI_Data\\{filename}
           so PBI Desktop can open the file (user updates path once).
         """
         import sys
         raw = str(data_file_path)
-
-        # Bare filename — bundled CSV, use relative reference
-        if raw == filename:
-            return filename
 
         if sys.platform == "win32":
             try:
@@ -1689,7 +1757,7 @@ class PBIPGenerator:
         """Build the type transform list for Table.TransformColumnTypes."""
         type_map = {
             "string": "type text",
-            "int64": "Int64.Type",
+            "int64": "type number",
             "double": "type number",
             "dateTime": "type date",
             "boolean": "type logical",
@@ -1820,6 +1888,32 @@ class PBIPGenerator:
         if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', name):
             return f"'{name}'"
         return name
+
+    @classmethod
+    def _sanitize_dax(cls, text):
+        """Clean a DAX expression for safe TMDL embedding.
+
+        1. Strip control characters
+        2. Remove // line comments and /* block comments */
+        3. Collapse multi-line expressions to a single line
+        4. Normalize whitespace
+
+        TMDL requires measure expressions on one line after the = sign.
+        Multi-line comments or expressions cause InvalidLineType errors.
+        """
+        if not isinstance(text, str):
+            return "BLANK()"
+        import re
+        text = cls._strip_control_chars(text)
+        # Remove /* ... */ block comments
+        text = re.sub(r'/\*.*?\*/', ' ', text, flags=re.DOTALL)
+        # Remove // line comments (everything from // to end of line)
+        text = re.sub(r'//[^\n]*', ' ', text)
+        # Collapse newlines and excess whitespace to single spaces
+        text = re.sub(r'\s+', ' ', text).strip()
+        if not text:
+            return "BLANK()"
+        return text
 
     @staticmethod
     def _strip_control_chars(text):

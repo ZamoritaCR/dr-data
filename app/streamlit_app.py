@@ -84,6 +84,122 @@ def _escape_user_text(text):
     return html_module.escape(str(text)) if text else ""
 
 
+def _publish_pbi_deliverable(dl):
+    """Publish a Power BI PBIP deliverable to a workspace via Fabric REST API."""
+    # Resolve PBIP folder path from download entry or agent
+    pbip_folder = dl.get("pbip_folder_path", "")
+    if not pbip_folder:
+        agent = st.session_state.get("agent")
+        if agent and hasattr(agent, "last_pbip_folder_path"):
+            pbip_folder = getattr(agent, "last_pbip_folder_path", "")
+    if not pbip_folder or not os.path.isdir(pbip_folder):
+        # Try extracting the ZIP to a temp dir
+        zip_path = dl.get("path", "")
+        if zip_path and os.path.exists(zip_path) and zip_path.endswith(".zip"):
+            import zipfile
+            pbip_folder = tempfile.mkdtemp(prefix="pbi_publish_")
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                zf.extractall(pbip_folder)
+        else:
+            st.error("PBIP folder not found. Re-generate the Power BI project first.")
+            return
+
+    display_name = dl.get("display_name", "")
+    if not display_name:
+        agent = st.session_state.get("agent")
+        if agent and hasattr(agent, "last_pbip_display_name"):
+            display_name = getattr(agent, "last_pbip_display_name", "")
+    if not display_name:
+        display_name = dl.get("filename", "DrData-Report").replace(".zip", "")
+
+    # --- QA Gate: run deterministic checks BEFORE publishing ---
+    agent = st.session_state.get("agent")
+    qa_df = getattr(agent, "dataframe", None) if agent else None
+
+    with st.spinner("Running QA validation..."):
+        try:
+            from core.qa_agent import QAAgent
+            qa = QAAgent(pbip_folder, dataframe=qa_df)
+            qa_result = qa.run_full_qa()
+        except Exception as qa_err:
+            st.warning(f"QA check failed (non-blocking): {qa_err}")
+            qa_result = {"passed": True, "issues": [], "warnings": [], "fixes": []}
+
+    # Show QA results
+    if qa_result.get("fixes"):
+        st.info(
+            "**QA Auto-fixes applied:** "
+            + " | ".join(qa_result["fixes"])
+        )
+    if qa_result.get("warnings"):
+        with st.expander(
+            f"QA Advisory ({len(qa_result['warnings'])} warnings)",
+            expanded=False,
+        ):
+            for w in qa_result["warnings"]:
+                st.markdown(f"- {w}")
+
+    if not qa_result.get("passed"):
+        st.error("**QA Gate BLOCKED publish.** Fix these issues first:")
+        for issue in qa_result["issues"]:
+            st.markdown(f"- {issue}")
+        return
+
+    st.success("QA gate passed -- publishing...")
+
+    # --- Publish to Power BI ---
+    with st.spinner("Publishing to Power BI..."):
+        try:
+            from core.powerbi_publisher import (
+                get_access_token, list_workspaces, publish_pbip,
+            )
+            token = get_access_token()
+            workspaces = list_workspaces(token)
+
+            if not workspaces:
+                st.error(
+                    "No Power BI workspaces accessible. "
+                    "Ensure the service principal is added as Member/Admin "
+                    "to at least one workspace."
+                )
+                return
+
+            # Auto-select if single workspace, otherwise let user pick
+            if len(workspaces) == 1:
+                target_ws = workspaces[0]
+            else:
+                ws_names = [
+                    w.get("displayName", w.get("name", "?"))
+                    for w in workspaces
+                ]
+                selected = st.selectbox(
+                    "Select workspace",
+                    ws_names,
+                    key="pbi_ws_select",
+                )
+                target_ws = workspaces[ws_names.index(selected)]
+
+            ws_id = target_ws["id"]
+            ws_name = target_ws.get(
+                "displayName", target_ws.get("name", "?")
+            )
+
+            result = publish_pbip(token, ws_id, pbip_folder, display_name)
+
+            if result.get("error"):
+                st.error(f"Publish failed: {result.get('error')} -- "
+                         f"{result.get('detail', '')}")
+            else:
+                report_url = result.get("report_url", "")
+                st.success(
+                    f"Your dashboard is live in workspace **{ws_name}**! "
+                    f"[Open in Power BI]({report_url})"
+                )
+
+        except Exception as e:
+            st.error(f"Power BI publish failed: {e}")
+
+
 # === PAGE CONFIG (must be first Streamlit call) ===
 st.set_page_config(
     page_title="Dr. Data -- Dashboard Intelligence",
@@ -1271,6 +1387,53 @@ with tab1:
                 elif st.session_state.audience_mode == "executive" and ws.get("audit_summary"):
                     st.info(ws["audit_summary"])
 
+            # === COPILOT ENRICHMENT (Sprint 2) ===
+            _agent = st.session_state.get("agent")
+            _enrichment = getattr(_agent, '_copilot_enrichment', {}) if _agent else {}
+            if _enrichment and _enrichment.get("score", 0) > 0:
+                _safe_html('<div class="workspace-card"><h3>Copilot Analysis</h3></div>', "**Copilot Analysis**")
+                _score = _enrichment.get("score", 0)
+                _score_class = "score-green" if _score >= 80 else "score-amber" if _score >= 60 else "score-red"
+                st.markdown(f"**Conversion Quality:** <span class='{_score_class}'>{_score}/100</span>", unsafe_allow_html=True)
+
+                _chart_sugg = _enrichment.get("chart_suggestions", [])
+                _missing_kpis = _enrichment.get("missing_kpis", [])
+                _dax_tips = _enrichment.get("dax_tips", [])
+                _access = _enrichment.get("accessibility", [])
+                _naming = _enrichment.get("naming", [])
+                _layout = _enrichment.get("layout_tips", [])
+
+                if _chart_sugg:
+                    with st.expander(f"Chart Suggestions ({len(_chart_sugg)})"):
+                        for s in _chart_sugg:
+                            st.markdown(f"- **{_escape_user_text(s.get('worksheet', ''))}**: "
+                                        f"{_escape_user_text(s.get('current_type', ''))} -> "
+                                        f"{_escape_user_text(s.get('suggested_type', ''))} -- "
+                                        f"{_escape_user_text(s.get('reason', ''))}")
+                if _missing_kpis:
+                    with st.expander(f"Missing KPIs ({len(_missing_kpis)})"):
+                        for k in _missing_kpis:
+                            st.markdown(f"- **{_escape_user_text(k.get('name', ''))}**: "
+                                        f"`{_escape_user_text(k.get('dax_formula', ''))}`")
+                            if k.get("reason"):
+                                st.caption(_escape_user_text(k["reason"]))
+                if _dax_tips:
+                    with st.expander(f"DAX Optimization ({len(_dax_tips)})"):
+                        for t in _dax_tips:
+                            st.markdown(f"- **{_escape_user_text(t.get('field', ''))}**: "
+                                        f"{_escape_user_text(t.get('reason', ''))}")
+                if _access:
+                    with st.expander(f"Accessibility ({len(_access)})"):
+                        for a in _access:
+                            sev = a.get("severity", "info")
+                            st.markdown(f"- [{sev.upper()}] {_escape_user_text(a.get('issue', ''))}: "
+                                        f"{_escape_user_text(a.get('fix', ''))}")
+                if _naming:
+                    with st.expander(f"Naming Suggestions ({len(_naming)})"):
+                        for n in _naming:
+                            st.markdown(f"- {_escape_user_text(n.get('current', ''))} -> "
+                                        f"**{_escape_user_text(n.get('suggested', ''))}**")
+
             # === DATA PREVIEW ===
             if ws.get("data_preview") is not None:
                 df_preview = ws["data_preview"]
@@ -1316,7 +1479,11 @@ with tab1:
                     )
 
                 for idx, dl in enumerate(ws["deliverables"]):
-                    dl_col1, dl_col2 = st.columns([3, 1])
+                    _is_pbi = dl.get("name") == "Power BI Project"
+                    if _is_pbi:
+                        dl_col1, dl_col2, dl_col3 = st.columns([3, 1, 1])
+                    else:
+                        dl_col1, dl_col2 = st.columns([3, 1])
                     with dl_col1:
                         _safe_html(f'<div class="dl-card"><div class="dl-name">{html_module.escape(dl["name"])}</div><div class="dl-desc">{html_module.escape(dl.get("description", ""))}</div></div>', f'{dl["name"]}: {dl.get("description", "")}')
                     with dl_col2:
@@ -1338,6 +1505,41 @@ with tab1:
                                     file_name=dl["filename"],
                                     key=f"ws_dl_{idx}_{dl['filename']}",
                                 )
+                    # Publish to Power BI button for PBI deliverables
+                    if _is_pbi:
+                        with dl_col3:
+                            _pbi_publish_key = f"pbi_pub_{idx}"
+                            if st.button("Publish to Power BI", key=_pbi_publish_key):
+                                st.session_state[f"_pbi_publish_trigger_{idx}"] = True
+
+                        if st.session_state.get(f"_pbi_publish_trigger_{idx}"):
+                            st.session_state.pop(f"_pbi_publish_trigger_{idx}", None)
+                            _publish_pbi_deliverable(dl)
+
+                    # Inline preview for HTML dashboards
+                    _dl_ext = dl.get("filename", "").rsplit(".", 1)[-1].lower()
+                    if _dl_ext == "html" and os.path.exists(dl["path"]):
+                        try:
+                            with open(dl["path"], "r", encoding="utf-8") as _hf:
+                                _html_content = _hf.read()
+                            # Only preview if it contains actual chart/dashboard
+                            # content (Plotly, scripts, substantial HTML)
+                            if len(_html_content) > 1000 and (
+                                "plotly" in _html_content.lower()
+                                or "<script>" in _html_content.lower()
+                                or "chart" in _html_content.lower()
+                            ):
+                                with st.expander(
+                                    f"Preview: {dl['name']}",
+                                    expanded=True,
+                                ):
+                                    components.html(
+                                        _html_content,
+                                        height=800,
+                                        scrolling=True,
+                                    )
+                        except Exception as _preview_err:
+                            print(f"[PREVIEW] Failed to render {dl['filename']}: {_preview_err}")
 
 
     # ============================================
@@ -1387,98 +1589,207 @@ with tab1:
             ws["phase"] = "analyzed"
             ws["progress_messages"].append(f"Loaded {name_str}")
 
-            # Build data context for Claude's first reaction
+            # ======================================================
+            # FILE INTELLIGENCE CARD -- structured metadata display
+            # ======================================================
             _agent = st.session_state.agent
-            _data_ctx = ""
-            if ws.get("data_preview") is not None:
-                _df = ws["data_preview"]
-                _col_details = []
-                for _c in _df.columns[:20]:
-                    _nu = _df[_c].nunique()
-                    if pd.api.types.is_numeric_dtype(_df[_c]):
-                        _cmin, _cmax = _df[_c].min(), _df[_c].max()
-                        if pd.notna(_cmin) and pd.notna(_cmax):
-                            _col_details.append(f"{_c} (numeric, range {_cmin:.0f}-{_cmax:.0f})")
-                        else:
-                            _col_details.append(f"{_c} (numeric, all null)")
-                    elif pd.api.types.is_datetime64_any_dtype(_df[_c]):
-                        _col_details.append(f"{_c} (dates)")
+            _is_tableau = bool(_agent and _agent.tableau_spec)
+
+            with chat_container:
+                with st.chat_message("assistant"):
+                    if _is_tableau:
+                        _spec = _agent.tableau_spec
+                        _ws_list = [w.get("name", "") for w in _spec.get("worksheets", [])]
+                        _db_list = [d.get("name", "") for d in _spec.get("dashboards", [])]
+                        _cf_list = _spec.get("calculated_fields", [])
+                        _ds_list = [d.get("caption", d.get("name", "")) for d in _spec.get("datasources", [])]
+                        _params = _spec.get("parameters", [])
+                        _has_hyper = _spec.get("has_hyper", False)
+
+                        # Count complex calcs
+                        _complex_count = sum(
+                            1 for cf in _cf_list
+                            if cf.get("formula", "") and not re.match(
+                                r'^\s*(SUM|AVG|COUNT|COUNTD|MIN|MAX|MEDIAN)\s*\(\s*\[',
+                                cf.get("formula", ""), re.IGNORECASE
+                            )
+                        )
+
+                        _ext = names[0].rsplit(".", 1)[-1].upper() if names else "TWB"
+                        _file_size = sum(
+                            info.get("size", 0)
+                            for info in st.session_state.uploaded_files.values()
+                        )
+                        _size_str = (
+                            f"{_file_size / 1024:.0f} KB"
+                            if _file_size < 1024 * 1024
+                            else f"{_file_size / 1024 / 1024:.1f} MB"
+                        )
+
+                        # Worksheet names (max 5)
+                        _ws_display = ", ".join(_ws_list[:5])
+                        if len(_ws_list) > 5:
+                            _ws_display += f" + {len(_ws_list) - 5} more"
+
+                        # Dashboard names
+                        _db_display = ", ".join(_db_list[:5]) if _db_list else "None"
+                        if len(_db_list) > 5:
+                            _db_display += f" + {len(_db_list) - 5} more"
+
+                        # Datasource names
+                        _ds_display = ", ".join(_ds_list[:4]) if _ds_list else "None"
+                        if len(_ds_list) > 4:
+                            _ds_display += f" + {len(_ds_list) - 4} more"
+
+                        _has_data = ws.get("data_preview") is not None
+                        _data_status = "Embedded data found" if _has_data else "No embedded CSV/Excel -- synthetic data will be generated"
+                        _is_vision = _spec.get("source") == "vision_screenshot"
+                        _source_note = "Extracted from screenshot via GPT-4o Vision" if _is_vision else ""
+
+                        st.markdown(
+                            f"**{_ext}** | {name_str} | {_size_str}\n\n"
+                            + (f"*{_source_note}*\n\n" if _source_note else "")
+                            + f"| | |\n|---|---|\n"
+                            f"| **Visuals Detected** | {len(_ws_list)} -- {_ws_display} |\n"
+                            f"| **Dashboards** | {len(_db_list)} -- {_db_display} |\n"
+                            + (f"| **Calculated Fields** | {len(_cf_list)} ({_complex_count} complex) |\n" if _cf_list else "")
+                            + f"| **Data Sources** | {len(_ds_list)} -- {_ds_display} |\n"
+                            + (f"| **Parameters** | {len(_params)} |\n" if _params else "")
+                            + f"| **Data** | {_data_status} |"
+                        )
                     else:
-                        _top = list(_df[_c].value_counts().head(3).index)
-                        _col_details.append(f"{_c} ({_nu} values, e.g. {_top})")
-                _data_ctx = (
-                    f"File: {name_str}\n"
-                    f"Rows: {len(_df):,}, Columns: {len(_df.columns)}\n"
-                    f"Columns: " + "; ".join(_col_details)
-                )
+                        # Non-Tableau file (CSV, Excel, etc.)
+                        _preview_df = ws.get("data_preview")
+                        if _preview_df is not None:
+                            _ext = names[0].rsplit(".", 1)[-1].upper() if names else "FILE"
+                            _file_size = sum(
+                                info.get("size", 0)
+                                for info in st.session_state.uploaded_files.values()
+                            )
+                            _size_str = (
+                                f"{_file_size / 1024:.0f} KB"
+                                if _file_size < 1024 * 1024
+                                else f"{_file_size / 1024 / 1024:.1f} MB"
+                            )
+                            _cols = list(_preview_df.columns)
+                            _col_display = ", ".join(_cols[:8])
+                            if len(_cols) > 8:
+                                _col_display += f" + {len(_cols) - 8} more"
 
-            _tableau_ctx = ""
-            if _agent and _agent.tableau_spec:
-                _ws_ct = len(_agent.tableau_spec.get("worksheets", []))
-                _db_ct = len(_agent.tableau_spec.get("dashboards", []))
-                _cf_ct = len(_agent.tableau_spec.get("calculated_fields", []))
-                _tableau_ctx = (
-                    f"\nTableau workbook: {_ws_ct} worksheets, "
-                    f"{_db_ct} dashboards, {_cf_ct} calculated fields"
-                )
+                            _dtypes = _preview_df.dtypes.value_counts()
+                            _dtype_str = ", ".join(f"{v} {k}" for k, v in _dtypes.items())
 
-            # Let Claude react naturally
-            _upload_msg = ""
-            _has_context = _data_ctx or _tableau_ctx
-            try:
-                if _agent and _agent.client and _has_context:
-                    _has_data = ws.get("data_preview") is not None
-                    _react_prompt = (
-                        f"The user just uploaded: {name_str}\n\n"
-                        f"{_data_ctx or '(No tabular data extracted -- Tableau .hyper format. I will generate synthetic data automatically when building.)'}"
-                        f"{_tableau_ctx}\n\n"
-                        f"React as Dr. Data in 2-3 SHORT sentences:\n"
-                        f"1. One sentence about what you see in THIS specific file -- "
-                        f"reference actual worksheet or dashboard names\n"
-                        f"2. One sentence telling them to just say what they want -- "
-                        f"'say the word and I will build it' or 'just tell me what you want to see'\n\n"
-                        f"CRITICAL RULES:\n"
-                        f"- Do NOT say you need data or ask them to upload anything else. "
-                        f"{'You have the data.' if _has_data else 'You will generate synthetic data automatically.'}\n"
-                        f"- Do NOT say 'I am going to' or 'Let me' -- you are not doing anything yet. "
-                        f"Wait for their instruction.\n"
-                        f"- Do NOT promise specific charts or views -- wait for them to ask.\n"
-                        f"- Do NOT list capabilities or say 'I can create X, Y, Z'.\n"
-                        f"- Keep it to 2-3 sentences MAX. Be punchy, not verbose."
+                            st.markdown(
+                                f"**{_ext}** | {name_str} | {_size_str}\n\n"
+                                f"| | |\n|---|---|\n"
+                                f"| **Rows** | {len(_preview_df):,} |\n"
+                                f"| **Columns** | {len(_cols)} -- {_col_display} |\n"
+                                f"| **Types** | {_dtype_str} |"
+                            )
+
+            # Save intelligence card as a message
+            _card_msg = f"Loaded {name_str}."
+            if _is_tableau and _is_vision:
+                # Rich vision-specific message describing what GPT-4o saw
+                _chart_types = {}
+                for _vws in _spec.get("worksheets", []):
+                    _ct = _vws.get("chart_type", _vws.get("mark_type", "unknown"))
+                    _ct_label = {
+                        "bar": "bar chart", "line": "line chart",
+                        "circle": "scatter plot", "pie": "pie chart",
+                        "area": "area chart", "map": "map",
+                        "text": "table", "ban": "KPI card",
+                        "polygon": "filled map", "automatic": "chart",
+                    }.get(_ct, _ct)
+                    _chart_types[_ct_label] = _chart_types.get(_ct_label, 0) + 1
+                _type_parts = []
+                for _ct_name, _ct_count in _chart_types.items():
+                    _type_parts.append(
+                        f"{_ct_count} {_ct_name}{'s' if _ct_count > 1 else ''}"
                     )
-                    from config.prompts import DR_DATA_SYSTEM_PROMPT
-                    _react_parts = []
-                    with _agent.client.messages.stream(
-                        model=_agent.MODEL,
-                        max_tokens=300,
-                        temperature=0.5,
-                        system=DR_DATA_SYSTEM_PROMPT,
-                        messages=[{"role": "user", "content": _react_prompt}],
-                    ) as _react_stream:
-                        for _chunk in _react_stream.text_stream:
-                            _react_parts.append(_chunk)
-                    _upload_msg = "".join(_react_parts)
-            except Exception as _react_err:
-                print(f"[UPLOAD REACT] Failed: {_react_err}")
+                _type_str = ", ".join(_type_parts) if _type_parts else "visuals"
 
-            if not _upload_msg:
-                # Fallback if Claude fails -- still be specific
-                _upload_msg = f"Loaded {name_str}."
-                if ws.get("data_preview") is not None:
-                    _fdf = ws["data_preview"]
-                    _upload_msg += (
-                        f" {len(_fdf):,} rows, {len(_fdf.columns)} columns. "
-                        f"Ready to analyze and build."
-                    )
-                elif _tableau_ctx:
-                    _upload_msg += f"{_tableau_ctx}. Ready to convert or build from this."
+                _fields = []
+                for _ds in _spec.get("datasources", []):
+                    for _col in _ds.get("columns", []):
+                        _fn = _col.get("name", "")
+                        if _fn and _fn not in _fields:
+                            _fields.append(_fn)
+                _field_str = ", ".join(_fields[:10])
+                if len(_fields) > 10:
+                    _field_str += f" + {len(_fields) - 10} more"
+
+                _palette = _spec.get("design", {}).get("color_palettes", [])
+                _colors = []
+                if _palette:
+                    _colors = _palette[0].get("colors", [])[:5]
+                _color_str = ", ".join(_colors) if _colors else ""
+
+                _card_msg = (
+                    f"I analyzed your screenshot. I can see {len(_ws_list)} visuals: "
+                    f"{_type_str}. "
+                )
+                if _field_str:
+                    _card_msg += f"Fields detected: {_field_str}. "
+                if _color_str:
+                    _card_msg += f"Color palette: {_color_str}. "
+                _card_msg += (
+                    "Say 'Build Power BI' and I will generate a full wireframe "
+                    "replicating this layout with synthetic data."
+                )
+            elif _is_tableau:
+                _card_msg = (
+                    f"Loaded {name_str}: "
+                    f"{len(_ws_list)} visuals, {len(_db_list)} dashboards, "
+                    f"{len(_cf_list)} calculated fields."
+                )
+            elif ws.get("data_preview") is not None:
+                _pdf = ws["data_preview"]
+                _card_msg = f"Loaded {name_str}: {len(_pdf):,} rows, {len(_pdf.columns)} columns."
 
             st.session_state.messages.append({
                 "role": "assistant",
-                "content": _upload_msg,
+                "content": _card_msg,
                 "timestamp": time.time(),
             })
 
+            # Intent buttons for Tableau / vision-extracted files
+            if _is_tableau:
+                _btn1_label = "Build Power BI Wireframe" if _is_vision else "Replicate in Power BI"
+                _btn1_msg = (
+                    "Build a Power BI wireframe from this screenshot."
+                    if _is_vision
+                    else "Replicate this Tableau workbook in Power BI."
+                )
+                with chat_container:
+                    with st.chat_message("assistant"):
+                        _btn_col1, _btn_col2 = st.columns(2)
+                        with _btn_col1:
+                            if st.button(_btn1_label,
+                                         key="intent_replicate",
+                                         use_container_width=True,
+                                         type="primary"):
+                                st.session_state["user_intent"] = "replicate"
+                                st.session_state.messages.append({
+                                    "role": "user",
+                                    "content": _btn1_msg,
+                                    "timestamp": time.time(),
+                                })
+                                st.rerun()
+                        with _btn_col2:
+                            _btn2_label = "Reimagine Layout" if _is_vision else "Reimagine as Modern Dashboard"
+                            if st.button(_btn2_label,
+                                         key="intent_reimagine",
+                                         use_container_width=True):
+                                st.session_state["user_intent"] = "reimagine"
+                                st.session_state.messages.append({
+                                    "role": "user",
+                                    "content": "Reimagine this as a modern Power BI dashboard.",
+                                    "timestamp": time.time(),
+                                })
+                                st.rerun()
+
+            # Intelligence card IS the reaction -- rerun to display
             st.rerun()
 
         # === HANDLE CAPABILITY CARD CLICKS ===

@@ -73,8 +73,8 @@ PLATFORM_TEMPLATE = _load_json(
 PBIR_TEMPLATE = _load_json(
     REFERENCE_REPORT_DIR / "definition.pbir",
     {
-        "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definitionProperties/2.0.0/schema.json",
-        "version": "4.0",
+        "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definitionProperties/1.0.0/schema.json",
+        "version": "1.0",
         "datasetReference": {"byPath": {"path": None}, "byConnection": None},
     },
 )
@@ -203,8 +203,8 @@ CULTURE_TMDL = _load_text(
         "\n"
         "\tlinguisticMetadata =\n"
         "\t\t\t{\n"
-        '\t\t\t  "Version": "1.0.0",\n'
-        '\t\t\t  "Language": "en-US"\n'
+        '\t\t\t\t"Version": "1.0.0",\n'
+        '\t\t\t\t"Language": "en-US"\n'
         "\t\t\t}\n"
         "\t\tcontentType: json\n"
         "\n"

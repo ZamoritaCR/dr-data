@@ -60,6 +60,27 @@ if str(DR_DATA_ROOT) not in sys.path:
 JOBS: dict[str, dict[str, Any]] = {}
 MAX_JOBS = 100
 
+# -- CSV endpoint for Web.Contents M queries --
+_CSV_ENDPOINT = "https://joao.theartofthepossible.io/drdata-csv"
+_CSV_NAME_MAP = {
+    "AF_Berliana": "AF_Berliana",
+    "Berliana": "AF_Berliana",
+    "COVID19": "COVID19",
+    "COVID-19": "COVID19",
+    "Coronavirus": "COVID19",
+    "DigitalAds": "DigitalAds",
+    "Digital": "DigitalAds",
+    "Superstore": "Superstore",
+}
+
+def _get_csv_url(filename: str) -> str | None:
+    """Map uploaded TWBX filename to live CSV URL, or None if not found."""
+    stem = Path(filename).stem
+    for key, csv_name in _CSV_NAME_MAP.items():
+        if key.lower() in stem.lower():
+            return f"{_CSV_ENDPOINT}/{csv_name}.csv"
+    return None
+
 SUPPORTED_EXTENSIONS = {
     "twb", "twbx", "csv", "xlsx", "xls", "json", "txt",
     "pdf", "docx", "pptx", "parquet", "tsv",
@@ -358,7 +379,42 @@ async def analyze(job_id: str, req: AnalyzeRequest = AnalyzeRequest()):
         else:
             analysis["error"] = f"No analyzer for .{ext}"
 
-        # -- LLM proposal --
+        # -- Fast path: Tableau files with known structure skip LLM entirely --
+        # The direct mapper in /build handles these deterministically.
+        _rs = analysis.get("report_structure") or {}
+        if ext in ("twb", "twbx") and (_rs.get("dashboards") or _rs.get("worksheets")):
+            ws_n = len(_rs.get("worksheets", []))
+            db_n = len(_rs.get("dashboards", []))
+            proposal = {
+                "domain": f"Tableau workbook — {ws_n} worksheets, {db_n} dashboards",
+                "business_questions": [],
+                "proposed_visuals": [],
+                "data_model": {
+                    "fact_table": "Data",
+                    "dimensions": [],
+                    "key_measures": [],
+                    "relationships": analysis.get("relationships", []),
+                },
+                "needs_synthetic_data": analysis.get("needs_synthetic_data", False),
+                "layout_suggestion": "Direct Tableau replica — deterministic mapping, no AI",
+                "direct_mapper": True,
+            }
+            job["analysis"] = analysis
+            job["proposal"] = proposal
+            job["status"] = "analyzed"
+            job["stage"] = "analyzed"
+            job["progress_pct"] = 100
+            _log(job, f"Tableau fast-path: {ws_n} worksheets, {db_n} dashboards — skipping LLM")
+            return {
+                "job_id": job_id,
+                "analysis": analysis,
+                "proposal": proposal,
+                "needs_synthetic_data": analysis.get("needs_synthetic_data", False),
+                "status": "analyzed",
+                "direct_mapper": True,
+            }
+
+        # -- LLM proposal (non-Tableau files) --
         llm_label = "Gemini 2.5 Flash" if LLM_PROVIDER == "gemini" else "Claude Opus"
         _log(job, f"Generating dashboard proposal with {llm_label}...")
         job["stage"] = "proposing"
@@ -686,6 +742,7 @@ async def build(job_id: str, req: BuildRequest):
                 data_profile=pbi_profile,
                 dashboard_spec=dashboard_spec,
                 data_file_path=df_path,
+                csv_url=_get_csv_url(job.get("filename", "")),
             )
 
             result_path = gen_result["path"]
@@ -738,7 +795,7 @@ async def build(job_id: str, req: BuildRequest):
             "donutChart": "pieChart", "donut": "pieChart",
             "scatterChart": "scatterChart", "scatter": "scatterChart",
             "card": "card", "kpi": "card",
-            "treemap": "treemap", "filledMap": "filledMap", "map": "filledMap",
+            "treemap": "treemap", "filledMap": "tableEx", "map": "tableEx",
             "matrix": "pivotTable", "table": "tableEx",
         }
 
@@ -907,6 +964,7 @@ async def build(job_id: str, req: BuildRequest):
             data_profile=data_profile,
             dashboard_spec=dashboard_spec,
             data_file_path=df_path,
+            csv_url=_get_csv_url(job.get("filename", "")),
         )
 
         result_path = gen_result["path"]

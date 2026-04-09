@@ -42,6 +42,48 @@ def _extract_mark_type(ws_element):
     return "automatic"
 
 
+def _disambiguate_chart_type(ws_info):
+    """Refine chart type using shelf fields and encodings after initial extraction.
+
+    The raw mark type from _extract_mark_type() is ambiguous in many cases:
+    - Circle can be a scatter plot OR a bubble map (when lat/lon fields present)
+    - Multipolygon/polygon are filled maps, not tables
+    - Shape with no shelf fields = UI decoration (zoom buttons), not a visual
+    - Shape with dims on rows = table, not scatter
+    - Automatic with empty shelves = card/BAN, not column chart
+
+    Must be called AFTER rows_fields/cols_fields are populated on ws_info.
+    Returns the refined chart type string.
+    """
+    mark = ws_info.get("chart_type", "automatic")
+    rows_f = ws_info.get("rows_fields", [])
+    cols_f = ws_info.get("cols_fields", [])
+    all_fields = rows_f + cols_f
+    field_str = " ".join(all_fields).lower()
+
+    # Circle + lat/lon fields = map, not scatter
+    if mark == "circle" and ("latitude" in field_str or "longitude" in field_str):
+        return "map"
+
+    # Multipolygon/polygon = filled map (choropleth)
+    if mark in ("multipolygon", "polygon"):
+        return "filled-map"
+
+    # Shape with no shelf fields = UI decoration (zoom buttons, icons)
+    if mark == "shape" and not rows_f and not cols_f:
+        return "skip"
+
+    # Shape with dims on rows = table, not scatter
+    if mark == "shape" and rows_f:
+        return "text"
+
+    # Automatic with empty shelves = card/BAN
+    if mark in ("automatic", "") and not rows_f and not cols_f:
+        return "ban"
+
+    return mark
+
+
 def _extract_shelf_fields(text):
     """Extract field references from shelf expression text.
 
@@ -281,6 +323,100 @@ def _extract_ws_design(ws_element):
     return ws_design
 
 
+def _parse_colors(ws_element, root):
+    """Extract color hex values used by a worksheet.
+
+    Checks three sources in priority order:
+    1. Worksheet style-rule mark encodings: <style-rule element="mark"><encoding attr="color"><map to="...">
+    2. Pane mark color values: <panes><pane><mark><color value="...">
+    3. Workbook-level custom palettes: <preferences><color-palette><color>
+
+    Returns a list of unique hex color strings (e.g. ["#4E79A7", "#F28E2B"]).
+    Returns empty list if no custom colors found.
+    """
+    colors = []
+    seen = set()
+
+    def _add(c):
+        if c and c.startswith("#") and c not in seen:
+            seen.add(c)
+            colors.append(c)
+
+    # Source 1: worksheet style-rule mark color encodings
+    for sr in ws_element.iter("style-rule"):
+        if sr.get("element") == "mark":
+            for enc in sr.findall("encoding"):
+                if enc.get("attr") == "color":
+                    for m in enc.findall("map"):
+                        _add(m.get("to", ""))
+            for fmt in sr.findall("format"):
+                if fmt.get("attr") == "mark-color":
+                    _add(fmt.get("value", ""))
+
+    # Source 2: pane mark color values
+    for pane in ws_element.iter("pane"):
+        for mark in pane.iter("mark"):
+            for color_el in mark.iter("color"):
+                _add(color_el.get("value", ""))
+
+    # Source 3: workbook-level custom color palettes (only if no ws-level colors)
+    if not colors:
+        for cp in root.iter("color-palette"):
+            for c_el in cp.findall("color"):
+                if c_el.text:
+                    _add(c_el.text.strip())
+
+    return colors
+
+
+def _parse_dashboard_zones(dashboard_element):
+    """Parse all zones from a dashboard element with worksheet references.
+
+    For each zone, extracts name, spatial layout, and the worksheet it
+    references (from param attribute or nested zone-xml content).
+
+    Returns list of dicts:
+        [{"name": str, "x": int, "y": int, "w": int, "h": int,
+          "worksheet_ref": str or "", "type": str}]
+    """
+    zones = []
+    seen = set()
+
+    for zone in dashboard_element.iter("zone"):
+        zone_name = zone.get("name", "")
+        if not zone_name or zone_name in seen:
+            continue
+        seen.add(zone_name)
+
+        zone_type = zone.get("type-v2", zone.get("type", ""))
+        layout = _extract_zone_layout(zone)
+
+        # Worksheet reference: check param attribute first (most common),
+        # then look for nested zone content that names a worksheet
+        ws_ref = zone.get("param", "")
+
+        # Some zones store the worksheet reference in a nested <zone> with
+        # a name attribute matching a worksheet
+        if not ws_ref:
+            for child_zone in zone.findall("zone"):
+                child_name = child_zone.get("name", "")
+                if child_name:
+                    ws_ref = child_name
+                    break
+
+        zones.append({
+            "name": zone_name,
+            "x": layout.get("x", 0),
+            "y": layout.get("y", 0),
+            "w": layout.get("w", 0),
+            "h": layout.get("h", 0),
+            "worksheet_ref": ws_ref,
+            "type": zone_type,
+        })
+
+    return zones
+
+
 def _extract_zone_layout(zone_element):
     """Extract spatial layout dict from a zone element's x/y/w/h attributes.
 
@@ -309,6 +445,90 @@ def _extract_zone_style(zone_element):
     return border
 
 
+def get_xml_root(path):
+    """Get the XML Element root from a .twb or .twbx file.
+
+    Returns the root Element or None on error. Caller must handle cleanup.
+    Used by Sprint 2 color_extractor for deep color extraction.
+    """
+    actual_path = path
+    tmpdir = None
+    if str(path).lower().endswith('.twbx'):
+        try:
+            tmpdir = tempfile.mkdtemp(prefix="etp_root_")
+            with zipfile.ZipFile(path, 'r') as z:
+                for name in z.namelist():
+                    if name.endswith('.twb'):
+                        z.extract(name, tmpdir)
+                        actual_path = os.path.join(tmpdir, name)
+                        break
+        except Exception:
+            if tmpdir:
+                shutil.rmtree(tmpdir, ignore_errors=True)
+            return None
+    try:
+        tree = ET.parse(actual_path)
+        return tree.getroot()
+    except Exception:
+        return None
+    finally:
+        if tmpdir:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _parse_windows(root):
+    """Extract the visible tab list from the <windows> section.
+
+    Returns ordered list:
+        [{"name": str, "type": str, "order": int, "hidden": bool}]
+    """
+    windows_el = root.find("windows")
+    if windows_el is None:
+        return []
+    tabs = []
+    for idx, win in enumerate(windows_el):
+        if win.tag != "window":
+            continue
+        name = win.get("name", "")
+        wclass = win.get("class", "")
+        hidden = win.get("hidden", "").lower() == "true"
+        if not name or not wclass:
+            continue
+        tabs.append({
+            "name": name,
+            "type": wclass,
+            "order": idx,
+            "hidden": hidden,
+        })
+    return tabs
+
+
+def _parse_stories(root):
+    """Extract story elements with their storypoints.
+
+    Returns:
+        [{"name": str, "storypoints": [{"caption": str, "sheet": str}]}]
+    """
+    stories = []
+    for story in root.iter("story"):
+        s_name = story.get("name", "")
+        if not s_name:
+            continue
+        points = []
+        for sp in story.iter("storypoint"):
+            caption = sp.get("caption", "")
+            sheet = ""
+            for child in sp:
+                if child.tag in ("dashboard", "worksheet"):
+                    sheet = child.get("name", "")
+                    break
+            if not sheet:
+                sheet = sp.get("captured-sheet", "")
+            points.append({"caption": caption, "sheet": sheet})
+        stories.append({"name": s_name, "storypoints": points})
+    return stories
+
+
 def parse_twb(path):
     """Parse a Tableau workbook XML with full metadata extraction.
 
@@ -317,7 +537,7 @@ def parse_twb(path):
     Returns a dict with:
         type, version, datasources, worksheets, dashboards,
         calculated_fields, parameters, filters, relationships,
-        has_hyper
+        has_hyper, windows, stories, worksheet_colors
     """
     spec = {
         "type": "tableau_workbook",
@@ -330,6 +550,9 @@ def parse_twb(path):
         "filters": [],
         "relationships": [],
         "has_hyper": False,
+        "windows": [],
+        "stories": [],
+        "worksheet_colors": {},
     }
 
     actual_path = path
@@ -516,19 +739,6 @@ def parse_twb(path):
                 elif attr == "tooltip":
                     ws_info["tooltip_fields"].append(field)
 
-            # Fallback for BAN/KPI worksheets: rows, cols, and encodings are all
-            # empty.  Measures live in datasource-dependencies/column-instance
-            # elements with type="quantitative" (suffix :qk in the name).
-            if not ws_info["measures"] and not ws_info["rows_fields"] and not ws_info["cols_fields"]:
-                for dep in ws.iter("datasource-dependencies"):
-                    for ci in dep.findall("column-instance"):
-                        if ci.get("type") == "quantitative":
-                            col_ref = ci.get("column", "")
-                            # strip brackets
-                            col_name = col_ref.strip("[]") if col_ref else ""
-                            if col_name:
-                                ws_info["measures"].append(col_name)
-
             # Sort field
             for sort_el in ws.iter("sort"):
                 sort_field = sort_el.get("column", sort_el.get("field", ""))
@@ -538,6 +748,120 @@ def parse_twb(path):
 
             # Per-worksheet design metadata
             ws_info["design"] = _extract_ws_design(ws)
+
+            # Per-worksheet color extraction
+            ws_info["colors"] = _parse_colors(ws, root)
+
+            # -- Mark type disambiguation using shelf context --
+            # Refine ambiguous mark types (circle, shape, multipolygon, etc.)
+            # now that shelf fields are populated.
+            refined = _disambiguate_chart_type(ws_info)
+            if refined != ws_info["chart_type"]:
+                ws_info["chart_type"] = refined
+                ws_info["mark_type"] = refined
+
+            # -- Chart type inference from shelf bindings --
+            # When the mark class is "automatic", infer a better chart type
+            # from the actual row/col shelf composition rather than defaulting
+            # to clusteredColumnChart for everything.
+            # Uses a priority chain: first match wins.
+            if ws_info["chart_type"] == "automatic":
+                rows_f = ws_info["rows_fields"]
+                cols_f = ws_info["cols_fields"]
+                all_f = rows_f + cols_f
+
+                # Helper: check if a shelf field is a measure (aggregated)
+                _agg_prefixes = ("sum:", "avg:", "cnt:", "count:", "countd:",
+                                 "min:", "max:", "median:", "attr:")
+                _date_prefixes = ("yr:", "mn:", "qr:", "tqr:", "tmn:",
+                                  "twk:", "day:", "mdy:", "wk:", "md:")
+                _geo_keywords = ("latitude", "longitude", "country", "state",
+                                 "city", "zip", "geo", "region", "province",
+                                 "county", "postal", "location")
+
+                def _is_measure_ref(f):
+                    fl = f.lower()
+                    return (fl.endswith(":qk") or
+                            any(fl.startswith(p) for p in _agg_prefixes))
+
+                def _is_date_ref(f):
+                    fl = f.lower()
+                    return (fl.endswith(":ok") or
+                            any(fl.startswith(p) for p in _date_prefixes))
+
+                def _is_geo_ref(f):
+                    fl = f.lower()
+                    return any(kw in fl for kw in _geo_keywords)
+
+                def _is_dim_ref(f):
+                    return (not f.startswith("federated.")
+                            and ":" in f
+                            and not _is_measure_ref(f)
+                            and not _is_date_ref(f))
+
+                # Count field types across both shelves
+                has_real_fields = any(
+                    ":" in f and not f.startswith("federated")
+                    for f in all_f
+                )
+                measure_refs = [f for f in all_f if _is_measure_ref(f)]
+                date_refs = [f for f in all_f if _is_date_ref(f)]
+                geo_refs = [f for f in all_f if _is_geo_ref(f)]
+                dim_refs = [f for f in all_f if _is_dim_ref(f)]
+
+                rows_measures = [f for f in rows_f if _is_measure_ref(f)]
+                cols_measures = [f for f in cols_f if _is_measure_ref(f)]
+                rows_dates = [f for f in rows_f if _is_date_ref(f)]
+                cols_dates = [f for f in cols_f if _is_date_ref(f)]
+                rows_dims = [f for f in rows_f if _is_dim_ref(f)]
+                cols_dims = [f for f in cols_f if _is_dim_ref(f)]
+
+                # Also check for "Measure Names"/"Measure Values" on shelves
+                has_measure_names = any(
+                    "Measure Names" in f or "Measure Values" in f
+                    for f in all_f
+                )
+
+                inferred = None
+
+                # 1. Geographic fields -> map
+                if geo_refs:
+                    inferred = "map"
+
+                # 2. No real fields at all -> card (single aggregate)
+                elif not has_real_fields:
+                    inferred = "ban"
+
+                # 3. Only measures, no dimensions or dates -> card
+                elif measure_refs and not dim_refs and not date_refs:
+                    inferred = "ban"
+
+                # 4. Measure Names/Values pattern -> multi-measure line
+                elif has_measure_names and date_refs:
+                    inferred = "line"
+
+                # 5. Date on either shelf + measure -> line chart
+                elif (cols_dates or rows_dates) and measure_refs:
+                    inferred = "line"
+
+                # 6. Both shelves have measures (X=measure, Y=measure) -> scatter
+                elif rows_measures and cols_measures and not dim_refs:
+                    inferred = "circle"
+
+                # 7. Both shelves have dims (no measures) -> text table
+                elif rows_dims and cols_dims and not measure_refs:
+                    inferred = "text"
+
+                # 8. Two+ measures + one dimension -> line
+                elif len(measure_refs) >= 2 and len(dim_refs) == 1:
+                    inferred = "line"
+
+                # 9. Default fallback (current behavior)
+                # else: keep "automatic" -> clusteredColumnChart
+
+                if inferred:
+                    ws_info["chart_type"] = inferred
+                    ws_info["mark_type"] = inferred
 
             spec["worksheets"].append(ws_info)
 
@@ -631,28 +955,26 @@ def parse_twb(path):
                             seen_ws_used.add(zone_name)
                             db_info["worksheets_used"].append(zone_name)
 
+            # Parsed zones with worksheet references (for QA manifest)
+            db_info["parsed_zones"] = _parse_dashboard_zones(db)
+
             spec["dashboards"].append(db_info)
 
-        # --- Modern Tableau object-graph relationships (v2018.3+) ---
-        for rel in root.iter("relationship"):
-            left_table = rel.get("left-table", "")
-            right_table = rel.get("right-table", "")
-            join_type = rel.get("join", "inner")
-            clause = rel.find("clause") or rel.find(".//clause")
-            if clause is not None:
-                left_col = _safe_strip_brackets(clause.get("left-field", ""))
-                right_col = _safe_strip_brackets(clause.get("right-field", ""))
-                if left_col and right_col:
-                    spec["relationships"].append({
-                        "left_table": left_table,
-                        "right_table": right_table,
-                        "left_column": left_col,
-                        "right_column": right_col,
-                        "left_ref": f"{left_table}.{left_col}",
-                        "right_ref": f"{right_table}.{right_col}",
-                        "join_type": join_type,
-                        "source": "object-graph",
-                    })
+        # --- Windows (visible tab list) ---
+        spec["windows"] = _parse_windows(root)
+
+        # --- Stories ---
+        spec["stories"] = _parse_stories(root)
+
+        # --- Per-worksheet colors ---
+        ws_colors = {}
+        for ws in root.iter("worksheet"):
+            ws_name = ws.get("name", "")
+            if ws_name:
+                colors = _parse_colors(ws, root)
+                if colors:
+                    ws_colors[ws_name] = colors
+        spec["worksheet_colors"] = ws_colors
 
     except Exception as e:
         spec["parse_error"] = str(e)

@@ -135,7 +135,15 @@ def ingest_file(file_path):
             result = ingest_zip(file_path)
 
         elif category == "image":
-            result["report_structure"] = _extract_image(file_path, ext)
+            # Try GPT-4o vision extraction for PNG/JPG dashboard screenshots
+            if ext in ("png", "jpg", "jpeg"):
+                vision_spec = _try_vision_extraction(file_path)
+                if vision_spec and vision_spec.get("worksheets"):
+                    result["report_structure"] = vision_spec
+                else:
+                    result["report_structure"] = _extract_image(file_path, ext)
+            else:
+                result["report_structure"] = _extract_image(file_path, ext)
 
         elif category == "document":
             result["report_structure"] = _extract_document(file_path, ext)
@@ -723,3 +731,25 @@ def _try_text_extract(file_path):
             return "\n".join(chunks[:200])
         except Exception:
             return "[Could not extract text from this file]"
+
+
+def _try_vision_extraction(file_path):
+    """Attempt GPT-4o vision extraction on a dashboard screenshot.
+
+    Returns a tableau_spec dict if successful and visuals were found,
+    or None on failure (caller falls back to base64 image extraction).
+    """
+    try:
+        from core.vision_extractor import extract_dashboard_spec_from_image
+        spec = extract_dashboard_spec_from_image(file_path)
+        if spec and spec.get("worksheets"):
+            print(
+                f"[VISION] Extracted {len(spec['worksheets'])} visuals "
+                f"from screenshot: {os.path.basename(file_path)}"
+            )
+            return spec
+    except ImportError:
+        print("[VISION] vision_extractor not available -- skipping")
+    except Exception as e:
+        print(f"[VISION] Extraction failed (non-fatal): {e}")
+    return None

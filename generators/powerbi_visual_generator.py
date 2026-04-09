@@ -33,9 +33,9 @@ TABLEAU_TO_PBI_VISUAL_MAP = {
     "crosstab":                     {"visual_type": "matrix",                      "orientation": None},
     "table":                        {"visual_type": "tableEx",                     "orientation": None},
     # MAP
-    "map":                          {"visual_type": "map",                         "orientation": None},
-    "filled_map":                   {"visual_type": "filledMap",                   "orientation": None},
-    "shape_map":                    {"visual_type": "shapeMap",                    "orientation": None},
+    "map":                          {"visual_type": "tableEx",                     "orientation": None},
+    "filled_map":                   {"visual_type": "tableEx",                     "orientation": None},
+    "shape_map":                    {"visual_type": "tableEx",                     "orientation": None},
     # TREEMAP / HIERARCHY
     "square":                       {"visual_type": "treemap",                     "orientation": None},
     "treemap":                      {"visual_type": "treemap",                     "orientation": None},
@@ -125,7 +125,7 @@ def _detect_mark_type(worksheet_info):
         "square": "square",
         "text": "text",
         "map": "map",
-        "polygon": "filled_map",
+        "polygon": "table",
         "shape": "scatter",
     }
 

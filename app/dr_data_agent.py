@@ -842,6 +842,37 @@ class DrDataAgent:
         if df is not None:
             self.dataframe = df
 
+    _CSV_ENDPOINT = "https://joao.theartofthepossible.io/drdata-csv"
+    _CSV_NAME_MAP = {
+        "AF_Berliana": "AF_Berliana",
+        "Berliana": "AF_Berliana",
+        "COVID19": "COVID19",
+        "COVID-19": "COVID19",
+        "Coronavirus": "COVID19",
+        "DigitalAds": "DigitalAds",
+        "Digital": "DigitalAds",
+        "Superstore": "Superstore",
+    }
+
+    def _get_csv_url(self):
+        """Derive the live CSV URL from the uploaded TWBX filename.
+
+        Returns None if the source is not a known TWBX, so the generator
+        falls back to the local-file M expression.
+        """
+        source = ""
+        if self.tableau_spec and self.tableau_spec.get("file_name"):
+            source = self.tableau_spec["file_name"]
+        elif self.data_file_path:
+            source = os.path.basename(self.data_file_path)
+        if not source:
+            return None
+        stem = os.path.splitext(os.path.basename(source))[0]
+        for key, csv_name in self._CSV_NAME_MAP.items():
+            if key.lower() in stem.lower():
+                return f"{self._CSV_ENDPOINT}/{csv_name}.csv"
+        return None
+
     # ------------------------------------------------------------------ #
     #  OpenAI secondary engine                                             #
     # ------------------------------------------------------------------ #
@@ -977,6 +1008,14 @@ class DrDataAgent:
         # Store report structure (Tableau, Alteryx, Business Objects)
         if result.get("report_structure"):
             self.tableau_spec = result["report_structure"]
+
+            # Sprint 2: cache XML root for deep color extraction
+            if self.tableau_spec.get("type", "").startswith("tableau"):
+                try:
+                    from core.enhanced_tableau_parser import get_xml_root
+                    self._twb_xml_root = get_xml_root(file_path)
+                except Exception:
+                    self._twb_xml_root = None
 
             # Wire field resolution: if we have both a Tableau spec and data,
             # resolve field names against actual columns using fuzzy matching.
@@ -1418,8 +1457,40 @@ class DrDataAgent:
                 _ctx_lines.append(f"{role}: {content}")
             _recent_ctx = "\n".join(_ctx_lines)
 
-        _intent = _classify_intent(user_message, _recent_ctx)
+        # Build file context for intent classifier
+        _file_context = {
+            "source_type": "tableau" if self.tableau_spec else (
+                "image" if (self.tableau_spec and
+                            self.tableau_spec.get("source") == "vision_screenshot")
+                else "data" if self.dataframe is not None else "none"
+            ),
+            "file_name": os.path.basename(self.data_file_path or ""),
+            "has_tableau_spec": bool(self.tableau_spec),
+            "has_dataframe": self.dataframe is not None,
+            "worksheet_count": len(self.tableau_spec.get("worksheets", []))
+                if self.tableau_spec else 0,
+            "dashboard_count": len(self.tableau_spec.get("dashboards", []))
+                if self.tableau_spec else 0,
+        }
+
+        _intent = _classify_intent(user_message, _recent_ctx, _file_context)
         _intent_type = _intent["intent"]
+        _intent_mode = _intent.get("mode", "creative")
+
+        # Propagate mode to session state for downstream routing
+        # (replicate vs creative for Tableau/vision specs)
+        try:
+            import streamlit as _st_mode
+            if _intent_mode == "replicate":
+                _st_mode.session_state["user_intent"] = "replicate"
+            elif _intent_mode == "creative" and _intent_type in (BUILD_DASHBOARD,):
+                _st_mode.session_state["user_intent"] = "reimagine"
+        except Exception:
+            pass
+
+        print(f"[INTENT] {_intent_type} mode={_intent_mode} "
+              f"conf={_intent.get('confidence', '?')} "
+              f"via={_intent.get('details', '?')}")
 
         want_pbi = _intent_type == BUILD_POWERBI
         want_dash = _intent_type == BUILD_DASHBOARD
@@ -1468,75 +1539,49 @@ class DrDataAgent:
             print(f"[EXPORT] is_export=True. dataframe={self.dataframe is not None}, "
                   f"tableau_spec={bool(self.tableau_spec)}, "
                   f"session={bool(self.session)}")
-            # Guard: need data first -- try real TWBX extract, then synthetic
+            # Guard: need data first -- but auto-generate if we have Tableau structure
             if self.dataframe is None and self.tableau_spec:
-                output_dir = str(PROJECT_ROOT / "output")
-
-                # Step A: try to extract real embedded data from the .twbx archive
-                if (self.data_file_path
-                        and self.data_file_path.lower().endswith(".twbx")):
+                self._report_progress(
+                    "No extractable data found in the Tableau file "
+                    "(uses .hyper format). Generating synthetic data "
+                    "from the workbook structure..."
+                )
+                try:
+                    from core.synthetic_data import generate_from_tableau_spec
+                    ws_count = len(self.tableau_spec.get("worksheets", []))
+                    cf_count = len(self.tableau_spec.get("calculated_fields", []))
                     self._report_progress(
-                        "Extracting embedded data from Tableau archive..."
+                        f"Reading Tableau structure: {ws_count} worksheets, "
+                        f"{cf_count} calculated fields"
                     )
-                    try:
-                        from core.synthetic_data import extract_twbx_embedded_data
-                        df, csv_path = extract_twbx_embedded_data(
-                            self.data_file_path, output_dir=output_dir
-                        )
-                        if df is not None:
-                            self.dataframe = df
-                            self.data_file_path = csv_path
-                            self.data_path = csv_path
-                            if self.data_profile is None:
-                                self.data_profile = self.analyzer.profile(df)
-                            self._report_progress(
-                                f"Extracted real data from Tableau file: "
-                                f"{len(df):,} rows x {len(df.columns)} columns"
-                            )
-                    except Exception as extract_err:
-                        print(f"[TWBX] Extract failed: {extract_err}")
 
-                # Step B: fall back to synthetic if extraction didn't produce data
-                if self.dataframe is None:
+                    output_dir = str(PROJECT_ROOT / "output")
+                    df, csv_path, schema = generate_from_tableau_spec(
+                        self.tableau_spec,
+                        num_rows=2000,
+                        output_dir=output_dir,
+                    )
+                    self.dataframe = df
+                    self.data_file_path = csv_path
+                    self.data_path = csv_path
+                    # Profile immediately so context builder sees it
+                    if self.data_profile is None:
+                        self.data_profile = self.analyzer.profile(df)
+
                     self._report_progress(
-                        "No extractable data found in the Tableau file "
-                        "(uses .hyper format). Generating synthetic data "
-                        "from the workbook structure..."
+                        f"Synthetic data generated: {len(df)} rows x "
+                        f"{len(df.columns)} columns ({len(schema)} fields "
+                        f"inferred from Tableau structure). "
+                        f"Saved to {os.path.basename(csv_path)}"
                     )
-                    try:
-                        from core.synthetic_data import generate_from_tableau_spec
-                        ws_count = len(self.tableau_spec.get("worksheets", []))
-                        cf_count = len(self.tableau_spec.get("calculated_fields", []))
-                        self._report_progress(
-                            f"Reading Tableau structure: {ws_count} worksheets, "
-                            f"{cf_count} calculated fields"
-                        )
-
-                        df, csv_path, schema = generate_from_tableau_spec(
-                            self.tableau_spec,
-                            num_rows=2000,
-                            output_dir=output_dir,
-                        )
-                        self.dataframe = df
-                        self.data_file_path = csv_path
-                        self.data_path = csv_path
-                        if self.data_profile is None:
-                            self.data_profile = self.analyzer.profile(df)
-
-                        self._report_progress(
-                            f"Synthetic data generated: {len(df)} rows x "
-                            f"{len(df.columns)} columns ({len(schema)} fields "
-                            f"inferred from Tableau structure). "
-                            f"Saved to {os.path.basename(csv_path)}"
-                        )
-                    except Exception as synth_err:
-                        print(f"[SYNTH] Failed to generate synthetic data: {synth_err}")
-                        import traceback
-                        traceback.print_exc()
-                        self._report_progress(
-                            f"Synthetic data generation failed: {synth_err}. "
-                            "Upload a CSV or Excel file with your data to proceed."
-                        )
+                except Exception as synth_err:
+                    print(f"[SYNTH] Failed to generate synthetic data: {synth_err}")
+                    import traceback
+                    traceback.print_exc()
+                    self._report_progress(
+                        f"Synthetic data generation failed: {synth_err}. "
+                        "Upload a CSV or Excel file with your data to proceed."
+                    )
 
             if self.dataframe is None:
                 return {
@@ -1624,30 +1669,76 @@ class DrDataAgent:
             if want_dash:
                 print('[BUILD] Starting dashboard generation...')
                 self._dashboard_iteration += 1
-                _progress(
-                    f"Claude is creating your dashboard from scratch "
-                    f"(version {self._dashboard_iteration})..."
+
+                # Check if this is a vision-sourced spec that should be
+                # replicated deterministically instead of AI-generated
+                _is_vision_replica = (
+                    self.tableau_spec
+                    and self.tableau_spec.get("source") == "vision_screenshot"
+                    and self.tableau_spec.get("worksheets")
                 )
-                try:
-                    p = self._generate_freeform_dashboard(
-                        user_message, title, _progress
+
+                if _is_vision_replica:
+                    _progress(
+                        f"Building replica dashboard from screenshot "
+                        f"({len(self.tableau_spec.get('worksheets', []))} visuals)..."
                     )
-                    if p:
-                        fname = os.path.basename(p)
-                        downloads.append({
-                            "name": "Interactive Dashboard",
-                            "filename": fname,
-                            "path": p,
-                            "description": (
-                                "AI-generated interactive dashboard -- "
-                                "unique design, charts, and insights"
-                            ),
-                        })
-                        self.trace.log_deliverable(
-                            "Interactive Dashboard", p,
-                            {"title": title, "type": "html"},
+                    try:
+                        from core.vision_html_builder import build_replica_html
+                        p = build_replica_html(
+                            self.tableau_spec,
+                            output_dir=self.output_dir,
+                            title=title,
                         )
-                        _progress("  Dashboard complete.")
+                        if p:
+                            fname = os.path.basename(p)
+                            downloads.append({
+                                "name": "Dashboard Replica",
+                                "filename": fname,
+                                "path": p,
+                                "description": (
+                                    "Screenshot replica -- matching layout, "
+                                    "chart types, and colors"
+                                ),
+                            })
+                            self.trace.log_deliverable(
+                                "Dashboard Replica", p,
+                                {"title": title, "type": "html"},
+                            )
+                            _progress("  Replica dashboard complete.")
+                    except Exception as e:
+                        print('[BUILD] Vision replica FAILED, falling back to freeform:')
+                        _tb.print_exc()
+                        _progress(f"  Replica failed ({str(e)[:60]}), trying AI generation...")
+                        _is_vision_replica = False
+
+                if not _is_vision_replica:
+                    _progress(
+                        f"Claude is creating your dashboard from scratch "
+                        f"(version {self._dashboard_iteration})..."
+                    )
+
+                try:
+                    if not _is_vision_replica:
+                        p = self._generate_freeform_dashboard(
+                            user_message, title, _progress
+                        )
+                        if p:
+                            fname = os.path.basename(p)
+                            downloads.append({
+                                "name": "Interactive Dashboard",
+                                "filename": fname,
+                                "path": p,
+                                "description": (
+                                    "AI-generated interactive dashboard -- "
+                                    "unique design, charts, and insights"
+                                ),
+                            })
+                            self.trace.log_deliverable(
+                                "Interactive Dashboard", p,
+                                {"title": title, "type": "html"},
+                            )
+                            _progress("  Dashboard complete.")
                 except Exception as e:
                     print('[BUILD] Dashboard FAILED:')
                     _tb.print_exc()
@@ -1763,12 +1854,15 @@ class DrDataAgent:
                     else:
                         zip_path = pbi_result.get("file_path")
                         pbi_build_context = pbi_result.get("build_context", {})
+                        _pbip_folder = pbi_result.get("pbip_folder_path", "")
                         if zip_path and os.path.exists(zip_path):
                             fname = os.path.basename(zip_path)
                             downloads.append({
                                 "name": "Power BI Project",
                                 "filename": fname,
                                 "path": zip_path,
+                                "pbip_folder_path": _pbip_folder,
+                                "display_name": title,
                                 "description": (
                                     "Full .pbip project with DAX measures, "
                                     "visuals, and data model"
@@ -1779,6 +1873,23 @@ class DrDataAgent:
                                 {"title": title, "type": "pbip",
                                  "build_context": pbi_build_context},
                             )
+                        # Run QA agent on generated PBIP
+                        if _pbip_folder and os.path.isdir(_pbip_folder):
+                            try:
+                                from core.qa_agent import QAAgent
+                                _qa = QAAgent(_pbip_folder, dataframe=self.dataframe)
+                                _qa_result = _qa.run_full_qa()
+                                if _qa_result["fixes"]:
+                                    _progress(f"  QA auto-fixed: {', '.join(_qa_result['fixes'][:3])}")
+                                if not _qa_result["passed"]:
+                                    _progress(f"  QA BLOCKED: {len(_qa_result['issues'])} issue(s)")
+                                    for _qi in _qa_result["issues"][:5]:
+                                        _progress(f"    - {_qi}")
+                                else:
+                                    _warn_count = len(_qa_result.get("warnings", []))
+                                    _progress(f"  QA passed ({_warn_count} advisory warnings)")
+                            except Exception as _qa_err:
+                                print(f"[QA] Non-fatal: {_qa_err}")
                         _progress("  Power BI project complete.")
                 except Exception as e:
                     print(f"[PBI] GENERATION FAILED:")
@@ -2900,25 +3011,6 @@ Output ONLY valid JSON. No markdown. No commentary."""
             except Exception as e:
                 print(f"[RECOVER] File load failed: {e}")
 
-        # 2.5 Real data from .twbx Hyper/CSV extract
-        if self.data_file_path and self.data_file_path.lower().endswith(".twbx"):
-            try:
-                from core.synthetic_data import extract_twbx_embedded_data
-                output_dir = str(PROJECT_ROOT / "output")
-                df, csv_path = extract_twbx_embedded_data(
-                    self.data_file_path, output_dir=output_dir
-                )
-                if df is not None:
-                    self.dataframe = df
-                    self.data_file_path = csv_path
-                    self.data_path = csv_path
-                    if self.data_profile is None:
-                        self.data_profile = self.analyzer.profile(df)
-                    print(f"[RECOVER] Extracted real TWBX data: {df.shape}")
-                    return
-            except Exception as e:
-                print(f"[RECOVER] TWBX extract failed: {e}")
-
         # 3. Synthetic from Tableau spec
         if self.tableau_spec:
             try:
@@ -2991,6 +3083,10 @@ Output ONLY valid JSON. No markdown. No commentary."""
         else:
             table_name = project_name.replace(" ", "_")
 
+        # Never expose the internal synthetic extraction filename as PBI table name
+        if table_name == "synthetic_tableau_data":
+            table_name = "Data"
+
         pbi_profile = pbi_analyzer.analyze(self.dataframe, table_name=table_name)
 
         n_measures = sum(
@@ -3007,7 +3103,29 @@ Output ONLY valid JSON. No markdown. No commentary."""
         # When we have a Tableau spec with dashboards, bypass AI for visual
         # structure. This produces a faithful replica instead of an AI
         # "interpretation". The existing AI path is preserved as fallback.
-        if self.tableau_spec and self.tableau_spec.get("dashboards"):
+        # Use direct mapper whenever we have Tableau structure — dashboards OR
+        # bare worksheets. Never fall through to AI for Tableau files.
+        # user_intent from the intelligence card buttons overrides:
+        #   "replicate" -> force direct mapper path
+        #   "reimagine" -> force full AI pipeline path
+        try:
+            import streamlit as _st_intent
+            _user_intent = _st_intent.session_state.get("user_intent", "")
+        except Exception:
+            _user_intent = ""
+        _has_tableau_structure = bool(
+            self.tableau_spec and (
+                self.tableau_spec.get("dashboards") or
+                self.tableau_spec.get("worksheets")
+            )
+        )
+        # If user chose "reimagine", skip direct mapper -- fall through to AI
+        if _user_intent == "reimagine":
+            _has_tableau_structure = False
+            self._report_progress(
+                "Reimagine mode: using full AI pipeline for creative dashboard design"
+            )
+        if _has_tableau_structure:
             try:
                 from core.direct_mapper import build_pbip_config_from_tableau
 
@@ -3039,6 +3157,21 @@ Output ONLY valid JSON. No markdown. No commentary."""
 
                 self.dashboard_spec = dashboard_spec
 
+                # Sprint 2: Deep color extraction for enhanced theming
+                try:
+                    from core.color_extractor import extract_all_colors, build_unified_palette
+                    if hasattr(self, '_twb_xml_root') and self._twb_xml_root is not None:
+                        extracted = extract_all_colors(self._twb_xml_root)
+                        unified = build_unified_palette(extracted)
+                        if unified:
+                            dashboard_spec["_unified_palette"] = unified
+                            self._report_progress(
+                                f"Color extraction: {len(unified)} palette colors "
+                                f"extracted from workbook design"
+                            )
+                except Exception as e:
+                    print(f"[WARN] Sprint 2 color extraction skipped: {e}")
+
                 # Jump to PBIP generator (skip Claude + GPT-4 pipeline)
                 self._report_progress(
                     "Writing Power BI project files: page layouts, "
@@ -3060,6 +3193,7 @@ Output ONLY valid JSON. No markdown. No commentary."""
                     sheet_name=self.sheet_name,
                     relationships=relationships or None,
                     snowflake_config=self.snowflake_config,
+                    csv_url=self._get_csv_url(),
                     dataframe=self.dataframe,
                 )
                 result_path = gen_result["path"]
@@ -3111,11 +3245,165 @@ Output ONLY valid JSON. No markdown. No commentary."""
                     except Exception as cv_err:
                         print(f"[CALC-VALIDATOR] Audit failed (non-fatal): {cv_err}")
 
+                # Generate formula translation audit report (HTML)
+                try:
+                    from core.audit_report import build_audit_data, generate_audit_report
+                    _measures_full = dashboard_spec.get("measures_full", [])
+                    if not _measures_full:
+                        # Fallback: reconstruct from config measures
+                        _measures_full = [
+                            {"name": m["name"], "dax": m.get("dax", m.get("expression", "")),
+                             "format": m.get("format", "#,0")}
+                            for m in config.get("tmdl_model", {}).get("tables", [{}])[0].get("measures", [])
+                        ]
+                    _wb_name = self.tableau_spec.get("workbook_name", "")
+                    if not _wb_name and self.data_file_path:
+                        _wb_name = os.path.splitext(os.path.basename(self.data_file_path))[0]
+                    _audit_data = build_audit_data(
+                        measures=_measures_full,
+                        tableau_spec=self.tableau_spec,
+                        calc_audit_result=calc_audit_result,
+                        workbook_name=_wb_name,
+                        tableau_version=self.tableau_spec.get("version", ""),
+                    )
+                    _audit_html = generate_audit_report(
+                        fields=_audit_data["fields"],
+                        dq=_audit_data["dq"],
+                        warnings=_audit_data["warnings"],
+                        meta=_audit_data["meta"],
+                    )
+                    _audit_html_path = os.path.join(self.output_dir, "translation_audit.html")
+                    with open(_audit_html_path, "w", encoding="utf-8") as _af:
+                        _af.write(_audit_html)
+                    self.generated_files.append(_audit_html_path)
+                    self._report_progress(
+                        f"Translation audit report: DQ {_audit_data['dq']['score']}/100, "
+                        f"{_audit_data['meta']['auto_good']} mapped, "
+                        f"{_audit_data['meta']['blocked']} blocked"
+                    )
+                except Exception as _ar_err:
+                    print(f"[AUDIT-REPORT] Generation failed (non-fatal): {_ar_err}")
+
+                # Preflight validation + self-healing + QUALITY GATE
+                _quality_ok = True
+                try:
+                    from core.preflight_validator import validate as _preflight
+                    from core.pbip_healer import heal as _heal
+                    _pf = _preflight(result_path)
+                    if not _pf.all_passed:
+                        _fixes = _heal(result_path, _pf)
+                        self._report_progress(
+                            f"Preflight: {_pf.fail_count} issues found, "
+                            f"{len(_fixes)} auto-healed"
+                        )
+                        _pf2 = _preflight(result_path)
+                        if not _pf2.all_passed:
+                            # Check CRITICAL failures that mean a broken file
+                            _critical_names = {
+                                "pages_exist", "visuals_exist",
+                                "no_file_contents", "no_csv_file_contents",
+                            }
+                            _critical_fails = [
+                                f for f in _pf2.failed
+                                if f.name in _critical_names
+                            ]
+                            if _critical_fails:
+                                _quality_ok = False
+                                _fail_names = [f.name for f in _critical_fails]
+                                self._report_progress(
+                                    f"QUALITY GATE FAILED: {', '.join(_fail_names)}. "
+                                    f"Output blocked -- attempting rebuild..."
+                                )
+                                for _f in _critical_fails:
+                                    print(f"    [QUALITY-GATE] CRITICAL: {_f}")
+                            else:
+                                # Non-critical failures -- warn but allow
+                                for _f in _pf2.failed:
+                                    print(f"    [PREFLIGHT] non-critical: {_f}")
+                    else:
+                        self._report_progress(
+                            f"Preflight: {_pf.pass_count} checks passed"
+                        )
+                except Exception as _pf_err:
+                    print(f"[PREFLIGHT] Non-fatal: {_pf_err}")
+
+                # If quality gate failed, attempt one rebuild with forced inline data
+                if not _quality_ok:
+                    try:
+                        self._report_progress("Quality gate rebuild: forcing inline data...")
+                        import shutil as _shutil_qg
+                        _shutil_qg.rmtree(result_path, ignore_errors=True)
+                        _gen2 = PBIPGenerator(output_dir)
+                        _gen2_result = _gen2.generate(
+                            config, pbi_profile, dashboard_spec,
+                            data_file_path=None,  # Force no file path
+                            sheet_name=self.sheet_name,
+                            relationships=relationships or None,
+                            snowflake_config=None,
+                            csv_url=self._get_csv_url(),
+                            dataframe=self.dataframe,
+                        )
+                        result_path = _gen2_result["path"]
+                        # Re-validate
+                        _pf3 = _preflight(result_path)
+                        if _pf3.all_passed:
+                            _quality_ok = True
+                            self._report_progress("Quality gate rebuild PASSED")
+                        else:
+                            _still_critical = [
+                                f for f in _pf3.failed
+                                if f.name in {"pages_exist", "visuals_exist"}
+                            ]
+                            if not _still_critical:
+                                _quality_ok = True
+                                self._report_progress(
+                                    f"Quality gate rebuild: {_pf3.fail_count} "
+                                    f"non-critical issues remaining -- allowing"
+                                )
+                            else:
+                                self._report_progress(
+                                    f"Quality gate rebuild STILL FAILED: "
+                                    f"{[f.name for f in _still_critical]}"
+                                )
+                    except Exception as _qg_err:
+                        print(f"[QUALITY-GATE] Rebuild failed: {_qg_err}")
+
+                # Sprint 2: Copilot enrichment (async-safe, non-blocking)
+                try:
+                    from core.copilot_enricher import enrich as copilot_enrich
+                    self._report_progress("Running Copilot enrichment analysis...")
+                    enrichment = copilot_enrich(self.tableau_spec, gen_result)
+                    self._copilot_enrichment = enrichment
+                    score = enrichment.get("score", 0)
+                    n_suggestions = sum(
+                        len(enrichment.get(k, []))
+                        for k in ("chart_suggestions", "missing_kpis", "dax_tips",
+                                  "accessibility", "naming", "layout_tips")
+                    )
+                    warnings = enrichment.get("warnings", [])
+                    if warnings:
+                        self._report_progress(
+                            f"Copilot: {'; '.join(warnings)}"
+                        )
+                    elif n_suggestions > 0:
+                        self._report_progress(
+                            f"Copilot analysis: score {score}/100, "
+                            f"{n_suggestions} suggestions generated"
+                        )
+                    else:
+                        self._report_progress("Copilot: no suggestions (clean conversion)")
+                except Exception as _ce:
+                    print(f"[COPILOT] Enrichment failed (non-fatal): {_ce}")
+                    self._copilot_enrichment = {}
+
                 zip_name = project_name.replace(" ", "_")
                 zip_path = shutil.make_archive(
                     os.path.join(output_dir, zip_name), "zip", result_path
                 )
                 self.generated_files.append(zip_path)
+                # Store PBIP folder path for Power BI publish button
+                self.last_pbip_folder_path = result_path
+                self.last_pbip_display_name = project_name
                 self._report_progress("Power BI project ready for download (direct Tableau replica)")
 
                 # Build context for summary
@@ -3126,6 +3414,9 @@ Output ONLY valid JSON. No markdown. No commentary."""
                 visuals_per_page = [len(p.get("visuals", []))
                                     for p in dashboard_spec.get("pages", [])]
                 measure_names = [m["name"] for m in dashboard_spec.get("measures", [])]
+
+                # Sprint 2: include copilot enrichment in result
+                _enrichment = getattr(self, '_copilot_enrichment', {})
 
                 return json.dumps({
                     "status": "success",
@@ -3140,6 +3431,7 @@ Output ONLY valid JSON. No markdown. No commentary."""
                     "total_visuals": sum(visuals_per_page),
                     "measures": measure_names,
                     "field_audit": field_audit,
+                    "copilot_enrichment": _enrichment,
                     "build_context": {
                         "data_file": data_file_name,
                         "row_count": row_count,
@@ -3398,6 +3690,7 @@ Output ONLY valid JSON. No markdown. No commentary."""
                 sheet_name=self.sheet_name,
                 relationships=relationships or None,
                 snowflake_config=self.snowflake_config,
+                csv_url=self._get_csv_url(),
                 dataframe=self.dataframe,
             )
             # generator.generate() returns a dict with path + audit info
@@ -3451,11 +3744,36 @@ Output ONLY valid JSON. No markdown. No commentary."""
                 except Exception as cv_err:
                     print(f"[CALC-VALIDATOR] Audit failed (non-fatal): {cv_err}")
 
+            # Preflight validation + self-healing
+            try:
+                from core.preflight_validator import validate as _preflight
+                from core.pbip_healer import heal as _heal
+                _pf = _preflight(result_path)
+                if not _pf.all_passed:
+                    _fixes = _heal(result_path, _pf)
+                    self._report_progress(
+                        f"Preflight: {_pf.fail_count} issues found, "
+                        f"{len(_fixes)} auto-healed"
+                    )
+                    _pf2 = _preflight(result_path)
+                    if not _pf2.all_passed:
+                        for _f in _pf2.failed:
+                            print(f"    [PREFLIGHT] still failing: {_f}")
+                else:
+                    self._report_progress(
+                        f"Preflight: {_pf.pass_count} checks passed"
+                    )
+            except Exception as _pf_err:
+                print(f"[PREFLIGHT] Non-fatal: {_pf_err}")
+
             zip_name = project_name.replace(" ", "_")
             zip_path = shutil.make_archive(
                 os.path.join(output_dir, zip_name), "zip", result_path
             )
             self.generated_files.append(zip_path)
+            # Store PBIP folder path for Power BI publish button
+            self.last_pbip_folder_path = result_path
+            self.last_pbip_display_name = project_name
 
             self._report_progress("Power BI project ready for download")
 
@@ -3569,6 +3887,7 @@ Output ONLY valid JSON. No markdown. No commentary."""
             return json.dumps({
                 "status": "success",
                 "file_path": zip_path,
+                "pbip_folder_path": result_path,
                 "project_name": project_name,
                 "pages": page_count,
                 "visuals": visual_count,
@@ -3600,8 +3919,8 @@ Output ONLY valid JSON. No markdown. No commentary."""
         "stacked-bar": "stackedBarChart",
         "line": "lineChart",
         "area": "areaChart",
-        "map": "map",
-        "filled-map": "filledMap",
+        "map": "tableEx",
+        "filled-map": "tableEx",
         "text": "tableEx",
         "text-table": "tableEx",
         "crosstab": "matrix",
@@ -3619,8 +3938,8 @@ Output ONLY valid JSON. No markdown. No commentary."""
         "waterfall": "waterfallChart",
         "funnel": "funnelChart",
         "donut": "donutChart",
-        "multipolygon": "filledMap",
-        "polygon": "filledMap",
+        "multipolygon": "tableEx",
+        "polygon": "tableEx",
         "circle": "scatterChart",
         "shape": "scatterChart",
         "square": "treemap",

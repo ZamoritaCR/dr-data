@@ -729,35 +729,10 @@ class PBIPGenerator:
             profile_col_names,
         )
 
-        # Add title if present
-        if title_text:
-            doc["visual"]["objects"] = {
-                "title": [{
-                    "properties": {
-                        "text": {"expr": {"Literal": {"Value": f"'{title_text}'"}}},
-                        "show": {"expr": {"Literal": {"Value": "true"}}},
-                    }
-                }]
-            }
-
-        # Apply Tableau worksheet design formatting if available
-        # Sprint 2: use visual_styler for enhanced formatting when palette available
-        ws_name = cfg_obj.get("worksheet_name", "")
-        if ws_name and ws_name in ws_designs:
-            color_palette = vc.get("_color_palette", [])
-            if color_palette:
-                from core.visual_styler import style_visual
-                formatting = style_visual(ws_designs[ws_name], color_palette, visual_type)
-            else:
-                from core.design_translator import build_visual_formatting
-                formatting = build_visual_formatting(ws_designs[ws_name])
-            if formatting:
-                existing_objects = doc["visual"].get("objects", {})
-                # Merge: formatting keys that don't already exist
-                for key, val in formatting.items():
-                    if key not in existing_objects:
-                        existing_objects[key] = val
-                doc["visual"]["objects"] = existing_objects
+        # NOTE: Do NOT inject visual.objects (title, categoryAxis, valueAxis,
+        # labels). PBI Desktop auto-generates default formatting. Injecting
+        # objects can cause visuals to render as blank if the format is not
+        # exactly what PBI expects for each visual type.
 
         # Validate & fix all field references against real column names
         valid_cols = list(profile_col_names | measure_names) if profile_col_names else []

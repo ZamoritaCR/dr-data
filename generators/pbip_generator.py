@@ -1620,6 +1620,16 @@ class PBIPGenerator:
         import pandas as pd
         import numpy as np
 
+        # Filter footnote rows -- rows where first column starts with * or **
+        # (common in .hyper extracts, breaks Analysis Services)
+        if not df.empty:
+            first_col = df.columns[0]
+            mask = df[first_col].astype(str).str.startswith("*", na=False)
+            if mask.any():
+                n_removed = mask.sum()
+                df = df[~mask].reset_index(drop=True)
+                print(f"    [INLINE] Removed {n_removed} footnote rows from inline data")
+
         columns = table_cfg.get("columns", [])
         col_names = [c["name"] for c in columns]
 

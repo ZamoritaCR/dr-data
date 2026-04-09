@@ -3483,6 +3483,45 @@ Output ONLY valid JSON. No markdown. No commentary."""
                 self.last_pbip_display_name = project_name
                 self._report_progress("Power BI project ready for download (direct Tableau replica)")
 
+                # AUTO-PUBLISH to Power BI via Fabric REST API
+                _pbi_report_url = ""
+                try:
+                    from core.powerbi_publisher import (
+                        get_access_token as _pbi_auth,
+                        list_workspaces as _pbi_ws,
+                        publish_pbip as _pbi_pub,
+                    )
+                    self._report_progress("Publishing to Power BI Service...")
+                    _token = _pbi_auth()
+                    _workspaces = _pbi_ws(_token)
+                    if _workspaces:
+                        _ws_id = _workspaces[0]["id"]
+                        _ws_name = _workspaces[0].get("displayName", "?")
+                        self._report_progress(f"Target workspace: {_ws_name}")
+                        _pub = _pbi_pub(
+                            _token, _ws_id, result_path, project_name
+                        )
+                        if _pub.get("report_url"):
+                            _pbi_report_url = _pub["report_url"]
+                            self._report_progress(
+                                f"Published to Power BI: {_pbi_report_url}"
+                            )
+                        elif _pub.get("error"):
+                            self._report_progress(
+                                f"Publish warning: {str(_pub['error'])[:200]}"
+                            )
+                    else:
+                        self._report_progress(
+                            "No Power BI workspaces found (service principal "
+                            "needs workspace membership)"
+                        )
+                except Exception as _pub_err:
+                    print(f"[AUTO-PUBLISH] Non-fatal: {_pub_err}")
+                    self._report_progress(
+                        "Power BI auto-publish skipped (credentials not "
+                        "configured or service unavailable)"
+                    )
+
                 # Build context for summary
                 data_file_name = (os.path.basename(self.data_file_path)
                                   if self.data_file_path else "unknown")
@@ -3501,6 +3540,7 @@ Output ONLY valid JSON. No markdown. No commentary."""
                     "project_path": result_path,
                     "file_path": zip_path,
                     "zip_path": zip_path,
+                    "report_url": _pbi_report_url,
                     "data_file": data_file_name,
                     "data_shape": f"{row_count} rows x {col_count} columns",
                     "pages": page_names,

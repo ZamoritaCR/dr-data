@@ -795,7 +795,7 @@ async def build(job_id: str, req: BuildRequest):
             "donutChart": "pieChart", "donut": "pieChart",
             "scatterChart": "scatterChart", "scatter": "scatterChart",
             "card": "card", "kpi": "card",
-            "treemap": "treemap", "filledMap": "filledMap", "map": "filledMap",
+            "treemap": "treemap", "filledMap": "tableEx", "map": "tableEx",
             "matrix": "pivotTable", "table": "tableEx",
         }
 

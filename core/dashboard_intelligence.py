@@ -155,7 +155,7 @@ CHART_RULES = {
     "time_series":          "lineChart",
     "part_to_whole":        "donutChart",
     "category_comparison":  "barChart",
-    "geographic":           "filledMap",
+    "geographic":           "tableEx",
     "correlation":          "scatterChart",
     "single_metric":        "card",
     "ranking":              "barChart",

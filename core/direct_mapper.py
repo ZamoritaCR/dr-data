@@ -415,9 +415,9 @@ def _classify_fields_for_chart(ws, chart_type, profile_col_names, col_types):
             print(f"    [DIRECT-MAPPER] Auto-assigned fallback fields for "
                   f"'{ws_name}': dims={all_dims}, measures={all_measures}")
 
-    # For map visuals with no geographic dims, pick a geographic-looking
-    # column (state, region, country, city, etc.) from the profile
-    if chart_type in ("map", "filledMap") and not all_dims and profile_col_names:
+    # For former map visuals (now table fallback), pick a geographic-looking
+    # column as a dimension so the table shows location data
+    if chart_type in ("tableEx",) and not all_dims and profile_col_names:
         geo_keywords = ["state", "region", "country", "city", "province",
                         "county", "zip", "postal", "location", "area", "territory"]
         for col in sorted(profile_col_names):
@@ -426,7 +426,7 @@ def _classify_fields_for_chart(ws, chart_type, profile_col_names, col_types):
                 if any(kw in col_lower for kw in geo_keywords):
                     all_dims = [col]
                     print(f"    [DIRECT-MAPPER] Auto-assigned geographic field "
-                          f"'{col}' for map visual '{ws_name}'")
+                          f"'{col}' for table visual '{ws_name}'")
                     break
 
     category = []
@@ -454,9 +454,9 @@ def _classify_fields_for_chart(ws, chart_type, profile_col_names, col_types):
             values = all_dims[1:2]
 
     elif chart_type in ("map", "filledMap"):
-        # Maps: geographic field -> category, measure -> values
-        category = all_dims[:1]
-        values = all_measures[:1]
+        # Former map visuals (should not reach here after remapping to tableEx)
+        # Treat as table: all fields as values
+        values = all_dims + all_measures
 
     elif chart_type in ("scatterChart",):
         # Scatter: dims -> category, first two measures -> values

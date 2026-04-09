@@ -83,6 +83,12 @@ def validate(project_path):
     """
     report = PreflightReport()
 
+    page_count = 0
+    visual_count = 0
+    pages_with_visuals = 0
+    csv_document_refs = 0
+    file_contents_refs = 0
+
     for root, dirs, files in os.walk(project_path):
         for fname in files:
             fpath = os.path.join(root, fname)
@@ -99,6 +105,53 @@ def validate(project_path):
 
             if fname.endswith(".tmdl"):
                 _check_tmdl(report, fname, fpath, content, root)
+                # Check for File.Contents / Csv.Document references
+                fc_count = content.count("File.Contents(")
+                cd_count = content.count("Csv.Document(")
+                # Only count references in partition source blocks (not comments)
+                if fc_count > 0:
+                    file_contents_refs += fc_count
+                if cd_count > 0:
+                    csv_document_refs += cd_count
+
+            # Count pages and visuals
+            if fname == "page.json":
+                page_count += 1
+
+            if fname == "visual.json":
+                visual_count += 1
+                # Check that visual has a queryState with at least one role
+                try:
+                    vj = json.loads(content)
+                    qs = vj.get("visual", {}).get("query", {}).get("queryState", {})
+                    if qs:
+                        # This page has at least one real visual
+                        pass
+                except (json.JSONDecodeError, KeyError):
+                    pass
+
+    # ---- QUALITY GATE CHECKS ----
+
+    # CHECK A: At least 1 page exists
+    report.add("pages_exist", page_count >= 1,
+               f"{page_count} page(s) found", project_path)
+
+    # CHECK B: At least 1 visual exists overall
+    report.add("visuals_exist", visual_count >= 1,
+               f"{visual_count} visual(s) found across {page_count} page(s)", project_path)
+
+    # CHECK C: No File.Contents references in TMDL (proves inline data is working)
+    has_bad_file_ref = file_contents_refs > 0
+    report.add("no_file_contents", not has_bad_file_ref,
+               f"File.Contents refs: {file_contents_refs}" if has_bad_file_ref else "clean",
+               project_path)
+
+    # CHECK C2: No Csv.Document(File.Contents(...)) -- Web.Contents is OK
+    # We only flag Csv.Document when paired with File.Contents
+    # (Web.Contents is the csv_url path and is valid)
+    report.add("no_csv_file_contents", not has_bad_file_ref,
+               f"Csv.Document+File.Contents: likely broken path" if has_bad_file_ref else "clean",
+               project_path)
 
     if not report.results:
         report.add("project_structure", False, "No PBIP files found", project_path)

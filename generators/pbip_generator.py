@@ -1456,12 +1456,14 @@ class PBIPGenerator:
                 m_expr = self._build_web_contents_m_expression(csv_url, profile_table_cfg)
                 print(f"    [WEB] M query -> Web.Contents({csv_url})")
             elif self._inline_dataframe is not None:
-                # Embed data directly in TMDL via #table() -- no external file
+                # Inline data ALWAYS wins over File.Contents when a dataframe
+                # is available. This prevents broken C:\Users paths in TMDL.
                 m_expr = self._build_inline_m_table(
                     self._inline_dataframe, profile_table_cfg
                 )
                 print(f"    [INLINE] M query -> #table() with "
-                      f"{len(self._inline_dataframe)} rows embedded")
+                      f"{len(self._inline_dataframe)} rows embedded "
+                      f"(data_file_path={'set' if data_file_path else 'none'} -- inline wins)")
             else:
                 m_expr = self._build_m_expression(
                     profile_table_cfg, data_file_path, sheet_name

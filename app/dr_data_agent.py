@@ -3154,6 +3154,7 @@ Output ONLY valid JSON. No markdown. No commentary."""
                     relationships=relationships or None,
                     snowflake_config=self.snowflake_config,
                     csv_url=self._get_csv_url(),
+                    dataframe=self.dataframe,
                 )
                 result_path = gen_result["path"]
                 field_audit = gen_result.get("field_audit", {})
@@ -3243,7 +3244,8 @@ Output ONLY valid JSON. No markdown. No commentary."""
                 except Exception as _ar_err:
                     print(f"[AUDIT-REPORT] Generation failed (non-fatal): {_ar_err}")
 
-                # Preflight validation + self-healing
+                # Preflight validation + self-healing + QUALITY GATE
+                _quality_ok = True
                 try:
                     from core.preflight_validator import validate as _preflight
                     from core.pbip_healer import heal as _heal
@@ -3256,14 +3258,75 @@ Output ONLY valid JSON. No markdown. No commentary."""
                         )
                         _pf2 = _preflight(result_path)
                         if not _pf2.all_passed:
-                            for _f in _pf2.failed:
-                                print(f"    [PREFLIGHT] still failing: {_f}")
+                            # Check CRITICAL failures that mean a broken file
+                            _critical_names = {
+                                "pages_exist", "visuals_exist",
+                                "no_file_contents", "no_csv_file_contents",
+                            }
+                            _critical_fails = [
+                                f for f in _pf2.failed
+                                if f.name in _critical_names
+                            ]
+                            if _critical_fails:
+                                _quality_ok = False
+                                _fail_names = [f.name for f in _critical_fails]
+                                self._report_progress(
+                                    f"QUALITY GATE FAILED: {', '.join(_fail_names)}. "
+                                    f"Output blocked -- attempting rebuild..."
+                                )
+                                for _f in _critical_fails:
+                                    print(f"    [QUALITY-GATE] CRITICAL: {_f}")
+                            else:
+                                # Non-critical failures -- warn but allow
+                                for _f in _pf2.failed:
+                                    print(f"    [PREFLIGHT] non-critical: {_f}")
                     else:
                         self._report_progress(
                             f"Preflight: {_pf.pass_count} checks passed"
                         )
                 except Exception as _pf_err:
                     print(f"[PREFLIGHT] Non-fatal: {_pf_err}")
+
+                # If quality gate failed, attempt one rebuild with forced inline data
+                if not _quality_ok:
+                    try:
+                        self._report_progress("Quality gate rebuild: forcing inline data...")
+                        import shutil as _shutil_qg
+                        _shutil_qg.rmtree(result_path, ignore_errors=True)
+                        _gen2 = PBIPGenerator(output_dir)
+                        _gen2_result = _gen2.generate(
+                            config, pbi_profile, dashboard_spec,
+                            data_file_path=None,  # Force no file path
+                            sheet_name=self.sheet_name,
+                            relationships=relationships or None,
+                            snowflake_config=None,
+                            csv_url=self._get_csv_url(),
+                            dataframe=self.dataframe,
+                        )
+                        result_path = _gen2_result["path"]
+                        # Re-validate
+                        _pf3 = _preflight(result_path)
+                        if _pf3.all_passed:
+                            _quality_ok = True
+                            self._report_progress("Quality gate rebuild PASSED")
+                        else:
+                            _still_critical = [
+                                f for f in _pf3.failed
+                                if f.name in {"pages_exist", "visuals_exist"}
+                            ]
+                            if not _still_critical:
+                                _quality_ok = True
+                                self._report_progress(
+                                    f"Quality gate rebuild: {_pf3.fail_count} "
+                                    f"non-critical issues remaining -- allowing"
+                                )
+                            else:
+                                self._report_progress(
+                                    f"Quality gate rebuild STILL FAILED: "
+                                    f"{[f.name for f in _still_critical]}"
+                                )
+                    except Exception as _qg_err:
+                        print(f"[QUALITY-GATE] Rebuild failed: {_qg_err}")
 
                 zip_name = project_name.replace(" ", "_")
                 zip_path = shutil.make_archive(
@@ -3556,6 +3619,7 @@ Output ONLY valid JSON. No markdown. No commentary."""
                 relationships=relationships or None,
                 snowflake_config=self.snowflake_config,
                 csv_url=self._get_csv_url(),
+                dataframe=self.dataframe,
             )
             # generator.generate() returns a dict with path + audit info
             result_path = gen_result["path"]

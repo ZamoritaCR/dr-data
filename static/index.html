@@ -254,6 +254,23 @@ code, pre, .mono { font-family: 'Fira Code', monospace; }
 
 /* --- FILE INPUT --- */
 .file-input { display: none; }
+
+/* --- CLOUD TAB --- */
+.cloud-wb-card {
+  display: flex; align-items: center; justify-content: space-between;
+  background: var(--bg-white); border: 1px solid var(--border); border-radius: 6px;
+  padding: 12px 16px; transition: border-color .15s;
+}
+.cloud-wb-card:hover { border-color: var(--primary); }
+.cloud-wb-name { font-weight: 600; font-size: 13px; }
+.cloud-wb-meta { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.cloud-wb-btn {
+  background: var(--cta); color: #fff; border: none; border-radius: 4px;
+  padding: 6px 14px; font-size: 11px; font-weight: 600; cursor: pointer;
+  font-family: 'Fira Sans', sans-serif; transition: background .15s;
+}
+.cloud-wb-btn:hover { background: #EA580C; }
+.cloud-wb-btn:disabled { opacity: .5; cursor: not-allowed; }
 </style>
 </head>
 <body>
@@ -271,6 +288,7 @@ code, pre, .mono { font-family: 'Fira Code', monospace; }
     <button class="nav-tab active" data-tab="migration">Migration</button>
     <button class="nav-tab" data-tab="quality">Quality</button>
     <button class="nav-tab" data-tab="audit">Audit</button>
+    <button class="nav-tab" data-tab="cloud">Tableau Cloud</button>
   </div>
   <div class="nav-right">
     <div>
@@ -335,6 +353,65 @@ code, pre, .mono { font-family: 'Fira Code', monospace; }
         <div class="kpi-card"><div class="kpi-val" id="kpi-rows" style="color:var(--text-secondary)">0</div><div class="kpi-meta"><div class="kpi-label">Data Rows</div></div></div>
       </div>
       <div id="report-link-area" class="hidden"></div>
+    </div>
+
+    <!-- Tableau Cloud tab content -->
+    <div id="cloud-state" class="hidden">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
+        <h3 style="font-size:16px;font-weight:700;">Tableau Cloud</h3>
+        <button id="cloud-connect-btn" onclick="cloudConnect()" style="
+          background:var(--primary);color:#fff;border:none;border-radius:6px;
+          padding:8px 18px;font-size:12px;font-weight:600;cursor:pointer;
+          font-family:'Fira Sans',sans-serif;">Connect</button>
+        <span id="cloud-status" style="font-size:11px;color:var(--text-muted);"></span>
+      </div>
+
+      <!-- Workbook list -->
+      <div id="cloud-workbook-list" class="hidden" style="display:flex;flex-direction:column;gap:8px;"></div>
+
+      <!-- Migration log -->
+      <div id="cloud-log" class="hidden">
+        <div class="log-terminal" id="cloud-log-terminal" style="min-height:180px;max-height:350px;"></div>
+      </div>
+
+      <!-- KPIs -->
+      <div class="kpi-row hidden" id="cloud-kpi-row" style="margin-top:12px;">
+        <div class="kpi-card"><div class="kpi-val" id="cloud-kpi-pages" style="color:var(--primary)">0</div><div class="kpi-meta"><div class="kpi-label">Pages</div></div></div>
+        <div class="kpi-card"><div class="kpi-val" id="cloud-kpi-visuals" style="color:var(--primary)">0</div><div class="kpi-meta"><div class="kpi-label">Visuals</div></div></div>
+        <div class="kpi-card"><div class="kpi-val" id="cloud-kpi-measures" style="color:var(--primary)">0</div><div class="kpi-meta"><div class="kpi-label">Measures</div></div></div>
+        <div class="kpi-card"><div class="kpi-val" id="cloud-kpi-rows" style="color:var(--text-secondary)">0</div><div class="kpi-meta"><div class="kpi-label">Data Rows</div></div></div>
+      </div>
+
+      <!-- Result: side-by-side comparison -->
+      <div id="cloud-result" class="hidden" style="margin-top:16px;">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
+          <div id="cloud-fidelity-score" style="
+            font-family:'Fira Code',monospace;font-size:36px;font-weight:700;
+            color:var(--auto);"></div>
+          <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;">
+            Fidelity Score</div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+          <div>
+            <div style="font-size:10px;font-weight:700;text-transform:uppercase;
+              letter-spacing:.06em;color:var(--text-muted);margin-bottom:6px;">Tableau Original</div>
+            <div id="cloud-tableau-img" style="
+              border:1px solid var(--border);border-radius:6px;overflow:hidden;
+              background:var(--surface);min-height:200px;display:flex;align-items:center;
+              justify-content:center;color:var(--text-muted);font-size:12px;">
+              No screenshot available</div>
+          </div>
+          <div>
+            <div style="font-size:10px;font-weight:700;text-transform:uppercase;
+              letter-spacing:.06em;color:var(--text-muted);margin-bottom:6px;">Power BI Replica</div>
+            <div id="cloud-pbi-link" style="
+              border:1px solid var(--border);border-radius:6px;overflow:hidden;
+              background:var(--surface);min-height:200px;display:flex;align-items:center;
+              justify-content:center;"></div>
+          </div>
+        </div>
+        <div id="cloud-deltas" style="margin-top:12px;"></div>
+      </div>
     </div>
   </main>
 
@@ -640,6 +717,226 @@ function appendChatMsg(text, isUser, isTyping) {
     '<div class="chat-bubble">' + safe + '</div>';
   msgs.appendChild(div);
   msgs.scrollTop = msgs.scrollHeight;
+}
+
+// --- TAB SWITCHING ---
+document.querySelectorAll('.nav-tab').forEach(function(tab) {
+  tab.addEventListener('click', function() {
+    document.querySelectorAll('.nav-tab').forEach(function(t) { t.classList.remove('active'); });
+    tab.classList.add('active');
+    var target = tab.dataset.tab;
+    // Show/hide main content areas
+    var uploadEl = document.getElementById('upload-state');
+    var pipelineEl = document.getElementById('pipeline-state');
+    var cloudEl = document.getElementById('cloud-state');
+    if (target === 'cloud') {
+      uploadEl.classList.add('hidden');
+      pipelineEl.classList.add('hidden');
+      cloudEl.classList.remove('hidden');
+    } else if (target === 'migration') {
+      cloudEl.classList.add('hidden');
+      // Restore upload/pipeline visibility based on state
+      if (_jobId || _fileId) {
+        uploadEl.classList.add('hidden');
+        pipelineEl.classList.remove('hidden');
+      } else {
+        uploadEl.classList.remove('hidden');
+        pipelineEl.classList.add('hidden');
+      }
+    } else {
+      // quality/audit tabs -- keep current migration view, hide cloud
+      cloudEl.classList.add('hidden');
+    }
+  });
+});
+
+// --- TABLEAU CLOUD ---
+var _cloudJobId = null;
+var _cloudWorkbooks = [];
+
+async function cloudConnect() {
+  var btn = document.getElementById('cloud-connect-btn');
+  var status = document.getElementById('cloud-status');
+  var list = document.getElementById('cloud-workbook-list');
+  btn.disabled = true;
+  btn.textContent = 'Connecting...';
+  status.textContent = '';
+
+  try {
+    var resp = await fetch('/api/tableau/workbooks');
+    var data = await resp.json();
+    if (data.error) throw new Error(data.detail || data.error);
+    _cloudWorkbooks = data.workbooks || [];
+    status.textContent = _cloudWorkbooks.length + ' workbooks found';
+    btn.textContent = 'Refresh';
+    btn.disabled = false;
+
+    // Render workbook cards
+    list.innerHTML = '';
+    list.classList.remove('hidden');
+    list.style.display = 'flex';
+    _cloudWorkbooks.forEach(function(wb) {
+      var card = document.createElement('div');
+      card.className = 'cloud-wb-card';
+      card.innerHTML =
+        '<div>' +
+          '<div class="cloud-wb-name">' + wb.name + '</div>' +
+          '<div class="cloud-wb-meta">' + wb.project_name +
+            ' | ' + (wb.views ? wb.views.length : 0) + ' views' +
+            (wb.updated_at ? ' | Updated ' + wb.updated_at.split('T')[0] : '') +
+          '</div>' +
+        '</div>' +
+        '<button class="cloud-wb-btn" onclick="cloudMigrate(\'' + wb.id + '\',\'' +
+          wb.name.replace(/'/g, "\\'") + '\')">Migrate</button>';
+      list.appendChild(card);
+    });
+  } catch(e) {
+    status.textContent = 'Error: ' + e.message;
+    btn.textContent = 'Retry';
+    btn.disabled = false;
+  }
+}
+
+async function cloudMigrate(workbookId, workbookName) {
+  // Disable all migrate buttons
+  document.querySelectorAll('.cloud-wb-btn').forEach(function(b) { b.disabled = true; });
+
+  // Show log area
+  var logArea = document.getElementById('cloud-log');
+  var terminal = document.getElementById('cloud-log-terminal');
+  logArea.classList.remove('hidden');
+  terminal.innerHTML = '';
+  document.getElementById('cloud-result').classList.add('hidden');
+  document.getElementById('cloud-kpi-row').classList.add('hidden');
+
+  cloudAppendLog('phase', 'STARTING MIGRATION', '');
+  cloudAppendLog('info', 'Workbook: ' + workbookName);
+
+  // Reset left panel steps for cloud
+  document.querySelectorAll('.step').forEach(function(s) { s.className = 'step'; });
+
+  try {
+    var resp = await fetch('/api/tableau/migrate/' + workbookId, { method: 'POST' });
+    var data = await resp.json();
+    _cloudJobId = data.job_id;
+    cloudConnectSSE(data.job_id);
+  } catch(e) {
+    cloudAppendLog('error', 'Migration start failed: ' + e.message);
+    document.querySelectorAll('.cloud-wb-btn').forEach(function(b) { b.disabled = false; });
+  }
+}
+
+function cloudConnectSSE(jobId) {
+  var source = new EventSource('/api/tableau/stream/' + jobId);
+  source.onmessage = function(event) {
+    var d = JSON.parse(event.data);
+    var phase = d.phase || '';
+    var status = d.status || '';
+    var detail = d.detail || '';
+
+    // Update left panel steps
+    if (status === 'start') {
+      setStep(phase, 'active');
+      cloudAppendLog('phase', phase.toUpperCase(), '');
+    }
+    if (status === 'complete') setStep(phase, 'done');
+    if (status === 'error' || status === 'failed') setStep(phase, 'error');
+
+    if (detail) {
+      var cls = (status === 'error' || status === 'failed') ? 'error' :
+                (status === 'complete' ? 'success' : 'info');
+      cloudAppendLog(cls, detail);
+    }
+
+    // KPIs from translate phase
+    if (phase === 'translate' && status === 'complete') {
+      if (d.pages !== undefined) document.getElementById('cloud-kpi-pages').textContent = d.pages;
+      if (d.visuals !== undefined) document.getElementById('cloud-kpi-visuals').textContent = d.visuals;
+      if (d.measures !== undefined) document.getElementById('cloud-kpi-measures').textContent = d.measures;
+      if (d.rows !== undefined) document.getElementById('cloud-kpi-rows').textContent = d.rows;
+      document.getElementById('cloud-kpi-row').classList.remove('hidden');
+    }
+
+    // Fidelity score in nav
+    if (d.fidelity && d.fidelity.score !== undefined) {
+      document.getElementById('nav-score').textContent = d.fidelity.score + '%';
+    }
+
+    // Done -- show result
+    if (phase === 'done') {
+      source.close();
+      cloudShowResult(d);
+      document.querySelectorAll('.cloud-wb-btn').forEach(function(b) { b.disabled = false; });
+    }
+    if (phase === 'error') {
+      source.close();
+      document.querySelectorAll('.cloud-wb-btn').forEach(function(b) { b.disabled = false; });
+    }
+  };
+  source.onerror = function() {
+    cloudAppendLog('error', 'SSE connection lost.');
+    source.close();
+    document.querySelectorAll('.cloud-wb-btn').forEach(function(b) { b.disabled = false; });
+  };
+}
+
+function cloudShowResult(data) {
+  var resultArea = document.getElementById('cloud-result');
+  resultArea.classList.remove('hidden');
+
+  // Fidelity score
+  var score = (data.fidelity && data.fidelity.score) || 0;
+  var scoreEl = document.getElementById('cloud-fidelity-score');
+  scoreEl.textContent = score + '%';
+  if (score >= 70) scoreEl.style.color = 'var(--auto)';
+  else if (score >= 40) scoreEl.style.color = 'var(--review)';
+  else scoreEl.style.color = 'var(--blocked)';
+
+  // Tableau image
+  var imgArea = document.getElementById('cloud-tableau-img');
+  var tViews = data.tableau_images || [];
+  if (tViews.length > 0 && _cloudJobId) {
+    imgArea.innerHTML = '<img src="/api/tableau/images/' + _cloudJobId + '/' +
+      encodeURIComponent(tViews[0]) + '" style="width:100%;height:auto;display:block;" ' +
+      'onerror="this.parentNode.textContent=\'Screenshot not available\'">';
+  } else {
+    imgArea.textContent = 'No screenshot available';
+  }
+
+  // PBI link
+  var pbiArea = document.getElementById('cloud-pbi-link');
+  if (data.report_url) {
+    pbiArea.innerHTML = '<a class="report-link" href="' + data.report_url +
+      '" target="_blank" style="margin:20px;">' +
+      '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">' +
+      '<path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3"/>' +
+      '</svg> Open in Power BI</a>';
+  } else {
+    pbiArea.innerHTML = '<span style="color:var(--blocked);font-size:12px;">Publish failed</span>';
+  }
+
+  // Update nav fidelity
+  document.getElementById('nav-score').textContent = score + '%';
+}
+
+function cloudAppendLog(type, text) {
+  var terminal = document.getElementById('cloud-log-terminal');
+  var div = document.createElement('div');
+  if (type === 'phase') {
+    div.className = 'log-phase';
+    div.textContent = '--- ' + text + ' ---';
+  } else if (type === 'success') {
+    div.className = 'log-success';
+    div.textContent = text;
+  } else if (type === 'error') {
+    div.className = 'log-error-line';
+    div.textContent = text;
+  } else {
+    div.className = 'log-info';
+    div.textContent = text;
+  }
+  terminal.appendChild(div);
+  terminal.scrollTop = terminal.scrollHeight;
 }
 
 // --- INIT ---

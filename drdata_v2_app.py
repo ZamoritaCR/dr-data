@@ -573,6 +573,142 @@ def _run_pipeline(job_id: str, file_id: str, q):
 
 
 # ------------------------------------------------------------------ #
+#  Tableau Cloud Bridge Endpoints
+# ------------------------------------------------------------------ #
+
+# Stores for cloud bridge jobs (separate from upload pipeline)
+_cloud_jobs: Dict[str, dict] = {}
+_cloud_results: Dict[str, dict] = {}
+
+
+@app.get("/api/tableau/workbooks")
+async def list_tableau_workbooks():
+    """List workbooks from Tableau Cloud."""
+    try:
+        from core.tableau_connector import TableauCloudConnector
+        tc = TableauCloudConnector()
+        workbooks = tc.list_workbooks()
+        return {"workbooks": workbooks}
+    except Exception as e:
+        logger.error(f"Tableau workbook list failed: {e}")
+        raise HTTPException(500, f"Tableau Cloud error: {str(e)[:300]}")
+
+
+@app.post("/api/tableau/migrate/{workbook_id}")
+async def start_tableau_migration(workbook_id: str, display_name: Optional[str] = None):
+    """Start cloud bridge pipeline for a Tableau Cloud workbook."""
+    job_id = uuid.uuid4().hex[:12]
+    q = queue.Queue()
+
+    _cloud_jobs[job_id] = {
+        "workbook_id": workbook_id,
+        "status": "queued",
+        "queue": q,
+        "created": datetime.utcnow().isoformat(),
+    }
+
+    thread = threading.Thread(
+        target=_run_cloud_bridge,
+        args=(job_id, workbook_id, display_name, q),
+        daemon=True,
+    )
+    thread.start()
+
+    logger.info(f"Cloud bridge job started: {job_id} for workbook {workbook_id}")
+    return {"job_id": job_id, "workbook_id": workbook_id, "status": "started"}
+
+
+@app.get("/api/tableau/stream/{job_id}")
+async def stream_tableau_migration(job_id: str, request: Request):
+    """SSE stream of cloud bridge progress."""
+    if job_id not in _cloud_jobs:
+        raise HTTPException(404, f"Job {job_id} not found")
+
+    q = _cloud_jobs[job_id]["queue"]
+
+    async def event_generator():
+        while True:
+            if await request.is_disconnected():
+                break
+            try:
+                event = q.get(block=False)
+                yield json.dumps(event, default=str)
+                if event.get("phase") in ("done", "error"):
+                    break
+            except queue.Empty:
+                await asyncio.sleep(0.3)
+                continue
+
+    return EventSourceResponse(event_generator())
+
+
+@app.get("/api/tableau/result/{job_id}")
+async def get_tableau_result(job_id: str):
+    """Get completed cloud bridge result."""
+    if job_id not in _cloud_jobs:
+        raise HTTPException(404, f"Job {job_id} not found")
+    result = _cloud_results.get(job_id, {})
+    return {
+        "job_id": job_id,
+        "status": _cloud_jobs[job_id]["status"],
+        "result": result,
+    }
+
+
+@app.get("/api/tableau/images/{job_id}/{view_name}")
+async def get_tableau_image(job_id: str, view_name: str):
+    """Serve a downloaded Tableau view screenshot."""
+    result = _cloud_results.get(job_id, {})
+    images = result.get("tableau_images", {})
+    img_path = images.get(view_name, "")
+    if img_path and os.path.exists(img_path):
+        return FileResponse(img_path, media_type="image/png")
+    raise HTTPException(404, f"Image not found for view '{view_name}'")
+
+
+def _run_cloud_bridge(job_id: str, workbook_id: str,
+                      display_name: Optional[str], q):
+    """Background thread: run cloud bridge and emit SSE events."""
+    _cloud_jobs[job_id]["status"] = "running"
+
+    def progress_cb(phase, status, detail=""):
+        _emit(q, phase, status, detail)
+
+    try:
+        from core.cloud_bridge import run_cloud_bridge
+        result = run_cloud_bridge(
+            workbook_id,
+            display_name=display_name,
+            progress_callback=progress_cb,
+        )
+
+        _cloud_results[job_id] = result
+
+        if result.get("error"):
+            _cloud_jobs[job_id]["status"] = "failed"
+            _emit(q, "error", "failed", str(result["error"])[:500])
+        else:
+            _cloud_jobs[job_id]["status"] = "complete"
+            _emit(q, "done", "complete", "Cloud bridge finished",
+                  report_url=result.get("report_url", ""),
+                  fidelity=result.get("fidelity", {}),
+                  tableau_images=list(result.get("tableau_images", {}).keys()),
+                  workbook_name=result.get("workbook_name", ""),
+                  worksheets=result.get("worksheets", []),
+                  dashboards=result.get("dashboards", []),
+                  pages=result.get("pages", 0),
+                  visuals=result.get("visuals", 0),
+                  measures=result.get("measures", 0),
+                  rows=result.get("rows", 0),
+                  data_source=result.get("data_source", ""),
+                  )
+    except Exception as e:
+        logger.exception(f"Cloud bridge failed: {e}")
+        _cloud_jobs[job_id]["status"] = "failed"
+        _emit(q, "error", "failed", str(e)[:500])
+
+
+# ------------------------------------------------------------------ #
 #  Run
 # ------------------------------------------------------------------ #
 

@@ -713,6 +713,22 @@ class PBIPGenerator:
         else:
             visual_type = cfg_obj.get("visualType", "card")
 
+        # Safety net: map visual types require tenant-level enablement.
+        # Force unsafe types to a safe fallback to avoid FilledMapVisualNotEnabled.
+        _SAFE_VISUALS = {
+            "clusteredBarChart", "clusteredColumnChart", "stackedBarChart",
+            "stackedColumnChart", "hundredPercentStackedBarChart",
+            "hundredPercentStackedColumnChart", "lineChart", "pieChart",
+            "donutChart", "card", "cardVisual", "multiRowCard", "areaChart",
+            "stackedAreaChart", "scatterChart", "tableEx", "matrix",
+            "treemap", "lineClusteredColumnComboChart",
+            "lineStackedColumnComboChart", "waterfallChart", "funnelChart",
+            "gauge", "kpi", "slicer", "textbox", "image", "shape",
+            "decompositionTreeVisual", "ribbonChart",
+        }
+        if visual_type not in _SAFE_VISUALS:
+            visual_type = "clusteredBarChart"
+
         title_text = cfg_obj.get("title", "")
         data_roles = cfg_obj.get("dataRoles", {})
 

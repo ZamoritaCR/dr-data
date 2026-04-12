@@ -453,10 +453,10 @@ def _classify_fields_for_chart(ws, chart_type, profile_col_names, col_types):
         if not values and len(all_dims) > 1:
             values = all_dims[1:2]
 
-    elif chart_type in ("map", "filledMap"):
-        # Former map visuals (should not reach here after remapping to tableEx)
-        # Treat as table: all fields as values
-        values = all_dims + all_measures
+    elif chart_type in ("map", "filledMap", "shapeMap", "azureMap"):
+        # Map visuals remapped to clusteredBarChart -- treat like bar chart
+        category = all_dims[:1]
+        values = all_measures[:3] or all_dims[1:2]
 
     elif chart_type in ("scatterChart",):
         # Scatter: dims -> category, first two measures -> values

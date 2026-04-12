@@ -113,6 +113,146 @@ class QAAgent:
         }
 
     # ================================================================== #
+    #  POST-PUBLISH QA LOOP (for V2 pipeline)                             #
+    # ================================================================== #
+
+    def run_post_publish_qa(self, token, workspace_id, report_id,
+                            semantic_model_id, pbip_path,
+                            data_file_path=None, data_profile=None):
+        """Post-publish QA: read back, score fidelity, diagnose, fix, republish.
+
+        Called by the V2 pipeline AFTER initial publish. Reads the live
+        report from Power BI, compares against the Tableau source spec,
+        and if fidelity is below threshold, regenerates the PBIP with
+        improved field bindings and republishes.
+
+        Returns:
+            {
+                "fidelity": dict,
+                "report_url": str,
+                "report_id": str,
+                "loops": int,
+                "audit": list,
+            }
+        """
+        from core.powerbi_publisher import (
+            get_access_token, PBI_SCOPE,
+            publish_pbip, delete_report,
+            get_dataset_id_from_report, delete_dataset,
+        )
+
+        report_url = (f"https://app.powerbi.com/groups/"
+                      f"{workspace_id}/reports/{report_id}")
+        best_fidelity = {}
+
+        for loop in range(self.max_loops):
+            self._log("QA_LOOP", f"Post-publish QA attempt {loop + 1}")
+
+            # ---- Read back from PBI API ----
+            try:
+                pbi_token = get_access_token(PBI_SCOPE)
+            except Exception:
+                pbi_token = token
+
+            import time
+            time.sleep(3)
+            live_result = self._read_back_from_pbi(
+                pbi_token, workspace_id, report_id
+            )
+
+            # ---- Read local PBIP visual bindings ----
+            local_manifest = self._read_pbip_manifest(pbip_path)
+            # Inject local visual info into live_result for richer comparison
+            for lp in local_manifest:
+                dn_lower = lp["displayName"].lower().strip()
+                for lr_page in live_result.get("pages", []):
+                    lr_dn = lr_page.get("displayName", "").lower().strip()
+                    if lr_dn == dn_lower or dn_lower in lr_dn or lr_dn in dn_lower:
+                        # Merge local visual data (has_fields, visualType)
+                        lr_page["local_visuals"] = lp.get("visuals", [])
+                        if not lr_page.get("visuals"):
+                            lr_page["visuals"] = lp.get("visuals", [])
+                        break
+
+            # ---- Compute fidelity ----
+            fidelity = self._compute_fidelity(live_result)
+            best_fidelity = fidelity
+            score = fidelity.get("score", 0)
+
+            self._log("QA_FIDELITY",
+                      f"Score: {score}% | "
+                      f"Identity: {fidelity.get('tab_identity', 0)}/25  "
+                      f"Charts: {fidelity.get('chart_types', 0)}/25  "
+                      f"Fields: {fidelity.get('field_bindings', 0)}/25  "
+                      f"Layout: {fidelity.get('layout', 0)}/25")
+
+            if score >= 75 or loop == self.max_loops - 1:
+                # Good enough or last attempt
+                break
+
+            # ---- Diagnose and fix ----
+            self._log("QA_FIX", f"Score {score}% < 75% -- attempting fix")
+            self._diagnose_fidelity_gaps(fidelity, live_result)
+
+            # Re-generate PBIP with adjusted config
+            try:
+                from generators.pbip_generator import PBIPGenerator
+                import shutil
+
+                fix_dir = pbip_path + f"_qa_fix_{loop + 1}"
+                if os.path.exists(fix_dir):
+                    shutil.rmtree(fix_dir)
+
+                gen = PBIPGenerator(fix_dir)
+                gen_result = gen.generate(
+                    config=self.config,
+                    data_profile=data_profile,
+                    dashboard_spec=self._build_dashboard_spec(),
+                    data_file_path=data_file_path,
+                )
+                new_pbip_path = gen_result.get("path", fix_dir)
+
+                # Delete old report + dataset, republish
+                try:
+                    did = get_dataset_id_from_report(
+                        pbi_token, workspace_id, report_id)
+                    delete_report(token, workspace_id, report_id)
+                    if did:
+                        delete_dataset(token, workspace_id, did)
+                except Exception:
+                    pass
+
+                pub = publish_pbip(
+                    token, workspace_id, new_pbip_path,
+                    os.path.basename(pbip_path) + f"_v{loop + 2}"
+                )
+                if not pub.get("error"):
+                    report_id = pub.get("report_id", report_id)
+                    semantic_model_id = pub.get("semantic_model_id",
+                                                semantic_model_id)
+                    report_url = (f"https://app.powerbi.com/groups/"
+                                  f"{workspace_id}/reports/{report_id}")
+                    pbip_path = new_pbip_path
+                    self._log("QA_REPUBLISH",
+                              f"Republished: {report_url}")
+                else:
+                    self._log("QA_REPUBLISH",
+                              f"Republish failed: {pub.get('error')}",
+                              "error")
+                    break
+            except Exception as fix_err:
+                self._log("QA_FIX", f"Fix failed: {fix_err}", "error")
+                break
+
+        return {
+            "fidelity": best_fidelity,
+            "report_url": report_url,
+            "report_id": report_id,
+            "loops": loop + 1,
+            "audit": self.audit,
+        }
+
+    # ================================================================== #
     #  MAIN AGENTIC LOOP                                                  #
     # ================================================================== #
 
@@ -937,38 +1077,100 @@ class QAAgent:
     #  SOURCE MANIFEST BUILDER                                             #
     # ================================================================== #
 
+    @staticmethod
+    def _clean_manifest_field(raw_field):
+        """Clean a raw Tableau shelf field for manifest comparison.
+
+        Filters out datasource references (federated.*, long hex IDs),
+        strips Tableau prefixes (sum:, none:, tqr:, yr:, etc.), and
+        removes generated fields (Latitude/Longitude (generated)).
+        """
+        if not raw_field or not isinstance(raw_field, str):
+            return ""
+        f = raw_field.strip("[] ")
+        # Filter datasource references
+        if f.startswith("federated.") or f.startswith("[federated."):
+            return ""
+        # Filter long hex-only strings (datasource IDs)
+        alpha = f.replace("-", "").replace(".", "")
+        if len(alpha) > 20 and all(c in "0123456789abcdef" for c in alpha.lower()):
+            return ""
+        # Filter generated fields
+        if "(generated)" in f.lower():
+            return ""
+        # Strip Tableau prefixes: sum:Field:qk -> Field
+        if ":" in f:
+            parts = f.split(":")
+            if len(parts) >= 3:
+                f = parts[1]  # prefix:FIELD:suffix
+            elif len(parts) == 2:
+                f = parts[1]  # prefix:FIELD
+        f = f.strip("[] ")
+        return f if len(f) > 1 else ""
+
     def _build_source_manifest(self) -> list:
         """Build a per-tab source-of-truth manifest from source_spec.
 
         Each entry represents one expected output page with the fields,
         chart type, and visual count the QA agent should verify.
+        Uses DataFrame column names for field matching when available.
         """
         spec = self.source_spec
         if not spec:
             return []
+
+        # Build a set of real column names from the DataFrame for matching
+        df_columns = set()
+        if self.dataframe is not None:
+            df_columns = {c.lower() for c in self.dataframe.columns}
 
         manifest = []
         worksheets = spec.get("worksheets", [])
         dashboards = spec.get("dashboards", [])
         ws_by_name = {ws.get("name", ""): ws for ws in worksheets}
 
+        def _extract_fields_for_ws(ws):
+            """Get cleaned, validated fields for a worksheet."""
+            fields = set()
+            for shelf_key in ("rows_fields", "cols_fields"):
+                for f in ws.get(shelf_key, []):
+                    cleaned = self._clean_manifest_field(f)
+                    if cleaned:
+                        fields.add(cleaned.lower())
+            # Also extract from color_field
+            color = ws.get("color_field", "")
+            if color:
+                # Handle compound refs: [federated.xxx].[sum:Sales:qk]
+                for part in color.split("]."):
+                    cleaned = self._clean_manifest_field(part)
+                    if cleaned:
+                        fields.add(cleaned.lower())
+            # Cross-reference with DataFrame columns for validation
+            if df_columns:
+                validated = set()
+                for f in fields:
+                    for col in df_columns:
+                        if f == col or f in col or col in f:
+                            validated.add(col)
+                # Also infer fields from worksheet name
+                ws_lower = ws.get("name", "").lower()
+                for col in df_columns:
+                    if col in ws_lower:
+                        validated.add(col)
+                return list(validated)
+            return list(fields)
+
         if dashboards:
             used_ws_names = set()
             for db in dashboards:
                 db_name = db.get("name", "Dashboard")
                 ws_used = db.get("worksheets_used", [])
-                # Collect fields from all worksheets on this dashboard
                 all_fields = []
                 chart_types = []
                 for ws_name in ws_used:
                     used_ws_names.add(ws_name)
                     ws = ws_by_name.get(ws_name, {})
-                    for shelf_key in ("rows_fields", "cols_fields",
-                                      "rows", "cols"):
-                        for f in ws.get(shelf_key, []):
-                            cleaned = f.strip("[]").split(":")[-1] if ":" in f else f.strip("[]")
-                            if cleaned:
-                                all_fields.append(cleaned)
+                    all_fields.extend(_extract_fields_for_ws(ws))
                     chart_types.append(ws.get("chart_type", "automatic"))
                 manifest.append({
                     "name": db_name,
@@ -976,10 +1178,9 @@ class QAAgent:
                     "expected_visual_count": len(ws_used),
                     "worksheet_names": list(ws_used),
                     "chart_types": chart_types,
-                    "fields": all_fields,
+                    "fields": list(set(all_fields)),
                 })
 
-            # Orphan worksheets not in any dashboard
             orphans = [
                 ws for ws in worksheets
                 if ws.get("name", "") not in used_ws_names
@@ -987,16 +1188,9 @@ class QAAgent:
             if orphans:
                 orphan_fields = []
                 for ws in orphans:
-                    for shelf_key in ("rows_fields", "cols_fields",
-                                      "rows", "cols"):
-                        for f in ws.get(shelf_key, []):
-                            cleaned = f.strip("[]").split(":")[-1] if ":" in f else f.strip("[]")
-                            if cleaned:
-                                orphan_fields.append(cleaned)
-                if len(orphans) == 1:
-                    page_name = orphans[0].get("name", "Sheet")
-                else:
-                    page_name = "Additional Sheets"
+                    orphan_fields.extend(_extract_fields_for_ws(ws))
+                page_name = (orphans[0].get("name", "Sheet")
+                             if len(orphans) == 1 else "Additional Sheets")
                 manifest.append({
                     "name": page_name,
                     "type": "orphan",
@@ -1005,25 +1199,17 @@ class QAAgent:
                     "chart_types": [
                         ws.get("chart_type", "automatic") for ws in orphans
                     ],
-                    "fields": orphan_fields,
+                    "fields": list(set(orphan_fields)),
                 })
         else:
-            # No dashboards: each worksheet becomes its own page
             for ws in worksheets:
-                ws_fields = []
-                for shelf_key in ("rows_fields", "cols_fields",
-                                  "rows", "cols"):
-                    for f in ws.get(shelf_key, []):
-                        cleaned = f.strip("[]").split(":")[-1] if ":" in f else f.strip("[]")
-                        if cleaned:
-                            ws_fields.append(cleaned)
                 manifest.append({
                     "name": ws.get("name", "Sheet"),
                     "type": "worksheet",
                     "expected_visual_count": 1,
                     "worksheet_names": [ws.get("name", "")],
                     "chart_types": [ws.get("chart_type", "automatic")],
-                    "fields": ws_fields,
+                    "fields": _extract_fields_for_ws(ws),
                 })
 
         return manifest

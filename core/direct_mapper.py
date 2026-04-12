@@ -384,20 +384,52 @@ def _classify_fields_for_chart(ws, chart_type, profile_col_names, col_types):
     all_measures = dedup(all_measures)
 
     # ------------------------------------------------------------------ #
-    # FALLBACK: If we have no fields at all, try to infer from worksheet  #
-    # name and profile columns. This handles worksheets where Tableau     #
-    # shelf fields are empty or only had generated fields.                #
+    # ENRICH: Cross-reference worksheet name with profile columns to add  #
+    # worksheet-specific fields that the parser missed. Even when shelves #
+    # have some fields, the worksheet title often reveals the intended     #
+    # category dimension (e.g. "sales by customer type" -> Customer Type). #
     # ------------------------------------------------------------------ #
     ws_name = ws.get("name", "")
-    if not all_dims and not all_measures and profile_col_names:
+    if profile_col_names:
         inferred_dims, inferred_measures = _infer_fields_from_worksheet_name(
             ws_name, profile_col_names, col_types
         )
-        if inferred_dims or inferred_measures:
-            all_dims = inferred_dims
-            all_measures = inferred_measures
-            print(f"    [DIRECT-MAPPER] Inferred fields from worksheet name "
-                  f"'{ws_name}': dims={all_dims}, measures={all_measures}")
+        if not all_dims and not all_measures:
+            # Fully empty -- use all inferred fields
+            if inferred_dims or inferred_measures:
+                all_dims = inferred_dims
+                all_measures = inferred_measures
+                print(f"    [DIRECT-MAPPER] Inferred fields from worksheet name "
+                      f"'{ws_name}': dims={all_dims}, measures={all_measures}")
+        else:
+            # Have some fields from shelves. Add name-inferred dims that are
+            # missing (e.g. "Customer Type" from "sales by customer type")
+            # but don't replace what the parser found.
+            existing = set(f.lower() for f in all_dims + all_measures)
+            added = False
+            for d in inferred_dims:
+                if d.lower() not in existing:
+                    all_dims.append(d)
+                    added = True
+            for m in inferred_measures:
+                if m.lower() not in existing:
+                    all_measures.append(m)
+                    added = True
+            # If the worksheet name has "by <column>", promote that column
+            # to the front of dims -- it's the intended category axis.
+            ws_lower = ws_name.lower()
+            if " by " in ws_lower and inferred_dims:
+                by_part = ws_lower.split(" by ", 1)[1].strip()
+                for d in inferred_dims:
+                    if d.lower() in by_part:
+                        # Move this dim to front
+                        if d in all_dims:
+                            all_dims.remove(d)
+                            all_dims.insert(0, d)
+                        break
+            if added:
+                print(f"    [DIRECT-MAPPER] Enriched fields from worksheet name "
+                      f"'{ws_name}': dims={all_dims}, measures={all_measures}")
 
     # Second fallback: if STILL no fields, pick the first dimension and
     # first measure from the profile. Every visual should show *something*.
@@ -476,10 +508,19 @@ def _classify_fields_for_chart(ws, chart_type, profile_col_names, col_types):
         if not values and len(all_dims) > 1:
             values = all_dims[1:]
 
-    # Series: color field if it's a dimension and not already used
+    # Series: color field if it's a dimension and not already used.
+    # Also promote unused dimensions to series for charts that only take 1
+    # category (bar, line, etc.) -- this gives "sales by customer type"
+    # the Customer Type color grouping even when Tableau color shelf is empty.
     used = set(category + values)
     if color_field and color_field not in used and not is_measure(color_field):
         series = [color_field]
+    elif (not series and len(all_dims) > 1
+          and chart_type not in ("card", "cardVisual", "multiRowCard", "kpi",
+                                 "slicer", "filledMap", "map", "shapeMap")):
+        unused_dims = [d for d in all_dims if d not in used]
+        if unused_dims:
+            series = unused_dims[:1]
 
     # Defensive fallback: charts (not card/table) with category but no values
     # get the first available measure from the profile. Charts with values but

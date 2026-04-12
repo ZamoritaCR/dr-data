@@ -522,27 +522,39 @@ def _run_pipeline(job_id: str, file_id: str, q):
                     report_url = pub.get("report_url", "")
 
                     _emit(q, "publish", "progress",
-                          f"Published. Running QA Agent...")
+                          f"Published. Running QA Agent (3-loop self-heal)...")
 
-                    # Wire in QA Agent for real fidelity
-                    time.sleep(5)
+                    # Full QA Agent: read-back, score, diagnose, fix, republish
                     try:
                         from core.qa_agent import QAAgent
                         qa = QAAgent(
                             source_spec=spec,
                             dataframe=df,
-                            config={"report_layout": config.get("report_layout", {}),
-                                    "tmdl_model": config.get("tmdl_model", {})}
+                            config=config,
                         )
-                        live_result = qa._read_back_from_pbi(
-                            token, ws_id, report_id
+                        qa_result = qa.run_post_publish_qa(
+                            token=token,
+                            workspace_id=ws_id,
+                            report_id=report_id,
+                            semantic_model_id=sm_id,
+                            pbip_path=pbip_path,
+                            data_file_path=os.path.join(
+                                os.path.dirname(pbip_path), "Data.csv"),
+                            data_profile=profile,
                         )
-                        fidelity = qa._compute_fidelity(live_result)
+                        fidelity = qa_result.get("fidelity", {})
+                        report_url = qa_result.get("report_url", report_url)
+                        report_id = qa_result.get("report_id", report_id)
+                        loops = qa_result.get("loops", 1)
                         score = fidelity.get("score", 0)
-                        loops = 1
 
                         _emit(q, "qa", "complete",
-                              f"Fidelity: {score}% ({loops} QA loops)",
+                              f"Fidelity: {score}% "
+                              f"(identity={fidelity.get('tab_identity', 0)} "
+                              f"charts={fidelity.get('chart_types', 0)} "
+                              f"fields={fidelity.get('field_bindings', 0)} "
+                              f"layout={fidelity.get('layout', 0)}) "
+                              f"[{loops} QA loops]",
                               fidelity=fidelity)
                     except Exception as qa_err:
                         logger.warning(f"QA Agent error (non-fatal): {qa_err}")

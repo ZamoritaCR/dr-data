@@ -221,26 +221,75 @@ class ChatRequestV2(BaseModel):
 
 @app.post("/api/chat")
 async def chat(req: ChatRequestV2):
-    """Full conversational chat with V1 agent (intent classification + tool calling)."""
+    """Full conversational chat with V1 Dr. Data agent.
+
+    Uses intent classification (Claude Haiku) to route:
+    - build_powerbi, build_dashboard, build_pdf, build_pptx, build_word -> generates files
+    - analyze -> deep analysis with specific numbers
+    - chat -> tool-calling conversation (up to 10 iterations)
+
+    Returns generated files as downloadable links.
+    """
     session_id = req.session_id or req.file_id or "default"
+    progress_msgs = []
+
+    def _progress(msg):
+        progress_msgs.append(msg)
 
     try:
         agent = _get_agent(session_id)
         if agent:
-            # Use the full respond() method with intent classification
             result = agent.respond(
                 user_message=req.message,
                 conversation_history=agent.messages,
                 uploaded_files={},
+                progress_callback=_progress,
             )
-            text = result if isinstance(result, str) else result.get("content", result.get("text", str(result)))
-            downloads = result.get("downloads", []) if isinstance(result, dict) else []
-            intent = result.get("intent", "chat") if isinstance(result, dict) else "chat"
-            return {"response": text, "files": downloads, "intent": intent}
+
+            # Extract response text
+            if isinstance(result, str):
+                text = result
+                downloads = []
+            elif isinstance(result, dict):
+                text = result.get("content", result.get("text", ""))
+                downloads = result.get("downloads", [])
+            else:
+                text = str(result)
+                downloads = []
+
+            # Convert file paths to download-ready entries
+            served_files = []
+            for dl in downloads:
+                if isinstance(dl, dict) and dl.get("path"):
+                    fpath = dl["path"]
+                    fname = dl.get("filename", os.path.basename(fpath))
+                    # Copy to static/downloads for serving
+                    dl_dir = STATIC_DIR / "downloads"
+                    dl_dir.mkdir(exist_ok=True)
+                    dest = dl_dir / fname
+                    try:
+                        shutil.copy2(fpath, str(dest))
+                        served_files.append({
+                            "name": dl.get("name", fname),
+                            "filename": fname,
+                            "url": f"/static/downloads/{fname}",
+                            "description": dl.get("description", ""),
+                        })
+                    except Exception as cp_err:
+                        logger.warning(f"File copy failed: {cp_err}")
+
+            return {
+                "response": text,
+                "files": served_files,
+                "intent": result.get("intent", "chat") if isinstance(result, dict) else "chat",
+                "progress": progress_msgs,
+            }
     except Exception as agent_err:
         logger.warning(f"Agent chat error, falling back to simple Claude: {agent_err}")
+        import traceback
+        traceback.print_exc()
 
-    # Fallback: direct Claude call (no agent state)
+    # Fallback: direct Claude call with Dr. Data personality
     try:
         api_key = os.getenv("ANTHROPIC_API_KEY", "")
         if not api_key:
@@ -249,18 +298,24 @@ async def chat(req: ChatRequestV2):
         from anthropic import Anthropic
         client = Anthropic(api_key=api_key)
 
+        # Use the REAL Dr. Data system prompt
+        try:
+            from config.prompts import DR_DATA_SYSTEM_PROMPT
+            system = DR_DATA_SYSTEM_PROMPT
+        except ImportError:
+            system = (
+                "You are Dr. Data, Chief Data Intelligence Officer. You are not a chatbot. "
+                "You are a senior data analyst with 25 years of experience who takes initiative, "
+                "has strong opinions backed by evidence, and does work before being asked. "
+                "Be direct, give code examples, reference actual field names. No fluff. No emojis."
+            )
+
         context = req.context
         if req.file_id and req.file_id in _uploads:
             info = _uploads[req.file_id]
             context += f"\nFile: {info['filename']} ({info['size']:,} bytes)"
-
-        system = (
-            "You are Dr. Data -- expert in Tableau to Power BI migration, DAX, "
-            "data modeling, and analytics modernization. Be direct, give code "
-            "examples, reference actual field names when available. No fluff."
-        )
         if context:
-            system += f"\n\nContext:\n{context}"
+            system += f"\n\nCurrent context:\n{context}"
 
         msg = client.messages.create(
             model="claude-sonnet-4-20250514",

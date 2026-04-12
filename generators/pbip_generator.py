@@ -84,7 +84,7 @@ class PBIPGenerator:
     ROLE_MAP_CARD = {"values": "Values"}
     ROLE_MAP_TABLE = {"values": "Values"}
     ROLE_MAP_SLICER = {"category": "Values", "values": "Values"}
-    ROLE_MAP_MAP = {"category": "Location", "values": "Tooltips", "series": "Legend"}
+    ROLE_MAP_MAP = {"category": "Location", "values": "Category", "series": "Legend"}
 
     def __init__(self, output_dir):
         self.output_dir = Path(output_dir)
@@ -798,6 +798,11 @@ class PBIPGenerator:
         # Value roles get aggregated, category roles do not
         value_roles = {"Y", "Values", "Tooltips"}
         category_roles = {"Category", "X", "Series", "Rows", "Columns", "Location", "Legend"}
+        # filledMap: "Category" is the color-saturation bucket (a measure),
+        # not a dimension axis. Move it to value_roles so it gets aggregated.
+        if visual_type in ("filledMap", "map", "shapeMap"):
+            value_roles = value_roles | {"Category"}
+            category_roles = category_roles - {"Category"}
         # Max unique values allowed on a category axis before PBI throws
         # DataViewMappingError_ConditionRangeTooLarge.
         # Date columns are exempted because PBI auto-hierarchies handle them.

@@ -198,29 +198,18 @@ class QAAgent:
                 # Good enough or last attempt
                 break
 
-            # ---- Diagnose and fix ----
-            self._log("QA_FIX", f"Score {score}% < 75% -- attempting fix")
+            # ---- Diagnose and surgically patch the PBIP on disk ----
+            self._log("QA_FIX", f"Score {score}% < 75% -- patching PBIP")
             self._diagnose_fidelity_gaps(fidelity, live_result)
+            patches = self._patch_pbip_on_disk(pbip_path, fidelity, data_profile)
+            if not patches:
+                self._log("QA_FIX", "No actionable patches -- stopping", "warning")
+                break
 
-            # Re-generate PBIP with adjusted config
+            self._log("QA_FIX", f"Applied {patches} patches to PBIP on disk")
+
+            # Delete old report + dataset, republish patched PBIP
             try:
-                from generators.pbip_generator import PBIPGenerator
-                import shutil
-
-                fix_dir = pbip_path + f"_qa_fix_{loop + 1}"
-                if os.path.exists(fix_dir):
-                    shutil.rmtree(fix_dir)
-
-                gen = PBIPGenerator(fix_dir)
-                gen_result = gen.generate(
-                    config=self.config,
-                    data_profile=data_profile,
-                    dashboard_spec=self._build_dashboard_spec(),
-                    data_file_path=data_file_path,
-                )
-                new_pbip_path = gen_result.get("path", fix_dir)
-
-                # Delete old report + dataset, republish
                 try:
                     did = get_dataset_id_from_report(
                         pbi_token, workspace_id, report_id)
@@ -231,7 +220,7 @@ class QAAgent:
                     pass
 
                 pub = publish_pbip(
-                    token, workspace_id, new_pbip_path,
+                    token, workspace_id, pbip_path,
                     os.path.basename(pbip_path) + f"_v{loop + 2}"
                 )
                 if not pub.get("error"):
@@ -240,7 +229,6 @@ class QAAgent:
                                                 semantic_model_id)
                     report_url = (f"https://app.powerbi.com/groups/"
                                   f"{workspace_id}/reports/{report_id}")
-                    pbip_path = new_pbip_path
                     self._log("QA_REPUBLISH",
                               f"Republished: {report_url}")
                 else:
@@ -1105,6 +1093,12 @@ class QAAgent:
             return ""
         # Filter generated fields
         if "(generated)" in f.lower():
+            return ""
+        # Filter Tableau calculated field IDs (Calculation_NNNNN...)
+        if f.lower().startswith("calculation_"):
+            return ""
+        # Filter internal copy/clone IDs (fieldname (copy)_NNNNN)
+        if "(copy)_" in f.lower():
             return ""
         # Strip Tableau prefixes: sum:Field:qk -> Field
         if ":" in f:
@@ -2033,3 +2027,175 @@ class QAAgent:
             })
 
         return pages
+
+    # ================================================================== #
+    #  SURGICAL PBIP PATCHING (fix on disk, no regeneration)              #
+    # ================================================================== #
+
+    def _patch_pbip_on_disk(self, pbip_path, fidelity, data_profile=None):
+        """Surgically patch visual.json files in the PBIP directory.
+
+        Reads fidelity repairs list and applies fixes directly to files
+        on disk. Does NOT regenerate the entire PBIP -- only changes
+        what the QA loop diagnosed as wrong.
+
+        Returns the number of patches applied.
+        """
+        repairs = fidelity.get("repairs", [])
+        if not repairs:
+            return 0
+
+        # Find the .Report directory
+        report_dirs = glob.glob(os.path.join(pbip_path, "*.Report"))
+        if not report_dirs:
+            return 0
+        pages_dir = os.path.join(report_dirs[0], "definition", "pages")
+        if not os.path.isdir(pages_dir):
+            return 0
+
+        # Build page lookup: display_name -> page_folder_path
+        page_lookup = {}
+        for page_folder in os.listdir(pages_dir):
+            page_json = os.path.join(pages_dir, page_folder, "page.json")
+            if os.path.exists(page_json):
+                try:
+                    with open(page_json) as f:
+                        pdata = json.load(f)
+                    dn = pdata.get("displayName", "").lower().strip()
+                    page_lookup[dn] = os.path.join(pages_dir, page_folder)
+                except Exception:
+                    pass
+
+        # Get valid column names from data profile
+        valid_cols = set()
+        col_types = {}
+        if data_profile:
+            for ci in data_profile.get("columns", []):
+                valid_cols.add(ci["name"])
+                col_types[ci["name"]] = ci.get("semantic_type", "dimension")
+
+        patches = 0
+
+        for repair in repairs:
+            rtype = repair.get("repair_type", "")
+            priority = repair.get("priority", 9)
+            if priority > 2:
+                continue
+
+            if rtype == "CHANGE_VISUAL_TYPE":
+                target_page = repair.get("target", "").lower().strip()
+                expected_type = repair.get("expected_value", "")
+                page_path = page_lookup.get(target_page)
+                if not page_path or not expected_type:
+                    continue
+
+                visuals_dir = os.path.join(page_path, "visuals")
+                if not os.path.isdir(visuals_dir):
+                    continue
+
+                for viz_folder in os.listdir(visuals_dir):
+                    viz_json = os.path.join(visuals_dir, viz_folder, "visual.json")
+                    if not os.path.exists(viz_json):
+                        continue
+                    try:
+                        with open(viz_json) as f:
+                            vdata = json.load(f)
+                        current = vdata.get("visual", {}).get("visualType", "")
+                        # Only fix if current type doesn't match any acceptable type
+                        acceptable = self._tableau_mark_to_pbi_visual(
+                            repair.get("source_ref", ""))
+                        if current not in acceptable and expected_type:
+                            vdata["visual"]["visualType"] = expected_type
+                            with open(viz_json, "w") as f:
+                                json.dump(vdata, f, indent=2)
+                            patches += 1
+                            self._log("PATCH",
+                                      f"Changed visual type on '{target_page}': "
+                                      f"{current} -> {expected_type}", "fix")
+                            break  # One fix per page per repair
+                    except Exception:
+                        continue
+
+            elif rtype == "ADD_FIELD":
+                # Patch a visual that's missing a field binding.
+                # Parse: target = "PageName/field_name"
+                target = repair.get("target", "")
+                if "/" not in target:
+                    continue
+                page_name, field_name = target.rsplit("/", 1)
+                page_path = page_lookup.get(page_name.lower().strip())
+                if not page_path or not field_name:
+                    continue
+                # Find a visual on this page with empty or incomplete bindings
+                visuals_dir = os.path.join(page_path, "visuals")
+                if not os.path.isdir(visuals_dir):
+                    continue
+
+                # Resolve field against valid columns
+                resolved = None
+                for col in valid_cols:
+                    if col.lower() == field_name.lower():
+                        resolved = col
+                        break
+                if not resolved:
+                    for col in valid_cols:
+                        if field_name.lower() in col.lower():
+                            resolved = col
+                            break
+                if not resolved:
+                    continue
+
+                # Find the visual with fewest bindings and add this field
+                for viz_folder in os.listdir(visuals_dir):
+                    viz_json = os.path.join(visuals_dir, viz_folder, "visual.json")
+                    if not os.path.exists(viz_json):
+                        continue
+                    try:
+                        with open(viz_json) as f:
+                            vdata = json.load(f)
+                        qs = vdata.get("visual", {}).get("query", {}).get("queryState", {})
+                        # Check if this field is already bound
+                        already_bound = False
+                        for rv in qs.values():
+                            for p in rv.get("projections", []):
+                                if p.get("nativeQueryRef", "").lower().replace(
+                                    "sum of ", "") == resolved.lower():
+                                    already_bound = True
+                        if already_bound:
+                            continue
+                        # Add the field to the appropriate role
+                        sem = col_types.get(resolved, "dimension")
+                        if sem == "measure":
+                            role = "Y"
+                            proj = {
+                                "field": {"Aggregation": {
+                                    "Expression": {"Column": {
+                                        "Expression": {"SourceRef": {"Entity": "Data"}},
+                                        "Property": resolved}},
+                                    "Function": 0}},
+                                "queryRef": f"Sum(Data.{resolved})",
+                                "nativeQueryRef": f"Sum of {resolved}",
+                            }
+                        else:
+                            role = "Category"
+                            proj = {
+                                "field": {"Column": {
+                                    "Expression": {"SourceRef": {"Entity": "Data"}},
+                                    "Property": resolved}},
+                                "queryRef": f"Data.{resolved}",
+                                "nativeQueryRef": resolved,
+                            }
+                        if role not in qs:
+                            qs[role] = {"projections": []}
+                        qs[role]["projections"].append(proj)
+                        with open(viz_json, "w") as f:
+                            json.dump(vdata, f, indent=2)
+                        patches += 1
+                        self._log("PATCH",
+                                  f"Added field '{resolved}' to '{page_name}' "
+                                  f"as {role}", "fix")
+                        break  # One field per repair
+                    except Exception:
+                        continue
+
+        return patches

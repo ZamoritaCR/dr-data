@@ -845,6 +845,24 @@ class PBIPGenerator:
             if projections:
                 query_state[pbi_role] = {"projections": projections}
 
+        # Map-specific fallback: filledMap has Location but the color
+        # saturation measure (Category) was dropped because it referenced
+        # a Tableau Calculation_* ID not in the dataset. Assign the first
+        # available measure so the map actually shades regions.
+        if (visual_type in ("filledMap", "map", "shapeMap")
+                and "Location" in query_state and "Category" not in query_state
+                and profile_col_names):
+            measures = sorted([c for c in profile_col_names
+                               if col_types.get(c) == "measure"])
+            if measures:
+                proj = self._build_field_projection(
+                    measures[0], table_name, measure_names,
+                    aggregate=True, col_types=col_types,
+                )
+                query_state["Category"] = {"projections": [proj]}
+                print(f"    [FALLBACK] filledMap: assigned '{measures[0]}' "
+                      f"as color saturation (original calc field not in dataset)")
+
         # Fallback: if ALL requested fields were invalid and query_state is
         # empty, assign a default dimension + measure from the profile so the
         # visual is never blank. This handles Tableau Calculation_* IDs that

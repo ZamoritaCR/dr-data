@@ -183,6 +183,21 @@ def run_cloud_bridge(
         from core.direct_mapper import build_pbip_config_from_tableau
         config, dspec = build_pbip_config_from_tableau(spec, profile, "Data")
 
+        # Extract Tableau colors and inject unified palette for PBI theme
+        try:
+            from core.enhanced_tableau_parser import get_xml_root
+            from core.color_extractor import extract_all_colors, build_unified_palette
+            xml_root = get_xml_root(twbx_path)
+            if xml_root is not None:
+                extracted = extract_all_colors(xml_root)
+                palette = build_unified_palette(extracted, max_colors=12)
+                if palette:
+                    dspec["_unified_palette"] = palette
+                    _progress("translate", "progress",
+                              f"Extracted {len(palette)} Tableau colors for PBI theme")
+        except Exception as color_err:
+            logger.warning(f"Color extraction (non-fatal): {color_err}")
+
         sections = config.get("report_layout", {}).get("sections", [])
         total_visuals = sum(len(s.get("visualContainers", [])) for s in sections)
         measure_count = len(

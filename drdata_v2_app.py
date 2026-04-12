@@ -119,43 +119,47 @@ async def upload_file(file: UploadFile = File(...)):
     dest_path = dest_dir / file.filename
 
     with open(dest_path, "wb") as f:
-        content = await file.read()
-        f.write(content)
+        content_bytes = await file.read()
+        f.write(content_bytes)
 
     info = {
         "path": str(dest_path),
         "filename": file.filename,
-        "size": len(content),
+        "size": len(content_bytes),
     }
     _uploads[file_id] = info
-    logger.info(f"Upload: {file.filename} ({len(content):,} bytes) -> {file_id}")
+    logger.info(f"Upload: {file.filename} ({len(content_bytes):,} bytes) -> {file_id}")
 
-    # Auto-analyze with Dr. Data agent
-    analysis = ""
+    # Quick parse for file info (no LLM call -- instant)
     file_info = {}
     try:
-        agent = _get_agent(file_id)
-        if agent:
-            analysis = agent.analyze_uploaded_file(file_path=str(dest_path))
-            # Extract file info from agent state
-            spec = agent.tableau_spec or {}
-            df = agent.dataframe
-            file_info = {
-                "worksheets": len(spec.get("worksheets", [])),
-                "dashboards": len(spec.get("dashboards", [])),
-                "calc_fields": len(spec.get("calculated_fields", [])),
-                "rows": len(df) if df is not None else 0,
-                "columns": len(df.columns) if df is not None else 0,
-            }
-    except Exception as ae:
-        logger.error(f"Auto-analysis error: {ae}")
-        analysis = f"File uploaded. Analysis error: {str(ae)[:200]}"
+        from core.enhanced_tableau_parser import parse_twb
+        spec = parse_twb(str(dest_path))
+        file_info = {
+            "worksheets": len(spec.get("worksheets", [])),
+            "dashboards": len(spec.get("dashboards", [])),
+            "calc_fields": len(spec.get("calculated_fields", [])),
+        }
+    except Exception as pe:
+        logger.warning(f"Quick parse error: {pe}")
+
+    # Background agent analysis (non-blocking)
+    def _bg_analyze(fid, fpath):
+        try:
+            agent = _get_agent(fid)
+            if agent:
+                agent.analyze_uploaded_file(file_path=fpath)
+                logger.info(f"Background analysis complete for {fid}")
+        except Exception as e:
+            logger.error(f"Background analysis error: {e}")
+
+    threading.Thread(target=_bg_analyze, args=(file_id, str(dest_path)), daemon=True).start()
 
     return {
         "file_id": file_id,
         "filename": file.filename,
-        "size": len(content),
-        "analysis": analysis,
+        "size": len(content_bytes),
+        "analysis": f"Uploaded {file.filename}. {file_info.get('worksheets',0)} worksheets, {file_info.get('dashboards',0)} dashboards, {file_info.get('calc_fields',0)} calculated fields detected.",
         "file_info": file_info,
     }
 
@@ -414,6 +418,21 @@ def _run_pipeline(job_id: str, file_id: str, q):
 
         from core.direct_mapper import build_pbip_config_from_tableau
         config, dspec = build_pbip_config_from_tableau(spec, profile, "Data")
+
+        # Extract Tableau colors and inject unified palette for PBI theme
+        try:
+            from core.enhanced_tableau_parser import get_xml_root
+            from core.color_extractor import extract_all_colors, build_unified_palette
+            xml_root = get_xml_root(filepath)
+            if xml_root is not None:
+                extracted = extract_all_colors(xml_root)
+                palette = build_unified_palette(extracted, max_colors=12)
+                if palette:
+                    dspec["_unified_palette"] = palette
+                    _emit(q, "translate", "progress",
+                          f"Extracted {len(palette)} Tableau colors for PBI theme")
+        except Exception as color_err:
+            logger.warning(f"Color extraction (non-fatal): {color_err}")
 
         sections = config.get("report_layout", {}).get("sections", [])
         total_visuals = sum(len(s.get("visualContainers", [])) for s in sections)

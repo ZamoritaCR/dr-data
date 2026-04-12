@@ -374,7 +374,9 @@ code, pre, .mono { font-family: 'Fira Code', monospace; }
 // --- STATE ---
 var _fileId = null;
 var _jobId = null;
+var _sessionId = null;
 var _pipelineState = {};
+var _fileInfo = {};
 
 // --- UPLOAD ---
 var uploadZone = document.getElementById('upload-zone');
@@ -397,17 +399,52 @@ async function handleFile(file) {
   appendLog('phase', 'UPLOAD', '');
   appendLog('info', 'Uploading ' + file.name + ' (' + (file.size / 1024).toFixed(0) + ' KB)...');
 
+  // Show typing in chat while analyzing
+  appendChatMsg('Analyzing your workbook...', false, true);
+
   var form = new FormData();
   form.append('file', file);
   try {
     var resp = await fetch('/api/upload', { method: 'POST', body: form });
     var data = await resp.json();
     _fileId = data.file_id;
+    _sessionId = data.file_id;
     appendLog('success', 'Uploaded: ' + data.filename);
-    document.getElementById('wb-info').textContent = data.filename + ' (' + (data.size/1024).toFixed(0) + ' KB)';
+
+    // Update sidebar with file info
+    var info = data.file_info || {};
+    _fileInfo = info;
+    var wbHtml = '<strong>' + (data.filename || '') + '</strong><br>' +
+      (info.worksheets ? info.worksheets + ' worksheets<br>' : '') +
+      (info.dashboards ? info.dashboards + ' dashboards<br>' : '') +
+      (info.calc_fields ? info.calc_fields + ' calc fields<br>' : '') +
+      (info.rows ? info.rows.toLocaleString() + ' rows, ' + info.columns + ' cols' : '');
+    document.getElementById('wb-info').innerHTML = wbHtml;
+
+    // Show Dr. Data's auto-analysis in the chat panel
+    // Remove the "Analyzing..." placeholder
+    var lastMsg = document.querySelector('#chat-msgs .chat-msg:last-child');
+    if (lastMsg && lastMsg.querySelector('.chat-bubble').textContent.includes('Analyzing')) {
+      lastMsg.remove();
+    }
+    if (data.analysis) {
+      appendChatMsg(data.analysis, false);
+    }
+
+    // Update quick questions based on file content
+    var quick = document.getElementById('chat-quick');
+    if (info.calc_fields > 0) {
+      quick.innerHTML =
+        '<button class="chat-quick-btn" onclick="sendChat(\'Replicate this in Power BI\')">Replicate it</button>' +
+        '<button class="chat-quick-btn" onclick="sendChat(\'What about the LOD fields?\')">LOD fields</button>' +
+        '<button class="chat-quick-btn" onclick="sendChat(\'Explain blocked formulas\')">Blocked formulas</button>' +
+        '<button class="chat-quick-btn" onclick="sendChat(\'Build me a PDF report\')">PDF report</button>';
+    }
+
     startProcess();
   } catch(e) {
     appendLog('error', 'Upload failed: ' + e.message);
+    appendChatMsg('Upload failed: ' + e.message, false);
   }
 }
 
@@ -554,6 +591,7 @@ async function sendChat(msg) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         message: text,
+        session_id: _sessionId || _fileId || 'default',
         context: JSON.stringify(_pipelineState || {}),
         file_id: _fileId || ''
       })
@@ -561,13 +599,21 @@ async function sendChat(msg) {
     var data = await resp.json();
     var el = document.getElementById(tid); if (el) el.remove();
     appendChatMsg(data.response || 'No response.', false);
+    // Show download links if files were generated
+    if (data.files && data.files.length > 0) {
+      var dlHtml = data.files.map(function(f) {
+        var name = typeof f === 'string' ? f : (f.name || f.path || 'file');
+        return '<a href="#" style="color:var(--primary);font-size:11px;">' + name + '</a>';
+      }).join(' ');
+      appendChatMsg('Generated: ' + dlHtml, false);
+    }
   } catch(e) {
     var el = document.getElementById(tid); if (el) el.remove();
     appendChatMsg('Error: ' + e.message, false);
   }
 }
 
-function appendChatMsg(text, isUser) {
+function appendChatMsg(text, isUser, isTyping) {
   var msgs = document.getElementById('chat-msgs');
   var div = document.createElement('div');
   div.className = 'chat-msg' + (isUser ? ' user' : '');

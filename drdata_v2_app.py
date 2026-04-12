@@ -68,6 +68,20 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 _uploads: Dict[str, dict] = {}       # file_id -> {path, filename, size}
 _jobs: Dict[str, dict] = {}          # job_id -> {file_id, status, queue}
 _job_results: Dict[str, dict] = {}   # job_id -> final result
+_agents: Dict[str, object] = {}      # session_id -> DrDataAgent
+
+
+def _get_agent(session_id: str):
+    """Get or create a DrDataAgent for a session."""
+    if session_id not in _agents:
+        try:
+            from app.dr_data_agent import DrDataAgent
+            _agents[session_id] = DrDataAgent()
+            logger.info(f"Agent created for session {session_id}")
+        except Exception as e:
+            logger.error(f"Agent creation failed: {e}")
+            return None
+    return _agents[session_id]
 
 
 # ------------------------------------------------------------------ #
@@ -116,7 +130,34 @@ async def upload_file(file: UploadFile = File(...)):
     _uploads[file_id] = info
     logger.info(f"Upload: {file.filename} ({len(content):,} bytes) -> {file_id}")
 
-    return {"file_id": file_id, "filename": file.filename, "size": len(content)}
+    # Auto-analyze with Dr. Data agent
+    analysis = ""
+    file_info = {}
+    try:
+        agent = _get_agent(file_id)
+        if agent:
+            analysis = agent.analyze_uploaded_file(file_path=str(dest_path))
+            # Extract file info from agent state
+            spec = agent.tableau_spec or {}
+            df = agent.dataframe
+            file_info = {
+                "worksheets": len(spec.get("worksheets", [])),
+                "dashboards": len(spec.get("dashboards", [])),
+                "calc_fields": len(spec.get("calculated_fields", [])),
+                "rows": len(df) if df is not None else 0,
+                "columns": len(df.columns) if df is not None else 0,
+            }
+    except Exception as ae:
+        logger.error(f"Auto-analysis error: {ae}")
+        analysis = f"File uploaded. Analysis error: {str(ae)[:200]}"
+
+    return {
+        "file_id": file_id,
+        "filename": file.filename,
+        "size": len(content),
+        "analysis": analysis,
+        "file_info": file_info,
+    }
 
 
 @app.post("/api/process/{file_id}")
@@ -171,17 +212,43 @@ async def stream_events(job_id: str, request: Request):
     return EventSourceResponse(event_generator())
 
 
+class ChatRequestV2(BaseModel):
+    message: str
+    session_id: str = "default"
+    context: str = ""
+    file_id: str = ""
+
+
 @app.post("/api/chat")
-async def chat(req: ChatRequest):
+async def chat(req: ChatRequestV2):
+    """Full conversational chat with V1 agent (intent classification + tool calling)."""
+    session_id = req.session_id or req.file_id or "default"
+
+    try:
+        agent = _get_agent(session_id)
+        if agent:
+            # Use the full respond() method with intent classification
+            result = agent.respond(
+                user_message=req.message,
+                conversation_history=agent.messages,
+                uploaded_files={},
+            )
+            text = result if isinstance(result, str) else result.get("content", result.get("text", str(result)))
+            downloads = result.get("downloads", []) if isinstance(result, dict) else []
+            intent = result.get("intent", "chat") if isinstance(result, dict) else "chat"
+            return {"response": text, "files": downloads, "intent": intent}
+    except Exception as agent_err:
+        logger.warning(f"Agent chat error, falling back to simple Claude: {agent_err}")
+
+    # Fallback: direct Claude call (no agent state)
     try:
         api_key = os.getenv("ANTHROPIC_API_KEY", "")
         if not api_key:
-            return {"response": "No ANTHROPIC_API_KEY configured."}
+            return {"response": "No ANTHROPIC_API_KEY configured.", "files": [], "intent": "error"}
 
         from anthropic import Anthropic
         client = Anthropic(api_key=api_key)
 
-        # Build context from file if available
         context = req.context
         if req.file_id and req.file_id in _uploads:
             info = _uploads[req.file_id]
@@ -189,8 +256,8 @@ async def chat(req: ChatRequest):
 
         system = (
             "You are Dr. Data -- expert in Tableau to Power BI migration, DAX, "
-            "data modeling, and analytics modernization. Be direct, give code examples, "
-            "reference actual field names when available. No fluff."
+            "data modeling, and analytics modernization. Be direct, give code "
+            "examples, reference actual field names when available. No fluff."
         )
         if context:
             system += f"\n\nContext:\n{context}"
@@ -201,11 +268,11 @@ async def chat(req: ChatRequest):
             system=system,
             messages=[{"role": "user", "content": req.message}],
         )
-        return {"response": msg.content[0].text}
+        return {"response": msg.content[0].text, "files": [], "intent": "chat"}
 
     except Exception as e:
         logger.error(f"Chat error: {e}")
-        return {"response": f"Error: {str(e)[:200]}"}
+        return {"response": f"Error: {str(e)[:200]}", "files": [], "intent": "error"}
 
 
 @app.get("/api/jobs/{job_id}")

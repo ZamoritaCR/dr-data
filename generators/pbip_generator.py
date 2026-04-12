@@ -84,6 +84,7 @@ class PBIPGenerator:
     ROLE_MAP_CARD = {"values": "Values"}
     ROLE_MAP_TABLE = {"values": "Values"}
     ROLE_MAP_SLICER = {"category": "Values", "values": "Values"}
+    ROLE_MAP_MAP = {"category": "Location", "values": "Tooltips", "series": "Legend"}
 
     def __init__(self, output_dir):
         self.output_dir = Path(output_dir)
@@ -713,8 +714,8 @@ class PBIPGenerator:
         else:
             visual_type = cfg_obj.get("visualType", "card")
 
-        # Safety net: map visual types require tenant-level enablement.
-        # Force unsafe types to a safe fallback to avoid FilledMapVisualNotEnabled.
+        # Safety net: only allow known PBI visual types through.
+        # Tenant has all visuals enabled (maps, AI, custom, R/Python).
         _SAFE_VISUALS = {
             "clusteredBarChart", "clusteredColumnChart", "stackedBarChart",
             "stackedColumnChart", "hundredPercentStackedBarChart",
@@ -725,6 +726,7 @@ class PBIPGenerator:
             "lineStackedColumnComboChart", "waterfallChart", "funnelChart",
             "gauge", "kpi", "slicer", "textbox", "image", "shape",
             "decompositionTreeVisual", "ribbonChart",
+            "filledMap", "map", "shapeMap",
         }
         if visual_type not in _SAFE_VISUALS:
             visual_type = "clusteredBarChart"
@@ -788,12 +790,14 @@ class PBIPGenerator:
             role_map = self.ROLE_MAP_TABLE
         elif visual_type == "slicer":
             role_map = self.ROLE_MAP_SLICER
+        elif visual_type in ("filledMap", "map", "shapeMap"):
+            role_map = self.ROLE_MAP_MAP
         else:
             role_map = self.ROLE_MAP_CHART
 
         # Value roles get aggregated, category roles do not
-        value_roles = {"Y", "Values"}
-        category_roles = {"Category", "X", "Series", "Rows", "Columns"}
+        value_roles = {"Y", "Values", "Tooltips"}
+        category_roles = {"Category", "X", "Series", "Rows", "Columns", "Location", "Legend"}
         # Max unique values allowed on a category axis before PBI throws
         # DataViewMappingError_ConditionRangeTooLarge.
         # Date columns are exempted because PBI auto-hierarchies handle them.

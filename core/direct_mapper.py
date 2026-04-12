@@ -415,19 +415,22 @@ def _classify_fields_for_chart(ws, chart_type, profile_col_names, col_types):
             print(f"    [DIRECT-MAPPER] Auto-assigned fallback fields for "
                   f"'{ws_name}': dims={all_dims}, measures={all_measures}")
 
-    # For former map visuals (now table fallback), pick a geographic-looking
-    # column as a dimension so the table shows location data
-    if chart_type in ("tableEx",) and not all_dims and profile_col_names:
+    # For map visuals and table fallbacks, pick geographic-looking columns
+    # as dimensions so the visual shows location data
+    if chart_type in ("tableEx", "filledMap", "map", "shapeMap") and not all_dims and profile_col_names:
         geo_keywords = ["state", "region", "country", "city", "province",
-                        "county", "zip", "postal", "location", "area", "territory"]
+                        "county", "zip", "postal", "location", "area", "territory",
+                        "geography", "district", "nation"]
+        geo_dims = []
         for col in sorted(profile_col_names):
             if col_types.get(col) != "measure":
                 col_lower = col.lower()
                 if any(kw in col_lower for kw in geo_keywords):
-                    all_dims = [col]
-                    print(f"    [DIRECT-MAPPER] Auto-assigned geographic field "
-                          f"'{col}' for table visual '{ws_name}'")
-                    break
+                    geo_dims.append(col)
+        if geo_dims:
+            all_dims = geo_dims[:2]
+            print(f"    [DIRECT-MAPPER] Auto-assigned geographic field(s) "
+                  f"{all_dims} for '{chart_type}' visual '{ws_name}'")
 
     category = []
     values = []
@@ -454,7 +457,7 @@ def _classify_fields_for_chart(ws, chart_type, profile_col_names, col_types):
             values = all_dims[1:2]
 
     elif chart_type in ("map", "filledMap", "shapeMap", "azureMap"):
-        # Map visuals remapped to clusteredBarChart -- treat like bar chart
+        # Map visuals: geo dimension -> category (location), measures -> values
         category = all_dims[:1]
         values = all_measures[:3] or all_dims[1:2]
 

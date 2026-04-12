@@ -522,44 +522,33 @@ def _run_pipeline(job_id: str, file_id: str, q):
                     report_url = pub.get("report_url", "")
 
                     _emit(q, "publish", "progress",
-                          f"Published. Verifying data...")
+                          f"Published. Running QA Agent...")
 
-                    # Verify data loaded
+                    # Wire in QA Agent for real fidelity
                     time.sleep(5)
                     try:
-                        from core.powerbi_publisher import execute_dax_query, PBI_SCOPE
-                        pbi_token = get_access_token(PBI_SCOPE)
-                        dax = execute_dax_query(
-                            pbi_token, ws_id, sm_id,
-                            'EVALUATE ROW("cnt", COUNTROWS(Data))'
+                        from core.qa_agent import QAAgent
+                        qa = QAAgent(
+                            source_spec=spec,
+                            dataframe=df,
+                            config={"report_layout": config.get("report_layout", {}),
+                                    "tmdl_model": config.get("tmdl_model", {})}
                         )
-                        actual_rows = 0
-                        rows = dax.get("rows", [])
-                        if rows:
-                            actual_rows = int(rows[0].get("[cnt]", 0))
+                        live_result = qa._read_back_from_pbi(
+                            token, ws_id, report_id
+                        )
+                        fidelity = qa._compute_fidelity(live_result)
+                        score = fidelity.get("score", 0)
+                        loops = 1
 
-                        # Score fidelity
-                        data_score = min(40, int(40 * min(actual_rows, len(df)) / max(len(df), 1)))
-                        struct_score = min(30, total_visuals * 3 + len(sections) * 5)
-                        qual_score = min(30, total_visuals * 2 + (10 if actual_rows > 0 else 0))
-                        total_score = data_score + struct_score + qual_score
-
-                        fidelity = {
-                            "score": total_score,
-                            "data": data_score,
-                            "structure": struct_score,
-                            "quality": qual_score,
-                            "actual_rows": actual_rows,
-                        }
-
-                        _emit(q, "publish", "complete",
-                              f"Fidelity: {total_score}% ({actual_rows} rows verified)",
-                              report_url=report_url, fidelity=fidelity)
-                    except Exception as dax_err:
+                        _emit(q, "qa", "complete",
+                              f"Fidelity: {score}% ({loops} QA loops)",
+                              fidelity=fidelity)
+                    except Exception as qa_err:
+                        logger.warning(f"QA Agent error (non-fatal): {qa_err}")
                         fidelity = {"score": 50, "data": 20, "structure": 20, "quality": 10}
-                        _emit(q, "publish", "complete",
-                              f"Published (DAX verify skipped: {dax_err})",
-                              report_url=report_url, fidelity=fidelity)
+                        _emit(q, "qa", "complete",
+                              f"QA skipped: {qa_err}", fidelity=fidelity)
 
         except Exception as pub_err:
             _emit(q, "publish", "error", f"Publish error: {pub_err}")

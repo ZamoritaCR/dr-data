@@ -160,19 +160,27 @@ class QAAgent:
                 pbi_token, workspace_id, report_id
             )
 
-            # ---- Read local PBIP visual bindings ----
+            # ---- Read local PBIP visual bindings (has fields, queryRefs) ----
             local_manifest = self._read_pbip_manifest(pbip_path)
-            # Inject local visual info into live_result for richer comparison
+            # The PBI API often returns empty visuals (needs report to be
+            # rendered). Always prefer local PBIP data for field comparison.
             for lp in local_manifest:
                 dn_lower = lp["displayName"].lower().strip()
+                matched = False
                 for lr_page in live_result.get("pages", []):
                     lr_dn = lr_page.get("displayName", "").lower().strip()
                     if lr_dn == dn_lower or dn_lower in lr_dn or lr_dn in dn_lower:
-                        # Merge local visual data (has_fields, visualType)
-                        lr_page["local_visuals"] = lp.get("visuals", [])
-                        if not lr_page.get("visuals"):
-                            lr_page["visuals"] = lp.get("visuals", [])
+                        # Replace API visuals with local ones (they have field data)
+                        lr_page["visuals"] = lp.get("visuals", [])
+                        matched = True
                         break
+                if not matched:
+                    # Page exists in PBIP but API didn't list it -- add it
+                    live_result.setdefault("pages", []).append({
+                        "name": dn_lower,
+                        "displayName": lp["displayName"],
+                        "visuals": lp.get("visuals", []),
+                    })
 
             # ---- Compute fidelity ----
             fidelity = self._compute_fidelity(live_result)
@@ -1416,7 +1424,7 @@ class QAAgent:
                     else:
                         pbi_fields.add(f.lower().strip())
 
-            if src_fields:
+            if src_fields and pbi_fields:
                 overlap = len(src_fields & pbi_fields)
                 field_ratio = overlap / len(src_fields)
                 field_pts += int(25 * field_ratio)
@@ -1429,8 +1437,13 @@ class QAAgent:
                         "expected_value": mf,
                         "priority": 2,
                     })
+            elif pbi_fields and not src_fields:
+                # PBI has fields but we have no source expectation -- partial credit
+                field_pts += 10
+                ts["field_pct"] = 40
             else:
-                field_pts += 25  # no fields to check
+                # No fields on either side -- 0 points, not free 25
+                ts["field_pct"] = 0
 
             # --- LAYOUT (25 pts) ---
             expected_vc = src_tab.get("expected_visual_count", 1)
@@ -1463,15 +1476,15 @@ class QAAgent:
 
             ts["score"] = int(
                 (identity_pts + chart_pts + field_pts + layout_pts)
-                / (4 * max(src_idx + 1, 1))
-                * 100
+                * 100 / (100 * max(src_idx + 1, 1))
             )
             tab_scores.append(ts)
 
-        # Normalize to 100
+        # Normalize to 100.  Max per axis per tab = 25, 4 axes -> max = 100*n
         n = max(total_tabs, 1)
         raw = identity_pts + chart_pts + field_pts + layout_pts
-        score = int(raw / (4 * n) * 100)
+        max_raw = 100 * n
+        score = int(raw * 100 / max(max_raw, 1))
         score = max(0, min(100, score))
 
         # Sort repairs by priority
@@ -1988,12 +2001,28 @@ class QAAgent:
                         vis = vdata.get("visual", {})
                         qs = vis.get("query", {}).get("queryState", {})
                         pos = vdata.get("position", {})
+                        # Extract bound field names from queryState
+                        bound_fields = []
+                        query_refs = []
+                        for role_data in qs.values():
+                            for proj in role_data.get("projections", []):
+                                nr = proj.get("nativeQueryRef", "")
+                                qr = proj.get("queryRef", "")
+                                if nr:
+                                    # "Sum of Sales" -> "sales"
+                                    clean = nr.lower().replace("sum of ", "").replace("avg of ", "").strip()
+                                    bound_fields.append(clean)
+                                if qr:
+                                    query_refs.append(qr)
                         visuals.append({
                             "visualType": vis.get("visualType", ""),
+                            "type": vis.get("visualType", ""),
                             "title": "",
                             "width": pos.get("width", 0),
                             "height": pos.get("height", 0),
                             "has_fields": bool(qs),
+                            "fields": bound_fields,
+                            "queryRefs": query_refs,
                         })
                     except Exception:
                         continue

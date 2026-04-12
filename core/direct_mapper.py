@@ -481,6 +481,30 @@ def _classify_fields_for_chart(ws, chart_type, profile_col_names, col_types):
     if color_field and color_field not in used and not is_measure(color_field):
         series = [color_field]
 
+    # Defensive fallback: charts (not card/table) with category but no values
+    # get the first available measure from the profile. Charts with values but
+    # no category get the first available dimension. Prevents blank visuals
+    # when the parser only captured partial shelf fields.
+    _non_axis_types = {"card", "cardVisual", "multiRowCard", "kpi",
+                       "tableEx", "pivotTable", "table", "matrix", "slicer"}
+    if chart_type not in _non_axis_types and profile_col_names:
+        if category and not values:
+            profile_measures = [c for c in profile_col_names
+                                if col_types.get(c) == "measure"
+                                and c not in set(category)]
+            if profile_measures:
+                values = [sorted(profile_measures)[0]]
+                print(f"    [DIRECT-MAPPER] Fallback: assigned measure "
+                      f"{values} for '{ws_name}' (had category, no values)")
+        elif values and not category:
+            profile_dims = [c for c in profile_col_names
+                            if col_types.get(c) not in ("measure", "date")
+                            and c not in set(values)]
+            if profile_dims:
+                category = [sorted(profile_dims)[0]]
+                print(f"    [DIRECT-MAPPER] Fallback: assigned dimension "
+                      f"{category} for '{ws_name}' (had values, no category)")
+
     return {
         "category": category,
         "values": values,

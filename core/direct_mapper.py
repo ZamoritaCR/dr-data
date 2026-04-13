@@ -236,11 +236,23 @@ def _detect_aggregated_color(color_ref):
     return ""
 
 
+_CALC_ID_MAP = {}  # Module-level; set by build_pbip_config_from_tableau()
+
+
 def _resolve_field_against_profile(field_name, profile_col_names):
     """Try to match a field name against profile columns (case-insensitive).
 
+    First resolves Calculation_XXX IDs to caption names via calc_id_map.
     Returns the matched profile column name, or the original if no match.
     """
+    # Step 0: resolve Calculation_XXX internal IDs to caption names
+    if field_name in _CALC_ID_MAP:
+        field_name = _CALC_ID_MAP[field_name]
+    # Also try with stripped brackets
+    stripped = field_name.strip("[]")
+    if stripped in _CALC_ID_MAP:
+        field_name = _CALC_ID_MAP[stripped]
+
     if field_name in profile_col_names:
         return field_name
     lower_map = {c.lower(): c for c in profile_col_names}
@@ -1097,6 +1109,9 @@ def build_pbip_config_from_tableau(tableau_spec, data_profile, table_name="Data"
                               "measures": [...], "design": {...}, ...}
     """
     # Build lookup structures
+    global _CALC_ID_MAP
+    _CALC_ID_MAP = tableau_spec.get("calc_id_map", {})
+
     data_profile = data_profile or {}
     worksheets_by_name = {}
     for ws in tableau_spec.get("worksheets", []):

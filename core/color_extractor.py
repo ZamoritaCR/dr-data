@@ -383,6 +383,64 @@ def build_unified_palette(extracted_colors, max_colors=12):
     return [f"#{c}" for c in ranked]
 
 
+def extract_deep_palette(root, max_colors=12):
+    """Deep palette extraction -- checks all XML elements for hex colors.
+
+    Goes beyond mark_colors to find colors in:
+    - <color-palette> definitions
+    - <preferences> elements
+    - <style-rule> formatting
+    - <format> elements (font colors, background colors)
+    - <encoding> color definitions
+    - Any attribute containing a hex color pattern
+
+    Returns list of hex color strings with # prefix, ranked by frequency.
+    """
+    import re
+    from collections import Counter
+
+    hex_pattern = re.compile(r'#([0-9a-fA-F]{6})\b')
+    counter = Counter()
+
+    # Walk the entire XML tree and extract hex colors from all attributes
+    for elem in root.iter():
+        # Check all attributes
+        for attr_name, attr_val in elem.attrib.items():
+            if not attr_val:
+                continue
+            matches = hex_pattern.findall(attr_val)
+            for m in matches:
+                c = m.lower()
+                if not _is_noise_color(c):
+                    counter[c] += 1
+
+        # Check text content
+        if elem.text:
+            matches = hex_pattern.findall(elem.text)
+            for m in matches:
+                c = m.lower()
+                if not _is_noise_color(c):
+                    counter[c] += 1
+
+    # Also run the standard extraction for weighted scoring
+    try:
+        extracted = extract_all_colors(root)
+        for c in extracted.get("palette_colors", []):
+            if c and not _is_noise_color(c):
+                counter[c] += 5  # Palette definitions are highest priority
+        for c in extracted.get("mark_colors", []):
+            if c and not _is_noise_color(c):
+                counter[c] += 3
+    except Exception:
+        pass
+
+    if not counter:
+        return []
+
+    ranked = [c for c, _ in counter.most_common(max_colors)]
+    return [f"#{c}" for c in ranked]
+
+
 def compute_color_harmony(palette):
     """Analyze the color harmony type of a palette.
 

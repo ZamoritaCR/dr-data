@@ -13,11 +13,15 @@ Usage:
 
 from __future__ import annotations
 
+import io
 import json
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger("drdata-v2.visual_fidelity")
 
 from core.color_extractor import _normalize_hex
 
@@ -451,6 +455,297 @@ class VisualFidelityChecker:
                 lines.append("")
 
         return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    #  Google Vision screenshot comparison
+    # ------------------------------------------------------------------
+
+    def compare_screenshots(
+        self,
+        tableau_images: List[str],
+        pbi_report_url: str = "",
+        pbi_screenshots: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Compare Tableau screenshots against PBI output using Google Vision.
+
+        Takes Tableau screenshot paths and either a PBI report URL (screenshots
+        it via Playwright) or pre-captured PBI screenshot paths.
+
+        Falls back to structural comparison if Vision API is unavailable.
+
+        Args:
+            tableau_images: list of file paths to Tableau dashboard screenshots
+            pbi_report_url: URL of published PBI report (for live screenshotting)
+            pbi_screenshots: pre-captured PBI screenshot paths (skips Playwright)
+
+        Returns:
+            {
+                "overall_similarity": float 0-1,
+                "per_page": [{page, similarity, tableau_labels, pbi_labels, diffs}],
+                "method": "google_vision" | "structural_fallback",
+                "summary": str,
+            }
+        """
+        # Validate inputs
+        valid_tableau = [p for p in tableau_images if Path(p).exists()]
+        if not valid_tableau:
+            return self._fallback_result("No valid Tableau screenshots found")
+
+        # Get PBI screenshots
+        pbi_paths = []
+        if pbi_screenshots:
+            pbi_paths = [p for p in pbi_screenshots if Path(p).exists()]
+        elif pbi_report_url:
+            pbi_paths = self._screenshot_pbi_report(pbi_report_url)
+
+        if not pbi_paths:
+            return self._fallback_result(
+                "No PBI screenshots available — using structural comparison only"
+            )
+
+        # Try Google Vision
+        if self._vision_available():
+            return self._compare_with_vision(valid_tableau, pbi_paths)
+
+        # Fallback: pixel-level color histogram comparison
+        return self._compare_with_histograms(valid_tableau, pbi_paths)
+
+    def _vision_available(self) -> bool:
+        """Check if Google Vision API credentials are available."""
+        creds_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
+        if creds_path and Path(creds_path).exists():
+            return True
+        # Check common locations
+        for path in [
+            Path.home() / "google-service-account.json",
+            Path.home() / "google_service_account.json",
+        ]:
+            if path.exists():
+                os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(path)
+                return True
+        return False
+
+    def _compare_with_vision(
+        self, tableau_paths: List[str], pbi_paths: List[str]
+    ) -> Dict[str, Any]:
+        """Use Google Cloud Vision to compare screenshots."""
+        try:
+            from google.cloud import vision
+            client = vision.ImageAnnotatorClient()
+        except Exception as exc:
+            logger.warning(f"Google Vision init failed: {exc}")
+            return self._compare_with_histograms(tableau_paths, pbi_paths)
+
+        per_page = []
+        pairs = list(zip(tableau_paths, pbi_paths))
+        if not pairs:
+            pairs = [(tableau_paths[0], pbi_paths[0])]
+
+        for i, (tab_path, pbi_path) in enumerate(pairs):
+            tab_labels = self._vision_detect(client, tab_path)
+            pbi_labels = self._vision_detect(client, pbi_path)
+
+            # Compare label sets
+            tab_set = set(tab_labels.get("labels", []))
+            pbi_set = set(pbi_labels.get("labels", []))
+            label_overlap = len(tab_set & pbi_set) / max(len(tab_set | pbi_set), 1)
+
+            # Compare detected text
+            tab_text = set(tab_labels.get("text_tokens", []))
+            pbi_text = set(pbi_labels.get("text_tokens", []))
+            text_overlap = len(tab_text & pbi_text) / max(len(tab_text | pbi_text), 1)
+
+            # Compare dominant colors
+            tab_colors = tab_labels.get("colors", [])
+            pbi_colors = pbi_labels.get("colors", [])
+            color_sim = self._color_similarity(tab_colors, pbi_colors)
+
+            # Weighted similarity
+            similarity = (
+                label_overlap * 0.30
+                + text_overlap * 0.40
+                + color_sim * 0.30
+            )
+
+            # Identify diffs
+            diffs = []
+            missing_labels = tab_set - pbi_set
+            if missing_labels:
+                diffs.append(f"Missing in PBI: {', '.join(list(missing_labels)[:5])}")
+            missing_text = tab_text - pbi_text
+            if missing_text:
+                diffs.append(f"Missing text: {', '.join(list(missing_text)[:5])}")
+            if color_sim < 0.5:
+                diffs.append("Color palette significantly different")
+
+            per_page.append({
+                "page": i + 1,
+                "similarity": round(similarity, 3),
+                "tableau_labels": sorted(tab_set)[:10],
+                "pbi_labels": sorted(pbi_set)[:10],
+                "diffs": diffs,
+                "label_overlap": round(label_overlap, 3),
+                "text_overlap": round(text_overlap, 3),
+                "color_similarity": round(color_sim, 3),
+            })
+
+        overall = sum(p["similarity"] for p in per_page) / max(len(per_page), 1)
+
+        summary_lines = [f"Vision QA: {overall:.0%} overall similarity ({len(per_page)} pages)"]
+        for p in per_page:
+            status = "✓" if p["similarity"] >= 0.5 else "✗"
+            summary_lines.append(
+                f"  Page {p['page']}: {p['similarity']:.0%} "
+                f"(labels={p['label_overlap']:.0%}, text={p['text_overlap']:.0%}, "
+                f"color={p['color_similarity']:.0%}) {status}"
+            )
+            for d in p["diffs"]:
+                summary_lines.append(f"    - {d}")
+
+        return {
+            "overall_similarity": round(overall, 3),
+            "per_page": per_page,
+            "method": "google_vision",
+            "summary": "\n".join(summary_lines),
+        }
+
+    def _vision_detect(self, client, image_path: str) -> Dict[str, Any]:
+        """Run Google Vision detection on a single image."""
+        from google.cloud import vision
+
+        with open(image_path, "rb") as f:
+            content = f.read()
+        image = vision.Image(content=content)
+
+        result = {"labels": [], "text_tokens": [], "colors": []}
+
+        # Label detection (chart types, objects)
+        try:
+            resp = client.label_detection(image=image, max_results=15)
+            result["labels"] = [
+                label.description.lower()
+                for label in resp.label_annotations
+                if label.score >= 0.5
+            ]
+        except Exception as exc:
+            logger.warning(f"Vision label detection failed: {exc}")
+
+        # Text detection (titles, axis labels, values)
+        try:
+            resp = client.text_detection(image=image)
+            if resp.text_annotations:
+                full_text = resp.text_annotations[0].description
+                # Tokenize: split on whitespace and newlines, keep tokens > 1 char
+                tokens = [
+                    t.strip().lower() for t in full_text.replace("\n", " ").split()
+                    if len(t.strip()) > 1
+                ]
+                result["text_tokens"] = tokens[:50]
+        except Exception as exc:
+            logger.warning(f"Vision text detection failed: {exc}")
+
+        # Dominant color detection
+        try:
+            resp = client.image_properties(image=image)
+            if resp.image_properties_annotation:
+                for color_info in resp.image_properties_annotation.dominant_colors.colors[:8]:
+                    c = color_info.color
+                    hex_color = f"{int(c.red):02x}{int(c.green):02x}{int(c.blue):02x}"
+                    result["colors"].append(hex_color)
+        except Exception as exc:
+            logger.warning(f"Vision color detection failed: {exc}")
+
+        return result
+
+    def _compare_with_histograms(
+        self, tableau_paths: List[str], pbi_paths: List[str]
+    ) -> Dict[str, Any]:
+        """Fallback: compare images using color histogram similarity."""
+        per_page = []
+        pairs = list(zip(tableau_paths, pbi_paths))
+        if not pairs:
+            pairs = [(tableau_paths[0], pbi_paths[0])]
+
+        for i, (tab_path, pbi_path) in enumerate(pairs):
+            tab_colors = self._extract_image_colors(tab_path)
+            pbi_colors = self._extract_image_colors(pbi_path)
+            similarity = self._color_similarity(tab_colors, pbi_colors)
+
+            diffs = []
+            if similarity < 0.5:
+                diffs.append("Color distribution significantly different")
+
+            per_page.append({
+                "page": i + 1,
+                "similarity": round(similarity, 3),
+                "tableau_labels": [],
+                "pbi_labels": [],
+                "diffs": diffs,
+                "color_similarity": round(similarity, 3),
+            })
+
+        overall = sum(p["similarity"] for p in per_page) / max(len(per_page), 1)
+        return {
+            "overall_similarity": round(overall, 3),
+            "per_page": per_page,
+            "method": "histogram_fallback",
+            "summary": f"Histogram comparison: {overall:.0%} color similarity ({len(per_page)} pages)",
+        }
+
+    def _extract_image_colors(self, image_path: str) -> List[str]:
+        """Extract dominant colors from an image using PIL."""
+        try:
+            from PIL import Image
+            img = Image.open(image_path).convert("RGB").resize((100, 100))
+            pixels = list(img.getdata())
+            # Count most common colors (quantized to 6-bit)
+            from collections import Counter
+            quantized = Counter()
+            for r, g, b in pixels:
+                qr, qg, qb = (r >> 4) << 4, (g >> 4) << 4, (b >> 4) << 4
+                quantized[f"{qr:02x}{qg:02x}{qb:02x}"] += 1
+            return [c for c, _ in quantized.most_common(10)]
+        except Exception:
+            return []
+
+    def _color_similarity(self, colors_a: List[str], colors_b: List[str]) -> float:
+        """Compare two color lists by overlap."""
+        if not colors_a or not colors_b:
+            return 0.0
+        set_a = set(colors_a[:10])
+        set_b = set(colors_b[:10])
+        overlap = len(set_a & set_b)
+        return overlap / max(len(set_a | set_b), 1)
+
+    def _screenshot_pbi_report(self, url: str) -> List[str]:
+        """Screenshot a PBI report URL using Playwright."""
+        try:
+            from playwright.sync_api import sync_playwright
+            screenshots = []
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                page = browser.new_page(viewport={"width": 1280, "height": 720})
+                page.goto(url, wait_until="networkidle", timeout=30000)
+                # Wait for PBI to render
+                page.wait_for_timeout(5000)
+
+                path = f"/tmp/pbi_vision_qa_page1.png"
+                page.screenshot(path=path, full_page=False)
+                screenshots.append(path)
+                browser.close()
+            return screenshots
+        except Exception as exc:
+            logger.warning(f"PBI screenshot failed: {exc}")
+            return []
+
+    def _fallback_result(self, reason: str) -> Dict[str, Any]:
+        """Return a structural-fallback result."""
+        return {
+            "overall_similarity": 0.0,
+            "per_page": [],
+            "method": "structural_fallback",
+            "summary": f"Screenshot comparison unavailable: {reason}",
+        }
 
     # ------------------------------------------------------------------
     #  PBIP loaders and indexers

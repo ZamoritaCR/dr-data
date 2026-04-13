@@ -553,6 +553,7 @@ def parse_twb(path):
         "windows": [],
         "stories": [],
         "worksheet_colors": {},
+        "calc_id_map": {},  # internal Calculation_XXX -> caption name
     }
 
     actual_path = path
@@ -656,11 +657,19 @@ def parse_twb(path):
                     formula = calc.get("formula", "")
                     if formula:
                         col_info["formula"] = formula
+                        internal_name = _safe_strip_brackets(col.get("name", ""))
+                        caption_name = col.get("caption", "") or internal_name
                         spec["calculated_fields"].append({
-                            "name": col.get("caption", col.get("name", "")),
+                            "name": caption_name,
+                            "internal_name": internal_name,
                             "formula": formula,
+                            "datatype": col.get("datatype", ""),
+                            "role": col.get("role", ""),
                             "datasource": ds_name,
                         })
+                        # Map internal ID -> caption for visual binding resolution
+                        if internal_name != caption_name:
+                            spec["calc_id_map"][internal_name] = caption_name
 
                 ds_info["columns"].append(col_info)
 

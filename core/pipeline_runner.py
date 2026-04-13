@@ -376,11 +376,16 @@ def run_generate(config: dict, data_profile: dict, dashboard_spec: dict,
                  dataframe: pd.DataFrame = None,
                  palette: list = None,
                  tableau_spec: dict = None,
+                 tableau_images: list = None,
+                 pbi_report_url: str = "",
                  session_id: str = "") -> dict:
     """Stage 7: Generate PBIP project files and validate.
 
     Runs visual fidelity check BEFORE packaging. If any visual has an
     unfixable mismatch, the pipeline STOPS and shows the analyst what failed.
+
+    If tableau_images are provided, runs Google Vision screenshot comparison
+    as the ultimate fidelity gate.
 
     Returns:
         {
@@ -464,6 +469,32 @@ def run_generate(config: dict, data_profile: dict, dashboard_spec: dict,
         except Exception as e:
             logger.warning(f"Visual fidelity check (non-fatal): {e}")
 
+    # ── Vision QA Gate (Google Vision screenshot comparison) ──
+    vision_result = None
+    if tableau_images:
+        try:
+            from core.visual_fidelity import VisualFidelityChecker
+            checker = VisualFidelityChecker()
+            vision_result = checker.compare_screenshots(
+                tableau_images=tableau_images,
+                pbi_report_url=pbi_report_url,
+            )
+            # If vision says < 50% similarity and we have screenshots, flag it
+            if vision_result.get("overall_similarity", 0) < 0.5:
+                fidelity_info["passed"] = False
+                fidelity_info["vision_qa"] = vision_result
+            else:
+                fidelity_info["vision_qa"] = vision_result
+
+            # Write vision report
+            vision_md = Path(pbip_path) / "VISION_QA_REPORT.md"
+            vision_md.write_text(
+                f"# Vision QA Report\n\n{vision_result.get('summary', '')}",
+                encoding="utf-8",
+            )
+        except Exception as e:
+            logger.warning(f"Vision QA (non-fatal): {e}")
+
     # ── Audit report (HTML) ──
     audit_html = None
     try:
@@ -530,6 +561,24 @@ def run_generate(config: dict, data_profile: dict, dashboard_spec: dict,
                 f"DO NOT SHIP. Review FIDELITY_REPORT.md in the ZIP."
             )
 
+    # Vision QA summary
+    if vision_result and vision_result.get("method") != "structural_fallback":
+        sim = vision_result.get("overall_similarity", 0)
+        method = vision_result.get("method", "?")
+        status = "✓" if sim >= 0.5 else "✗"
+        summary_lines.append(f"\nVision QA ({method}): {sim:.0%} similarity {status}")
+        for pp in vision_result.get("per_page", [])[:5]:
+            page_status = "✓" if pp.get("similarity", 0) >= 0.5 else "✗"
+            summary_lines.append(
+                f"  Page {pp['page']}: {pp['similarity']:.0%} {page_status}"
+            )
+            for d in pp.get("diffs", [])[:3]:
+                summary_lines.append(f"    - {d}")
+        if sim < 0.5:
+            summary_lines.append(
+                "  ✗ PBI output does NOT match Tableau original — analyst review required."
+            )
+
     if zip_path:
         summary_lines.append(f"\n  ZIP: {zip_path}")
 
@@ -545,6 +594,7 @@ def run_generate(config: dict, data_profile: dict, dashboard_spec: dict,
         "fidelity": fidelity_info,
         "audit_html": audit_html,
         "audit_md": audit_md,
+        "vision_qa": vision_result,
         "summary": "\n".join(summary_lines),
     }
 

@@ -291,16 +291,58 @@ def extract_schema_from_tableau(tableau_spec: dict) -> List[dict]:
                     "source": "calculated_field",
                 }
 
+    # 4. Add calculated fields BY CAPTION NAME as actual columns.
+    # These are the fields that visuals reference after calc_id_map resolution.
+    for cf in tableau_spec.get("calculated_fields", []):
+        caption = cf.get("name", "")
+        if not caption or caption in columns:
+            continue
+        # Infer data type from formula or explicit datatype
+        dt = cf.get("datatype", "")
+        role_hint = cf.get("role", "")
+        if dt in ("real", "integer", "float"):
+            dtype = "real"
+            role = "measure"
+        elif dt in ("date", "datetime"):
+            dtype = "date"
+            role = "dimension"
+        elif dt == "boolean":
+            dtype = "boolean"
+            role = "dimension"
+        elif role_hint == "measure":
+            dtype = "real"
+            role = "measure"
+        else:
+            # Guess from formula: if it has SUM/AVG/COUNT it's numeric
+            formula = cf.get("formula", "")
+            if agg_pattern.search(formula) or any(kw in formula.upper()
+                    for kw in ("SUM(", "AVG(", "COUNT(", "MIN(", "MAX(")):
+                dtype = "real"
+                role = "measure"
+            elif "IF " in formula.upper() and ("THEN" in formula.upper()):
+                # IF/THEN often returns string categories
+                dtype = "string"
+                role = "dimension"
+            else:
+                dtype = "real"
+                role = "measure"
+        columns[caption] = {
+            "name": caption,
+            "datatype": dtype,
+            "role": role,
+            "source": "calculated_field_caption",
+        }
+
     # Filter out Tableau internal / noise columns
     _internal_prefixes = (
         "Action (", "Tooltip (", "__tableau", "usr:", "pcto:", "cnt:",
-        "twk:", "tmn:", "yr:", "mn:", "qr:", "tqr:", "Calculation_",
+        "twk:", "tmn:", "yr:", "mn:", "qr:", "tqr:",
         "federated.", "Multiple Values",
     )
+    # NOTE: Calculation_ prefix is NO LONGER filtered.
+    # Internal Calculation_XXX IDs are resolved to captions via calc_id_map.
     _internal_suffixes = (
         "(generated)",  # Tableau auto-generated fields like Latitude/Longitude
-        "(copy)",
-        "(bin)",
     )
     cleaned = []
     for col in columns.values():
@@ -309,7 +351,7 @@ def extract_schema_from_tableau(tableau_spec: dict) -> List[dict]:
             continue
         if any(name.endswith(s) for s in _internal_suffixes):
             continue
-        if len(name) > 60:  # Overly long names are usually internal
+        if len(name) > 80:  # Very long names are usually internal
             continue
         if len(name) < 2 or not re.search(r'[a-zA-Z0-9]', name):
             continue

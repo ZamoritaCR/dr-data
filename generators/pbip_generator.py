@@ -85,6 +85,7 @@ class PBIPGenerator:
     ROLE_MAP_TABLE = {"values": "Values"}
     ROLE_MAP_SLICER = {"category": "Values", "values": "Values"}
     ROLE_MAP_MAP = {"category": "Location", "values": "Category", "series": "Legend"}
+    ROLE_MAP_SCATTER = {"category": "X", "values": "Y", "series": "Details"}
 
     def __init__(self, output_dir):
         self.output_dir = Path(output_dir)
@@ -792,6 +793,8 @@ class PBIPGenerator:
             role_map = self.ROLE_MAP_SLICER
         elif visual_type in ("filledMap", "map", "shapeMap"):
             role_map = self.ROLE_MAP_MAP
+        elif visual_type == "scatterChart":
+            role_map = self.ROLE_MAP_SCATTER
         else:
             role_map = self.ROLE_MAP_CHART
 
@@ -809,6 +812,9 @@ class PBIPGenerator:
         # String dimensions with extreme cardinality (>30000) are still blocked.
         MAX_CATEGORY_CARDINALITY = 30000
         col_card = getattr(self, "_col_cardinality", {})
+
+        # Extract derivation map from data_roles (if provided by direct_mapper)
+        derivations = data_roles.get("derivations", {})
 
         query_state = {}
         for our_role, pbi_role in role_map.items():
@@ -836,9 +842,12 @@ class PBIPGenerator:
                               f"cardinality {card:,} exceeds {MAX_CATEGORY_CARDINALITY} "
                               f"for category axis (would cause ConditionRangeTooLarge)")
                         continue
+                # Pass Tableau derivation (Sum/Avg/CountD/etc.) to field projection
+                field_derivation = derivations.get(field_name)
                 proj = self._build_field_projection(
                     field_name, table_name, measure_names,
                     aggregate=aggregate, col_types=col_types,
+                    derivation=field_derivation,
                 )
                 projections.append(proj)
 

@@ -657,8 +657,8 @@ def parse_twb(path):
                     formula = calc.get("formula", "")
                     if formula:
                         col_info["formula"] = formula
-                        internal_name = _safe_strip_brackets(col.get("name", ""))
-                        caption_name = col.get("caption", "") or internal_name
+                        internal_name = _safe_strip_brackets(col.get("name", "")).strip()
+                        caption_name = (col.get("caption", "") or internal_name).strip()
                         spec["calculated_fields"].append({
                             "name": caption_name,
                             "internal_name": internal_name,
@@ -799,8 +799,8 @@ def parse_twb(path):
 
                 # Also extract <column> elements for role info
                 for col in dep.findall("column"):
-                    col_name = _safe_strip_brackets(col.get("name", ""))
-                    col_caption = col.get("caption", "")
+                    col_name = _safe_strip_brackets(col.get("name", "")).strip()
+                    col_caption = (col.get("caption", "") or "").strip()
                     col_role = col.get("role", "")
                     resolved = spec["calc_id_map"].get(col_name, col_caption or col_name)
                     if not resolved or resolved.lower() in ("number of records",):

@@ -551,4 +551,39 @@ def generate_from_tableau_spec(
         csv_path = os.path.join(output_dir, "synthetic_tableau_data.csv")
         df.to_csv(csv_path, index=False)
 
+    # --- ADD CALCULATED FIELD COLUMNS ---
+    # Visual bindings reference calc fields by name. Without these columns,
+    # PBI visuals can't bind and fall back to defaults.
+    calc_fields = tableau_spec.get("calculated_fields", [])
+    if calc_fields:
+        import numpy as np
+        for cf in calc_fields:
+            col_name = cf.get("caption") or cf.get("name", "")
+            if not col_name or col_name in df.columns:
+                continue
+            formula = cf.get("formula", "").lower()
+            # Infer data type from formula content
+            if any(kw in formula for kw in ["sum(", "avg(", "count(", "min(", "max(", "ratio", "profit", "sales", "budget", "rank"]):
+                # Numeric measure
+                df[col_name] = np.random.uniform(0, 10000, size=len(df)).round(2)
+            elif any(kw in formula for kw in ["datepart", "date", "day", "month", "year"]):
+                # Numeric (date part)
+                df[col_name] = np.random.randint(1, 365, size=len(df))
+            elif any(kw in formula for kw in ["if ", "case", "elseif", "then"]):
+                # Categorical from conditional
+                df[col_name] = np.random.choice(["Category A", "Category B", "Category C", "Category D"], size=len(df))
+            elif any(kw in formula for kw in ["left(", "right(", "mid(", "upper(", "lower(", "str("]):
+                # String manipulation
+                df[col_name] = [f"Val_{i}" for i in range(len(df))]
+            elif any(kw in formula for kw in ["int(", "round(", "floor(", "ceiling("]):
+                # Integer
+                df[col_name] = np.random.randint(0, 100, size=len(df))
+            elif "window" in formula or "running" in formula or "index" in formula:
+                # Window function — sequential numeric
+                df[col_name] = np.arange(len(df), dtype=float)
+            else:
+                # Default to numeric
+                df[col_name] = np.random.uniform(0, 1000, size=len(df)).round(2)
+        # Calc field columns added: {sum(1 for cf in calc_fields if (cf.get('caption') or cf.get('name','')) in df.columns)}
+
     return df, csv_path, schema

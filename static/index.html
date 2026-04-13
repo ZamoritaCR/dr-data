@@ -3,948 +3,905 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Dr. Data -- Tableau to Power BI</title>
+<title>Dr. Data — Tableau → Power BI</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
 :root {
-  --bg: #F8FAFC; --bg-white: #FFFFFF; --surface: #F1F5F9;
-  --primary: #3B82F6; --primary-light: #60A5FA; --primary-dark: #1D4ED8;
-  --cta: #F97316;
-  --text: #1E293B; --text-secondary: #64748B; --text-muted: #94A3B8;
-  --border: #E2E8F0; --border-light: #F1F5F9;
-  --auto: #22C55E; --auto-bg: #F0FDF4; --auto-text: #166534;
-  --good: #10B981;
-  --review: #F59E0B; --review-bg: #FFFBEB; --review-text: #92400E;
-  --blocked: #EF4444; --blocked-bg: #FEF2F2; --blocked-text: #991B1B;
-  --log-bg: #0F172A; --log-text: #E2E8F0; --log-muted: #475569;
-  --log-accent: #60A5FA; --log-success: #4ADE80; --log-warn: #FBBF24; --log-error: #F87171;
+  --bg: #0a0e17;
+  --surface: #111827;
+  --surface-2: #1a2438;
+  --surface-3: #232d42;
+  --text: #f0f4ff;
+  --text-dim: #8899bb;
+  --text-muted: #5a6a88;
+  --green: #00ff88;
+  --green-dim: rgba(0,255,136,0.12);
+  --gold: #ffd700;
+  --gold-dim: rgba(255,215,0,0.12);
+  --red: #ff4466;
+  --red-dim: rgba(255,68,102,0.12);
+  --blue: #4488ff;
+  --blue-dim: rgba(68,136,255,0.12);
+  --border: #1e2d44;
+  --radius: 12px;
+  --radius-sm: 8px;
 }
 
-html, body { height: 100%; font-family: 'Fira Sans', sans-serif; background: var(--bg); color: var(--text); }
-code, pre, .mono { font-family: 'Fira Code', monospace; }
+html, body { height: 100%; font-family: 'IBM Plex Sans', sans-serif; background: var(--bg); color: var(--text); }
+code, pre, .mono { font-family: 'IBM Plex Mono', monospace; }
 
-/* --- NAV --- */
-.nav {
-  display: flex; align-items: center; gap: 16px;
-  padding: 0 24px; height: 52px;
-  background: var(--bg-white); border-bottom: 1px solid var(--border);
+/* ===== LAYOUT ===== */
+.app { display: flex; flex-direction: column; height: 100vh; }
+
+/* --- HEADER --- */
+.header {
+  display: flex; align-items: center; gap: 14px;
+  padding: 0 24px; height: 52px; min-height: 52px;
+  background: var(--surface); border-bottom: 1px solid var(--border);
 }
-.nav-brand { display: flex; align-items: center; gap: 10px; }
-.nav-logo { width: 28px; height: 28px; }
-.nav-title { font-weight: 700; font-size: 15px; color: var(--text); letter-spacing: -0.02em; }
-.nav-tabs { display: flex; gap: 4px; margin-left: 32px; }
-.nav-tab {
-  padding: 6px 14px; border-radius: 4px; font-size: 12px; font-weight: 600;
-  color: var(--text-muted); cursor: pointer; transition: all .15s;
-  border: none; background: none; text-transform: uppercase; letter-spacing: .04em;
+.header-logo {
+  font-family: 'IBM Plex Mono', monospace; font-weight: 700; font-size: 15px;
+  color: var(--green); letter-spacing: -0.03em;
 }
-.nav-tab:hover { color: var(--text-secondary); background: var(--surface); }
-.nav-tab.active { color: var(--primary); background: rgba(59,130,246,.08); }
-.nav-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
-.nav-score {
-  font-family: 'Fira Code', monospace; font-size: 18px; font-weight: 700; color: var(--auto);
+.header-logo span { color: var(--text-dim); font-weight: 400; }
+.header-status {
+  margin-left: auto; display: flex; align-items: center; gap: 8px;
+  font-size: 12px; color: var(--text-muted);
 }
-.nav-score-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; }
-.nav-status {
-  width: 8px; height: 8px; border-radius: 50%; background: var(--auto);
+.header-dot {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--green);
   animation: pulse 2s infinite;
 }
+.header-dot.off { background: var(--red); animation: none; }
 @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:.3;} }
+.session-id { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--text-muted); }
 
-/* --- LAYOUT --- */
-.layout {
-  display: flex; height: calc(100vh - 52px); overflow: hidden;
-}
-.panel-left {
-  width: 220px; min-width: 220px; background: var(--bg-white);
-  border-right: 1px solid var(--border); padding: 20px 16px;
-  overflow-y: auto; display: flex; flex-direction: column; gap: 20px;
-}
-.panel-center {
-  flex: 1; overflow-y: auto; padding: 24px;
-  display: flex; flex-direction: column; gap: 20px;
-}
-.panel-right {
-  width: 300px; min-width: 300px; background: var(--bg-white);
-  border-left: 1px solid var(--border);
-  display: flex; flex-direction: column;
-}
-
-/* --- LEFT: PIPELINE --- */
-.section-label {
-  font-size: 10px; font-weight: 700; text-transform: uppercase;
-  letter-spacing: .08em; color: var(--text-muted); margin-bottom: 8px;
-}
-.step-list { display: flex; flex-direction: column; gap: 2px; }
-.step {
-  display: flex; align-items: center; gap: 10px;
-  padding: 7px 10px; border-radius: 4px; font-size: 12px; font-weight: 500;
-  color: var(--text-secondary); transition: all .15s;
-}
-.step.active { color: var(--primary); background: rgba(59,130,246,.06); font-weight: 600; }
-.step.done { color: var(--auto-text); }
-.step.error { color: var(--blocked-text); }
-.step-dot {
-  width: 8px; height: 8px; border-radius: 50%;
-  background: var(--border); flex-shrink: 0;
-}
-.step.active .step-dot { background: var(--primary); animation: pulse 1.5s infinite; }
-.step.done .step-dot { background: var(--auto); }
-.step.error .step-dot { background: var(--blocked); }
-
-/* LEFT: METRICS */
-.metric-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.metric-card {
-  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
-  padding: 10px; text-align: center;
-}
-.metric-val {
-  font-family: 'Fira Code', monospace; font-size: 20px; font-weight: 700; line-height: 1.1;
-}
-.metric-label {
-  font-size: 9px; font-weight: 600; text-transform: uppercase;
-  letter-spacing: .06em; color: var(--text-muted); margin-top: 2px;
-}
-
-/* --- CENTER: UPLOAD --- */
+/* --- UPLOAD ZONE --- */
 .upload-zone {
-  border: 2px dashed var(--border); border-radius: 8px;
-  padding: 48px 32px; text-align: center; cursor: pointer;
-  transition: all .2s; background: var(--bg-white);
+  margin: 16px 24px 0; padding: 28px 20px;
+  border: 2px dashed var(--border); border-radius: var(--radius);
+  background: var(--surface); text-align: center; cursor: pointer;
+  transition: all .2s;
 }
-.upload-zone:hover, .upload-zone.drag-over {
-  border-color: var(--primary); background: rgba(59,130,246,.03);
+.upload-zone:hover, .upload-zone.dragover {
+  border-color: var(--green); background: var(--green-dim);
 }
-.upload-zone h3 { font-size: 16px; font-weight: 600; color: var(--text); margin: 12px 0 4px; }
-.upload-zone p { font-size: 12px; color: var(--text-muted); }
-.upload-icon { color: var(--primary); }
-
-/* --- CENTER: LIVE LOG --- */
-.log-terminal {
-  background: var(--log-bg); border-radius: 8px; padding: 16px;
-  font-family: 'Fira Code', monospace; font-size: 12px; line-height: 1.8;
-  overflow-y: auto; max-height: 500px; min-height: 200px;
+.upload-zone.has-file {
+  border-color: var(--green); border-style: solid;
+  background: var(--green-dim); padding: 14px 20px;
 }
-.log-entry { display: flex; align-items: center; gap: 8px; }
-.log-idx { color: var(--log-muted); min-width: 70px; font-size: 11px; }
-.log-field { color: #F0F4F8; min-width: 180px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.log-detail { color: var(--log-muted); flex: 1; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.log-bar { width: 80px; height: 3px; background: #1E293B; border-radius: 2px; overflow: hidden; flex-shrink: 0; }
-.bar-fill { height: 100%; border-radius: 2px; }
-.bar-auto { background: var(--log-success); }
-.bar-review { background: var(--log-warn); }
-.bar-blocked { background: var(--log-error); }
-.log-score { font-size: 10px; font-weight: 600; min-width: 80px; text-align: right; flex-shrink: 0; }
-.score-auto { color: var(--log-success); }
-.score-review { color: var(--log-warn); }
-.score-blocked { color: var(--log-error); }
-.log-phase {
-  color: var(--log-accent); font-weight: 600; padding: 6px 0 2px;
-  border-top: 1px solid rgba(255,255,255,.06); margin-top: 4px;
+.upload-icon { font-size: 32px; margin-bottom: 8px; opacity: 0.5; }
+.upload-title { font-size: 14px; font-weight: 600; color: var(--text); }
+.upload-sub { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+.upload-file-info {
+  display: flex; align-items: center; gap: 12px; justify-content: center;
 }
-.log-info { color: var(--log-text); padding: 2px 0; }
-.log-success { color: var(--log-success); font-weight: 600; }
-.log-error-line { color: var(--log-error); font-weight: 600; }
-
-/* --- CENTER: KPI ROW --- */
-.kpi-row { display: flex; gap: 12px; }
-.kpi-card {
-  flex: 1; background: var(--bg-white); border: 1px solid var(--border);
-  border-radius: 6px; padding: 14px 16px; display: flex; align-items: center; gap: 12px;
+.upload-file-name { font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: var(--green); font-weight: 600; }
+.upload-file-meta { font-size: 12px; color: var(--text-dim); }
+.upload-file-clear {
+  background: none; border: 1px solid var(--border); border-radius: 6px;
+  color: var(--text-muted); font-size: 11px; padding: 3px 10px; cursor: pointer;
 }
-.kpi-val { font-family: 'Fira Code', monospace; font-size: 24px; font-weight: 700; }
-.kpi-meta { font-size: 11px; }
-.kpi-label { color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; font-size: 10px; }
-
-/* --- CENTER: RESULTS TABLE --- */
-.results-table {
-  width: 100%; border-collapse: collapse; font-size: 12px;
-  background: var(--bg-white); border: 1px solid var(--border); border-radius: 8px;
+.upload-file-clear:hover { border-color: var(--red); color: var(--red); }
+.upload-progress {
+  margin-top: 10px; height: 3px; border-radius: 2px; background: var(--surface-2);
   overflow: hidden;
 }
-.results-table th {
-  text-align: left; padding: 10px 12px; background: var(--surface);
-  font-size: 10px; font-weight: 700; text-transform: uppercase;
-  letter-spacing: .05em; color: var(--text-muted);
-  border-bottom: 2px solid var(--border);
+.upload-progress-bar {
+  height: 100%; background: var(--green); width: 0%; transition: width .3s;
 }
-.results-table td { padding: 8px 12px; border-bottom: 1px solid var(--border-light); vertical-align: top; }
-.results-table tr:hover { background: rgba(59,130,246,.02); }
-.tier-badge {
-  display: inline-block; padding: 2px 8px; border-radius: 4px;
-  font-family: 'Fira Code', monospace; font-size: 10px; font-weight: 600;
-}
-.tier-auto { background: var(--auto-bg); color: var(--auto-text); }
-.tier-good { background: #ECFDF5; color: #065F46; }
-.tier-review { background: var(--review-bg); color: var(--review-text); }
-.tier-blocked { background: var(--blocked-bg); color: var(--blocked-text); }
+#upload-input { display: none; }
 
-/* --- CENTER: REPORT URL --- */
-.report-link {
-  display: inline-flex; align-items: center; gap: 8px;
-  background: var(--primary); color: #fff; padding: 10px 20px;
-  border-radius: 6px; font-weight: 600; font-size: 13px;
-  text-decoration: none; transition: background .15s;
+/* --- CHAT AREA --- */
+.chat-area {
+  flex: 1; overflow-y: auto; padding: 20px 24px;
+  display: flex; flex-direction: column; gap: 16px;
+  scroll-behavior: smooth;
 }
-.report-link:hover { background: var(--primary-dark); }
 
-/* --- RIGHT: CHAT --- */
-.chat-header {
-  padding: 16px; border-bottom: 1px solid var(--border);
-  display: flex; align-items: center; gap: 10px;
+/* --- MESSAGES --- */
+.msg {
+  display: flex; gap: 12px; max-width: 820px;
+  animation: fadeIn .25s ease;
 }
-.chat-icon {
-  width: 32px; height: 32px; border-radius: 50%;
-  background: var(--primary); display: flex; align-items: center; justify-content: center;
-}
-.chat-icon svg { width: 16px; height: 16px; fill: #fff; }
-.chat-title { font-weight: 700; font-size: 14px; }
-.chat-sub { font-size: 10px; color: var(--text-muted); }
-.chat-msgs {
-  flex: 1; overflow-y: auto; padding: 16px;
-  display: flex; flex-direction: column; gap: 10px;
-}
-.chat-msg { display: flex; gap: 8px; align-items: flex-start; }
-.chat-msg.user { flex-direction: row-reverse; }
-.chat-msg-avatar {
-  width: 24px; height: 24px; border-radius: 50%;
-  background: var(--surface); display: flex; align-items: center;
-  justify-content: center; flex-shrink: 0; font-size: 10px; font-weight: 700;
-  color: var(--primary);
-}
-.chat-msg.user .chat-msg-avatar { background: var(--primary); color: #fff; }
-.chat-bubble {
-  max-width: 80%; padding: 8px 12px; border-radius: 4px 12px 12px 12px;
-  background: var(--surface); font-size: 12px; line-height: 1.5;
-  border: 1px solid var(--border-light);
-}
-.chat-bubble code { background: rgba(59,130,246,.08); padding: 1px 4px; border-radius: 3px; font-size: 11px; }
-.chat-msg.user .chat-bubble {
-  background: var(--primary); color: #fff; border-radius: 12px 4px 12px 12px; border: none;
-}
-.chat-input-area {
-  padding: 12px; border-top: 1px solid var(--border);
-  display: flex; gap: 8px;
-}
-.chat-input {
-  flex: 1; border: 1px solid var(--border); border-radius: 6px;
-  padding: 8px 12px; font-size: 12px; font-family: 'Fira Sans', sans-serif;
-  color: var(--text); outline: none; transition: border-color .15s;
-}
-.chat-input:focus { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(59,130,246,.1); }
-.chat-send {
-  background: var(--primary); border: none; color: #fff; border-radius: 6px;
-  padding: 8px 14px; cursor: pointer; font-size: 13px; transition: background .15s;
-  display: flex; align-items: center;
-}
-.chat-send:hover { background: var(--primary-dark); }
-.chat-quick { padding: 8px 12px; display: flex; flex-wrap: wrap; gap: 6px; }
-.chat-quick-btn {
-  font-size: 10px; padding: 4px 10px; border: 1px solid var(--border);
-  border-radius: 4px; background: var(--bg); color: var(--text-secondary);
-  cursor: pointer; transition: all .15s; font-family: 'Fira Sans', sans-serif;
-}
-.chat-quick-btn:hover { border-color: var(--primary); color: var(--primary); }
+.msg.user { align-self: flex-end; flex-direction: row-reverse; }
+.msg.bot { align-self: flex-start; }
 
-/* --- HIDDEN --- */
-.hidden { display: none !important; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 
-/* --- FILE INPUT --- */
-.file-input { display: none; }
+.msg-avatar {
+  width: 32px; height: 32px; min-width: 32px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px; font-weight: 700; margin-top: 2px;
+}
+.msg.bot .msg-avatar { background: var(--green-dim); color: var(--green); }
+.msg.user .msg-avatar { background: var(--blue-dim); color: var(--blue); }
 
-/* --- CLOUD TAB --- */
-.cloud-wb-card {
+.msg-body {
+  padding: 14px 18px; border-radius: var(--radius);
+  font-size: 14px; line-height: 1.6; min-width: 80px;
+}
+.msg.bot .msg-body {
+  background: var(--surface); border: 1px solid var(--border);
+  border-top-left-radius: 4px;
+}
+.msg.user .msg-body {
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-top-right-radius: 4px; color: var(--text);
+}
+
+/* Message content formatting */
+.msg-body p { margin-bottom: 8px; }
+.msg-body p:last-child { margin-bottom: 0; }
+.msg-body strong { color: var(--green); font-weight: 600; }
+
+/* --- CODE BLOCKS (DAX) --- */
+.dax-block {
+  margin: 12px 0; border-radius: var(--radius-sm); overflow: hidden;
+  border: 1px solid var(--border);
+}
+.dax-header {
   display: flex; align-items: center; justify-content: space-between;
-  background: var(--bg-white); border: 1px solid var(--border); border-radius: 6px;
-  padding: 12px 16px; transition: border-color .15s;
+  padding: 8px 14px; background: var(--surface-3);
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--text-muted);
 }
-.cloud-wb-card:hover { border-color: var(--primary); }
-.cloud-wb-name { font-weight: 600; font-size: 13px; }
-.cloud-wb-meta { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
-.cloud-wb-btn {
-  background: var(--cta); color: #fff; border: none; border-radius: 4px;
-  padding: 6px 14px; font-size: 11px; font-weight: 600; cursor: pointer;
-  font-family: 'Fira Sans', sans-serif; transition: background .15s;
+.dax-header-actions { display: flex; gap: 6px; }
+.dax-btn {
+  padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: 600;
+  cursor: pointer; border: 1px solid var(--border); background: var(--surface);
+  color: var(--text-dim); transition: all .15s;
 }
-.cloud-wb-btn:hover { background: #EA580C; }
-.cloud-wb-btn:disabled { opacity: .5; cursor: not-allowed; }
+.dax-btn:hover { border-color: var(--blue); color: var(--blue); }
+.dax-btn.edit-btn:hover { border-color: var(--blue); color: var(--blue); background: var(--blue-dim); }
+.dax-btn.copy-btn:hover { border-color: var(--green); color: var(--green); }
+.dax-btn.save-btn { border-color: var(--green); color: var(--green); background: var(--green-dim); }
+.dax-btn.cancel-btn { border-color: var(--red); color: var(--red); }
+.dax-code {
+  padding: 14px; background: #060a12; font-family: 'IBM Plex Mono', monospace;
+  font-size: 13px; line-height: 1.5; color: var(--text); white-space: pre-wrap;
+  overflow-x: auto;
+}
+.dax-edit-area {
+  width: 100%; padding: 14px; background: #060a12; border: none;
+  font-family: 'IBM Plex Mono', monospace; font-size: 13px; line-height: 1.5;
+  color: var(--blue); resize: vertical; min-height: 80px; outline: none;
+}
+
+/* --- FIELD MAPPING TABLE --- */
+.field-table {
+  margin: 12px 0; border-radius: var(--radius-sm); overflow: hidden;
+  border: 1px solid var(--border);
+}
+.field-table table {
+  width: 100%; border-collapse: collapse; font-size: 13px;
+}
+.field-table th {
+  padding: 8px 12px; background: var(--surface-3);
+  text-align: left; font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+}
+.field-table td {
+  padding: 8px 12px; border-bottom: 1px solid var(--border);
+  font-family: 'IBM Plex Mono', monospace; font-size: 12px;
+}
+.field-table tr:last-child td { border-bottom: none; }
+.field-table .col-tableau { color: var(--text-dim); }
+.field-table .col-pbi { color: var(--green); }
+.field-table .col-type { color: var(--gold); font-size: 11px; }
+.field-table .col-actions { text-align: right; }
+.field-table .col-actions button {
+  padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600;
+  cursor: pointer; border: 1px solid var(--border); background: var(--surface);
+  color: var(--text-dim); margin-left: 4px; transition: all .15s;
+}
+.field-table .accept-btn:hover { border-color: var(--green); color: var(--green); }
+.field-table .edit-field-btn:hover { border-color: var(--blue); color: var(--blue); }
+
+/* --- DATA SOURCE CARDS --- */
+.ds-cards {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0;
+}
+.ds-card {
+  padding: 16px; border-radius: var(--radius-sm); border: 1px solid var(--border);
+  background: var(--surface-2); cursor: pointer; transition: all .2s;
+  text-align: center;
+}
+.ds-card:hover { border-color: var(--green); background: var(--green-dim); transform: translateY(-2px); }
+.ds-card-icon { font-size: 24px; margin-bottom: 6px; }
+.ds-card-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.ds-card-sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+/* --- QA RESULTS --- */
+.qa-block {
+  margin: 12px 0; padding: 14px; border-radius: var(--radius-sm);
+  border: 1px solid var(--gold); background: var(--gold-dim);
+}
+.qa-title { font-size: 12px; font-weight: 700; color: var(--gold); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
+.qa-item { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; font-size: 13px; }
+.qa-pass { color: var(--green); }
+.qa-fail { color: var(--red); }
+.qa-warn { color: var(--gold); }
+
+/* --- DOWNLOAD BUTTONS --- */
+.dl-buttons { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
+.dl-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 8px 16px; border-radius: var(--radius-sm);
+  border: 1px solid var(--green); background: var(--green-dim);
+  color: var(--green); font-size: 13px; font-weight: 600;
+  cursor: pointer; text-decoration: none; transition: all .15s;
+}
+.dl-btn:hover { background: var(--green); color: var(--bg); }
+
+/* --- ERROR BLOCK --- */
+.error-block {
+  margin: 12px 0; padding: 12px 14px; border-radius: var(--radius-sm);
+  border: 1px solid var(--red); background: var(--red-dim);
+  font-size: 13px; color: var(--red);
+}
+
+/* --- TYPING INDICATOR --- */
+.typing { display: flex; gap: 4px; padding: 8px 0; }
+.typing span {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted);
+  animation: typingDot 1.2s infinite;
+}
+.typing span:nth-child(2) { animation-delay: .2s; }
+.typing span:nth-child(3) { animation-delay: .4s; }
+@keyframes typingDot { 0%,60%,100%{opacity:.3;transform:translateY(0)} 30%{opacity:1;transform:translateY(-4px)} }
+
+/* --- INPUT BAR --- */
+.input-bar {
+  padding: 16px 24px; background: var(--surface); border-top: 1px solid var(--border);
+  display: flex; gap: 10px; align-items: flex-end;
+}
+.input-wrap {
+  flex: 1; position: relative;
+}
+.input-wrap textarea {
+  width: 100%; padding: 12px 16px; border-radius: var(--radius);
+  border: 1px solid var(--border); background: var(--surface-2);
+  color: var(--text); font-family: 'IBM Plex Sans', sans-serif; font-size: 14px;
+  resize: none; outline: none; transition: border-color .15s;
+  min-height: 44px; max-height: 160px; line-height: 1.5;
+}
+.input-wrap textarea::placeholder { color: var(--text-muted); }
+.input-wrap textarea:focus { border-color: var(--green); }
+.send-btn {
+  width: 44px; height: 44px; border-radius: var(--radius);
+  border: none; background: var(--green); color: var(--bg);
+  font-size: 18px; cursor: pointer; display: flex;
+  align-items: center; justify-content: center; transition: all .15s;
+  flex-shrink: 0;
+}
+.send-btn:hover { background: #00cc6e; }
+.send-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+/* --- WELCOME --- */
+.welcome {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  flex: 1; gap: 12px; text-align: center; padding: 40px;
+}
+.welcome-icon { font-size: 48px; opacity: 0.3; }
+.welcome h2 { font-size: 20px; font-weight: 600; color: var(--text); }
+.welcome p { font-size: 14px; color: var(--text-muted); max-width: 420px; line-height: 1.6; }
+
+/* --- PIPELINE BANNER --- */
+.pipeline-banner {
+  margin: 0 24px; padding: 10px 16px; border-radius: var(--radius-sm);
+  background: var(--surface-2); border: 1px solid var(--border);
+  display: flex; align-items: center; gap: 12px; font-size: 12px;
+}
+.pipeline-banner.hidden { display: none; }
+.pipeline-stage {
+  font-family: 'IBM Plex Mono', monospace; font-weight: 600;
+  color: var(--gold); text-transform: uppercase; font-size: 11px;
+}
+.pipeline-label { color: var(--text-muted); }
+.pipeline-dots { display: flex; gap: 4px; margin-left: auto; }
+.pipeline-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--surface-3); border: 1px solid var(--border);
+}
+.pipeline-dot.done { background: var(--green); border-color: var(--green); }
+.pipeline-dot.active { background: var(--gold); border-color: var(--gold); animation: pulse 1.5s infinite; }
+
+/* Scrollbar */
+.chat-area::-webkit-scrollbar { width: 6px; }
+.chat-area::-webkit-scrollbar-track { background: transparent; }
+.chat-area::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 3px; }
+.chat-area::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* Mobile */
+@media (max-width: 640px) {
+  .msg { max-width: 100%; }
+  .ds-cards { grid-template-columns: 1fr; }
+  .header { padding: 0 14px; }
+  .chat-area { padding: 14px; }
+  .input-bar { padding: 12px 14px; }
+  .upload-zone { margin: 10px 14px 0; }
+}
 </style>
 </head>
 <body>
+<div class="app">
 
-<!-- NAV -->
-<nav class="nav">
-  <div class="nav-brand">
-    <svg class="nav-logo" viewBox="0 0 28 28" fill="none">
-      <rect width="28" height="28" rx="6" fill="#3B82F6"/>
-      <path d="M7 9h14M7 14h10M7 19h14" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
-    </svg>
-    <span class="nav-title">Dr. Data</span>
+  <!-- HEADER -->
+  <div class="header">
+    <div class="header-logo">Dr. Data <span>v2</span></div>
+    <span class="session-id" id="session-display"></span>
+    <div class="header-status">
+      <div class="header-dot" id="health-dot"></div>
+      <span id="health-label">connecting...</span>
+    </div>
   </div>
-  <div class="nav-tabs">
-    <button class="nav-tab active" data-tab="migration">Migration</button>
-    <button class="nav-tab" data-tab="quality">Quality</button>
-    <button class="nav-tab" data-tab="audit">Audit</button>
-    <button class="nav-tab" data-tab="cloud">Tableau Cloud</button>
+
+  <!-- UPLOAD ZONE -->
+  <div class="upload-zone" id="upload-zone">
+    <div id="upload-empty">
+      <div class="upload-icon">&#8593;</div>
+      <div class="upload-title">Drop your .twbx or .twb file here</div>
+      <div class="upload-sub">or click to browse — Tableau workbooks only</div>
+    </div>
+    <div id="upload-loaded" style="display:none">
+      <div class="upload-file-info">
+        <span class="upload-file-name" id="upload-fname"></span>
+        <span class="upload-file-meta" id="upload-fmeta"></span>
+        <button class="upload-file-clear" id="upload-clear">Clear</button>
+      </div>
+    </div>
+    <div class="upload-progress" id="upload-progress" style="display:none">
+      <div class="upload-progress-bar" id="upload-bar"></div>
+    </div>
   </div>
-  <div class="nav-right">
-    <div>
-      <div class="nav-score" id="nav-score">--</div>
-      <div class="nav-score-label">Fidelity</div>
-    </div>
-    <div class="nav-status" id="nav-status"></div>
+  <input type="file" id="upload-input" accept=".twbx,.twb">
+
+  <!-- PIPELINE BANNER -->
+  <div class="pipeline-banner hidden" id="pipeline-banner">
+    <span class="pipeline-label">Pipeline:</span>
+    <span class="pipeline-stage" id="pipeline-stage">—</span>
+    <div class="pipeline-dots" id="pipeline-dots"></div>
   </div>
-</nav>
 
-<!-- LAYOUT -->
-<div class="layout">
+  <!-- CHAT AREA -->
+  <div class="chat-area" id="chat-area">
+    <div class="welcome" id="welcome">
+      <div class="welcome-icon">&#9670;</div>
+      <h2>Dr. Data is ready</h2>
+      <p>Upload a Tableau workbook above, then tell me what you need. I'll parse it, map fields, translate DAX, run QA, and build your Power BI project.</p>
+    </div>
+  </div>
 
-  <!-- LEFT PANEL -->
-  <aside class="panel-left">
-    <div>
-      <div class="section-label">Pipeline</div>
-      <div class="step-list" id="step-list">
-        <div class="step" data-step="parse"><span class="step-dot"></span>Parse</div>
-        <div class="step" data-step="translate"><span class="step-dot"></span>Translate</div>
-        <div class="step" data-step="build"><span class="step-dot"></span>Build PBIP</div>
-        <div class="step" data-step="validate"><span class="step-dot"></span>Preflight</div>
-        <div class="step" data-step="publish"><span class="step-dot"></span>Publish</div>
-      </div>
+  <!-- INPUT -->
+  <div class="input-bar">
+    <div class="input-wrap">
+      <textarea id="chat-input" placeholder="Ask Dr. Data anything..." rows="1"></textarea>
     </div>
-    <div>
-      <div class="section-label">Metrics</div>
-      <div class="metric-grid" id="metric-grid">
-        <div class="metric-card"><div class="metric-val" id="m-auto" style="color:var(--auto)">--</div><div class="metric-label">Auto</div></div>
-        <div class="metric-card"><div class="metric-val" id="m-review" style="color:var(--review)">--</div><div class="metric-label">Review</div></div>
-        <div class="metric-card"><div class="metric-val" id="m-blocked" style="color:var(--blocked)">--</div><div class="metric-label">Blocked</div></div>
-        <div class="metric-card"><div class="metric-val" id="m-fixes" style="color:var(--primary)">--</div><div class="metric-label">Fixes</div></div>
-      </div>
-    </div>
-    <div>
-      <div class="section-label">Workbook</div>
-      <div id="wb-info" style="font-size:11px;color:var(--text-muted);">No file loaded</div>
-    </div>
-  </aside>
+    <button class="send-btn" id="send-btn" title="Send">&#9654;</button>
+  </div>
 
-  <!-- CENTER PANEL -->
-  <main class="panel-center">
-    <!-- Upload state -->
-    <div id="upload-state">
-      <div class="upload-zone" id="upload-zone">
-        <svg class="upload-icon" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-          <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
-        </svg>
-        <h3>Drop a Tableau workbook to begin</h3>
-        <p>.twbx .twb .xlsx .csv .png .jpg .parquet .json</p>
-        <input type="file" id="file-input" class="file-input" accept=".twbx,.twb,.xlsx,.csv,.xls,.png,.jpg,.jpeg,.gif,.parquet,.json" multiple>
-      </div>
-    </div>
-
-    <!-- Pipeline state (hidden until upload) -->
-    <div id="pipeline-state" class="hidden">
-      <div class="log-terminal" id="log-terminal"></div>
-      <div class="kpi-row hidden" id="kpi-row">
-        <div class="kpi-card"><div class="kpi-val" id="kpi-pages" style="color:var(--primary)">0</div><div class="kpi-meta"><div class="kpi-label">Pages</div></div></div>
-        <div class="kpi-card"><div class="kpi-val" id="kpi-visuals" style="color:var(--primary)">0</div><div class="kpi-meta"><div class="kpi-label">Visuals</div></div></div>
-        <div class="kpi-card"><div class="kpi-val" id="kpi-measures" style="color:var(--primary)">0</div><div class="kpi-meta"><div class="kpi-label">Measures</div></div></div>
-        <div class="kpi-card"><div class="kpi-val" id="kpi-rows" style="color:var(--text-secondary)">0</div><div class="kpi-meta"><div class="kpi-label">Data Rows</div></div></div>
-      </div>
-      <div id="report-link-area" class="hidden"></div>
-    </div>
-
-    <!-- Tableau Cloud tab content -->
-    <div id="cloud-state" class="hidden">
-      <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
-        <h3 style="font-size:16px;font-weight:700;">Tableau Cloud</h3>
-        <button id="cloud-connect-btn" onclick="cloudConnect()" style="
-          background:var(--primary);color:#fff;border:none;border-radius:6px;
-          padding:8px 18px;font-size:12px;font-weight:600;cursor:pointer;
-          font-family:'Fira Sans',sans-serif;">Connect</button>
-        <span id="cloud-status" style="font-size:11px;color:var(--text-muted);"></span>
-      </div>
-
-      <!-- Workbook list -->
-      <div id="cloud-workbook-list" class="hidden" style="display:flex;flex-direction:column;gap:8px;"></div>
-
-      <!-- Migration log -->
-      <div id="cloud-log" class="hidden">
-        <div class="log-terminal" id="cloud-log-terminal" style="min-height:180px;max-height:350px;"></div>
-      </div>
-
-      <!-- KPIs -->
-      <div class="kpi-row hidden" id="cloud-kpi-row" style="margin-top:12px;">
-        <div class="kpi-card"><div class="kpi-val" id="cloud-kpi-pages" style="color:var(--primary)">0</div><div class="kpi-meta"><div class="kpi-label">Pages</div></div></div>
-        <div class="kpi-card"><div class="kpi-val" id="cloud-kpi-visuals" style="color:var(--primary)">0</div><div class="kpi-meta"><div class="kpi-label">Visuals</div></div></div>
-        <div class="kpi-card"><div class="kpi-val" id="cloud-kpi-measures" style="color:var(--primary)">0</div><div class="kpi-meta"><div class="kpi-label">Measures</div></div></div>
-        <div class="kpi-card"><div class="kpi-val" id="cloud-kpi-rows" style="color:var(--text-secondary)">0</div><div class="kpi-meta"><div class="kpi-label">Data Rows</div></div></div>
-      </div>
-
-      <!-- Result: side-by-side comparison -->
-      <div id="cloud-result" class="hidden" style="margin-top:16px;">
-        <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
-          <div id="cloud-fidelity-score" style="
-            font-family:'Fira Code',monospace;font-size:36px;font-weight:700;
-            color:var(--auto);"></div>
-          <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;">
-            Fidelity Score</div>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-          <div>
-            <div style="font-size:10px;font-weight:700;text-transform:uppercase;
-              letter-spacing:.06em;color:var(--text-muted);margin-bottom:6px;">Tableau Original</div>
-            <div id="cloud-tableau-img" style="
-              border:1px solid var(--border);border-radius:6px;overflow:hidden;
-              background:var(--surface);min-height:200px;display:flex;align-items:center;
-              justify-content:center;color:var(--text-muted);font-size:12px;">
-              No screenshot available</div>
-          </div>
-          <div>
-            <div style="font-size:10px;font-weight:700;text-transform:uppercase;
-              letter-spacing:.06em;color:var(--text-muted);margin-bottom:6px;">Power BI Replica</div>
-            <div id="cloud-pbi-link" style="
-              border:1px solid var(--border);border-radius:6px;overflow:hidden;
-              background:var(--surface);min-height:200px;display:flex;align-items:center;
-              justify-content:center;"></div>
-          </div>
-        </div>
-        <div id="cloud-deltas" style="margin-top:12px;"></div>
-      </div>
-    </div>
-  </main>
-
-  <!-- RIGHT PANEL: CHAT -->
-  <aside class="panel-right">
-    <div class="chat-header">
-      <div class="chat-icon">
-        <svg viewBox="0 0 24 24"><path d="M12 2a9 9 0 00-9 9c0 3.1 1.6 5.8 4 7.4V22l3.3-1.8c.6.1 1.1.2 1.7.2a9 9 0 000-18z"/></svg>
-      </div>
-      <div>
-        <div class="chat-title">Dr. Data</div>
-        <div class="chat-sub">Tableau to Power BI copilot</div>
-      </div>
-    </div>
-    <div class="chat-msgs" id="chat-msgs">
-      <div class="chat-msg">
-        <div class="chat-msg-avatar">D</div>
-        <div class="chat-bubble">Drop a workbook to start. I can help with DAX translations, field mapping, LOD expressions, and migration strategy.</div>
-      </div>
-    </div>
-    <div class="chat-quick" id="chat-quick">
-      <button class="chat-quick-btn" onclick="sendChat('What chart types can you convert?')">Chart types</button>
-      <button class="chat-quick-btn" onclick="sendChat('Explain LOD expressions in DAX')">LOD to DAX</button>
-      <button class="chat-quick-btn" onclick="sendChat('What are common migration issues?')">Common issues</button>
-    </div>
-    <div class="chat-input-area">
-      <input class="chat-input" id="chat-input" type="text" placeholder="Ask about your workbook..."
-        onkeydown="if(event.key==='Enter')sendChat()">
-      <button class="chat-send" onclick="sendChat()">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
-      </button>
-    </div>
-  </aside>
 </div>
 
 <script>
-// --- STATE ---
-var _fileId = null;
-var _jobId = null;
-var _sessionId = null;
-var _pipelineState = {};
-var _fileInfo = {};
+// ============================================================
+//  STATE
+// ============================================================
+const S = {
+  sessionId: 'ses_' + Math.random().toString(36).slice(2, 10),
+  fileId: null,
+  fileName: null,
+  sending: false,
+  pipeline: null,
+};
 
-// --- UPLOAD ---
-var uploadZone = document.getElementById('upload-zone');
-var fileInput = document.getElementById('file-input');
+const $ = (sel) => document.querySelector(sel);
+const $$ = (sel) => document.querySelectorAll(sel);
 
-uploadZone.addEventListener('click', function() { fileInput.click(); });
-uploadZone.addEventListener('dragover', function(e) { e.preventDefault(); uploadZone.classList.add('drag-over'); });
-uploadZone.addEventListener('dragleave', function() { uploadZone.classList.remove('drag-over'); });
-uploadZone.addEventListener('drop', function(e) {
-  e.preventDefault();
-  uploadZone.classList.remove('drag-over');
+const chatArea   = $('#chat-area');
+const chatInput  = $('#chat-input');
+const sendBtn    = $('#send-btn');
+const uploadZone = $('#upload-zone');
+const uploadInput= $('#upload-input');
+const welcome    = $('#welcome');
+
+$('#session-display').textContent = S.sessionId;
+
+// ============================================================
+//  HEALTH CHECK
+// ============================================================
+async function checkHealth() {
+  try {
+    const r = await fetch('/api/health');
+    if (r.ok) {
+      $('#health-dot').classList.remove('off');
+      $('#health-label').textContent = 'online';
+    } else throw 0;
+  } catch {
+    $('#health-dot').classList.add('off');
+    $('#health-label').textContent = 'offline';
+  }
+}
+checkHealth();
+setInterval(checkHealth, 30000);
+
+// ============================================================
+//  UPLOAD
+// ============================================================
+uploadZone.addEventListener('click', () => { if (!S.fileId) uploadInput.click(); });
+uploadZone.addEventListener('dragover', (e) => { e.preventDefault(); uploadZone.classList.add('dragover'); });
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('dragover'));
+uploadZone.addEventListener('drop', (e) => {
+  e.preventDefault(); uploadZone.classList.remove('dragover');
   if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
 });
-fileInput.addEventListener('change', function() {
-  if (fileInput.files.length) {
-    for (var i = 0; i < fileInput.files.length; i++) handleFile(fileInput.files[i]);
-  }
+uploadInput.addEventListener('change', () => { if (uploadInput.files.length) handleFile(uploadInput.files[0]); });
+$('#upload-clear').addEventListener('click', (e) => {
+  e.stopPropagation();
+  S.fileId = null; S.fileName = null;
+  uploadZone.classList.remove('has-file');
+  $('#upload-empty').style.display = '';
+  $('#upload-loaded').style.display = 'none';
+  uploadInput.value = '';
 });
 
 async function handleFile(file) {
-  document.getElementById('upload-state').classList.add('hidden');
-  document.getElementById('pipeline-state').classList.remove('hidden');
+  if (!file.name.match(/\.twbx?$/i)) {
+    addBotMessage('<div class="error-block">Only .twb and .twbx files are supported.</div>');
+    return;
+  }
 
-  appendLog('phase', 'UPLOAD', '');
-  appendLog('info', 'Uploading ' + file.name + ' (' + (file.size / 1024).toFixed(0) + ' KB)...');
+  // Show progress
+  $('#upload-progress').style.display = 'block';
+  $('#upload-bar').style.width = '30%';
 
-  // Show typing in chat while analyzing
-  appendChatMsg('Analyzing your workbook...', false, true);
-
-  var form = new FormData();
+  const form = new FormData();
   form.append('file', file);
+
   try {
-    var resp = await fetch('/api/upload', { method: 'POST', body: form });
-    var data = await resp.json();
-    _fileId = data.file_id;
-    _sessionId = data.file_id;
-    appendLog('success', 'Uploaded: ' + data.filename);
+    $('#upload-bar').style.width = '60%';
+    const r = await fetch('/api/upload', { method: 'POST', body: form });
+    $('#upload-bar').style.width = '90%';
+    const data = await r.json();
 
-    // Update sidebar with file info
-    var info = data.file_info || {};
-    _fileInfo = info;
-    var wbHtml = '<strong>' + (data.filename || '') + '</strong><br>' +
-      (info.worksheets ? info.worksheets + ' worksheets<br>' : '') +
-      (info.dashboards ? info.dashboards + ' dashboards<br>' : '') +
-      (info.calc_fields ? info.calc_fields + ' calc fields<br>' : '') +
-      (info.rows ? info.rows.toLocaleString() + ' rows, ' + info.columns + ' cols' : '');
-    document.getElementById('wb-info').innerHTML = wbHtml;
+    S.fileId = data.file_id;
+    S.fileName = data.filename;
 
-    // Show Dr. Data's auto-analysis in the chat panel
-    // Remove the "Analyzing..." placeholder
-    var lastMsg = document.querySelector('#chat-msgs .chat-msg:last-child');
-    if (lastMsg && lastMsg.querySelector('.chat-bubble').textContent.includes('Analyzing')) {
-      lastMsg.remove();
-    }
+    // Show file info
+    uploadZone.classList.add('has-file');
+    $('#upload-empty').style.display = 'none';
+    $('#upload-loaded').style.display = '';
+    $('#upload-fname').textContent = data.filename;
+    $('#upload-fmeta').textContent = formatBytes(data.size);
+
+    // Bot message with parse results
     if (data.analysis) {
-      appendChatMsg(data.analysis, false);
+      hideWelcome();
+      addBotMessage(renderParseResult(data));
     }
 
-    // Update quick questions based on file content
-    var quick = document.getElementById('chat-quick');
-    if (info.calc_fields > 0) {
-      quick.innerHTML =
-        '<button class="chat-quick-btn" onclick="sendChat(\'Replicate this in Power BI\')">Replicate it</button>' +
-        '<button class="chat-quick-btn" onclick="sendChat(\'What about the LOD fields?\')">LOD fields</button>' +
-        '<button class="chat-quick-btn" onclick="sendChat(\'Explain blocked formulas\')">Blocked formulas</button>' +
-        '<button class="chat-quick-btn" onclick="sendChat(\'Build me a PDF report\')">PDF report</button>';
-    }
-
-    startProcess();
-  } catch(e) {
-    appendLog('error', 'Upload failed: ' + e.message);
-    appendChatMsg('Upload failed: ' + e.message, false);
+    $('#upload-bar').style.width = '100%';
+    setTimeout(() => { $('#upload-progress').style.display = 'none'; $('#upload-bar').style.width = '0%'; }, 600);
+  } catch (err) {
+    $('#upload-progress').style.display = 'none';
+    addBotMessage(`<div class="error-block">Upload failed: ${err.message}</div>`);
   }
 }
 
-async function startProcess() {
-  appendLog('info', 'Starting pipeline...');
-  try {
-    var resp = await fetch('/api/process/' + _fileId, { method: 'POST' });
-    var data = await resp.json();
-    _jobId = data.job_id;
-    connectSSE(data.job_id);
-  } catch(e) {
-    appendLog('error', 'Process start failed: ' + e.message);
+function renderParseResult(data) {
+  const fi = data.file_info || {};
+  let html = `<p><strong>${data.filename}</strong> uploaded and parsed.</p>`;
+  if (fi.worksheets !== undefined) {
+    html += `<div class="field-table"><table>
+      <tr><th>Component</th><th>Count</th></tr>
+      <tr><td class="col-tableau">Worksheets</td><td class="col-pbi">${fi.worksheets}</td></tr>
+      <tr><td class="col-tableau">Dashboards</td><td class="col-pbi">${fi.dashboards}</td></tr>
+      <tr><td class="col-tableau">Calculated Fields</td><td class="col-pbi">${fi.calc_fields}</td></tr>
+    </table></div>`;
   }
+  html += `<p style="color:var(--text-dim);font-size:13px;margin-top:8px">Tell me to <strong>convert to Power BI</strong> when ready, or ask me anything about this workbook.</p>`;
+  return html;
 }
 
-// --- SSE ---
-function connectSSE(jobId) {
-  var source = new EventSource('/api/stream/' + jobId);
-  source.onmessage = function(event) {
-    var d = JSON.parse(event.data);
-    var phase = d.phase || '';
-    var status = d.status || '';
-    var detail = d.detail || '';
+// ============================================================
+//  CHAT
+// ============================================================
+sendBtn.addEventListener('click', sendMessage);
+chatInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+});
 
-    // Update pipeline steps
-    if (status === 'start') {
-      setStep(phase, 'active');
-      appendLog('phase', phase.toUpperCase(), '');
-    }
-    if (status === 'complete') {
-      setStep(phase, 'done');
-    }
-    if (status === 'error' || status === 'failed') {
-      setStep(phase, 'error');
-    }
+// Auto-resize textarea
+chatInput.addEventListener('input', () => {
+  chatInput.style.height = 'auto';
+  chatInput.style.height = Math.min(chatInput.scrollHeight, 160) + 'px';
+});
 
-    // Log the detail
-    if (detail) {
-      var cls = status === 'error' || status === 'failed' ? 'error' : (status === 'complete' ? 'success' : 'info');
-      appendLog(cls, detail);
-    }
+async function sendMessage() {
+  const text = chatInput.value.trim();
+  if (!text || S.sending) return;
 
-    // Update metrics from translate phase
-    if (phase === 'translate' && status === 'complete') {
-      if (d.pages !== undefined) document.getElementById('kpi-pages').textContent = d.pages;
-      if (d.visuals !== undefined) document.getElementById('kpi-visuals').textContent = d.visuals;
-      if (d.measures !== undefined) document.getElementById('kpi-measures').textContent = d.measures;
-      if (d.rows !== undefined) document.getElementById('kpi-rows').textContent = d.rows;
-      document.getElementById('kpi-row').classList.remove('hidden');
-    }
+  hideWelcome();
+  addUserMessage(text);
+  chatInput.value = '';
+  chatInput.style.height = 'auto';
 
-    // Validate metrics
-    if (phase === 'validate' && status === 'complete') {
-      if (d.passed !== undefined) document.getElementById('m-auto').textContent = d.passed;
-      if (d.failed !== undefined) {
-        document.getElementById('m-review').textContent = d.failed;
-      }
-    }
-    if (phase === 'validate' && status === 'progress' && detail.includes('healed')) {
-      var hm = detail.match(/(\d+) auto-healed/);
-      if (hm) document.getElementById('m-fixes').textContent = hm[1];
-    }
-
-    // Fidelity score
-    if (d.fidelity && d.fidelity.score !== undefined) {
-      document.getElementById('nav-score').textContent = d.fidelity.score + '%';
-    }
-
-    // Report URL
-    if (d.report_url) {
-      var area = document.getElementById('report-link-area');
-      area.innerHTML = '<a class="report-link" href="' + d.report_url + '" target="_blank">' +
-        '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3"/></svg>' +
-        'Open in Power BI</a>';
-      area.classList.remove('hidden');
-    }
-
-    // Store state for chat context
-    _pipelineState = Object.assign(_pipelineState, d);
-
-    // Done
-    if (phase === 'done' || phase === 'error') {
-      source.close();
-      if (phase === 'done') {
-        appendLog('success', 'Pipeline complete.');
-      }
-    }
-  };
-  source.onerror = function() {
-    appendLog('error', 'SSE connection lost.');
-    source.close();
-  };
-}
-
-// --- STEP UI ---
-function setStep(name, state) {
-  var steps = document.querySelectorAll('.step');
-  steps.forEach(function(s) {
-    if (s.dataset.step === name) {
-      s.className = 'step ' + state;
-    }
-  });
-}
-
-// --- LOG ---
-function appendLog(type, text, extra) {
-  var terminal = document.getElementById('log-terminal');
-  var div = document.createElement('div');
-  if (type === 'phase') {
-    div.className = 'log-phase';
-    div.textContent = '--- ' + text + ' ---';
-  } else if (type === 'success') {
-    div.className = 'log-success';
-    div.textContent = text;
-  } else if (type === 'error') {
-    div.className = 'log-error-line';
-    div.textContent = text;
-  } else {
-    div.className = 'log-info';
-    div.textContent = text;
-  }
-  terminal.appendChild(div);
-  terminal.scrollTop = terminal.scrollHeight;
-}
-
-// --- CHAT ---
-async function sendChat(msg) {
-  var input = document.getElementById('chat-input');
-  var text = msg || input.value.trim();
-  if (!text) return;
-  input.value = '';
-  appendChatMsg(text, true);
-
-  var tid = 'typing-' + Date.now();
-  var msgs = document.getElementById('chat-msgs');
-  var td = document.createElement('div');
-  td.id = tid; td.className = 'chat-msg';
-  td.innerHTML = '<div class="chat-msg-avatar">D</div><div class="chat-bubble" style="color:var(--text-muted);font-style:italic;">Thinking...</div>';
-  msgs.appendChild(td); msgs.scrollTop = msgs.scrollHeight;
+  S.sending = true;
+  sendBtn.disabled = true;
+  const typingEl = addTypingIndicator();
 
   try {
-    var resp = await fetch('/api/chat', {
+    const body = {
+      message: text,
+      session_id: S.sessionId,
+      file_id: S.fileId || '',
+      context: '',
+    };
+    const r = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        message: text,
-        session_id: _sessionId || _fileId || 'default',
-        context: JSON.stringify(_pipelineState || {}),
-        file_id: _fileId || ''
-      })
+      body: JSON.stringify(body),
     });
-    var data = await resp.json();
-    var el = document.getElementById(tid); if (el) el.remove();
-    appendChatMsg(data.response || 'No response.', false);
-    // Show download links if files were generated
-    if (data.files && data.files.length > 0) {
-      var dlArea = document.createElement('div');
-      dlArea.style.cssText = 'display:flex;flex-direction:column;gap:6px;padding:8px 12px;margin:4px 32px;';
-      data.files.forEach(function(f) {
-        var a = document.createElement('a');
-        a.href = f.url || '#';
-        a.target = '_blank';
-        a.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--surface);border:1px solid var(--border);border-radius:6px;text-decoration:none;color:var(--text);font-size:12px;transition:border-color .15s;';
-        a.onmouseover = function() { a.style.borderColor = 'var(--primary)'; };
-        a.onmouseout = function() { a.style.borderColor = 'var(--border)'; };
-        a.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>' +
-          '<span><strong>' + (f.name || f.filename || 'File') + '</strong>' +
-          (f.description ? '<br><span style="font-size:10px;color:var(--text-muted);">' + f.description + '</span>' : '') +
-          '</span>';
-        dlArea.appendChild(a);
-      });
-      document.getElementById('chat-msgs').appendChild(dlArea);
-      document.getElementById('chat-msgs').scrollTop = document.getElementById('chat-msgs').scrollHeight;
+    const data = await r.json();
+    typingEl.remove();
+
+    // Update pipeline state
+    if (data.pipeline) {
+      S.pipeline = data.pipeline;
+      updatePipelineBanner(data.pipeline);
     }
-  } catch(e) {
-    var el = document.getElementById(tid); if (el) el.remove();
-    appendChatMsg('Error: ' + e.message, false);
+
+    // Render response
+    const html = renderResponse(data);
+    addBotMessage(html);
+
+    // Handle downloadable files
+    if (data.files && data.files.length) {
+      addBotMessage(renderDownloads(data.files));
+    }
+
+  } catch (err) {
+    typingEl.remove();
+    addBotMessage(`<div class="error-block">Request failed: ${err.message}</div>`);
+  } finally {
+    S.sending = false;
+    sendBtn.disabled = false;
+    chatInput.focus();
   }
 }
 
-function appendChatMsg(text, isUser, isTyping) {
-  var msgs = document.getElementById('chat-msgs');
-  var div = document.createElement('div');
-  div.className = 'chat-msg' + (isUser ? ' user' : '');
-  var safe = text.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
-  // Simple code block detection
-  safe = safe.replace(/`([^`]+)`/g, '<code>$1</code>');
-  div.innerHTML = '<div class="chat-msg-avatar">' + (isUser ? 'Y' : 'D') + '</div>' +
-    '<div class="chat-bubble">' + safe + '</div>';
-  msgs.appendChild(div);
-  msgs.scrollTop = msgs.scrollHeight;
+// ============================================================
+//  RESPONSE RENDERER
+// ============================================================
+function renderResponse(data) {
+  let text = data.response || '';
+  const intent = data.intent || 'chat';
+
+  // Check for data_source choice stage
+  if (text.toLowerCase().includes('data source') && S.pipeline && S.pipeline.current_stage === 'data_source') {
+    return renderTextWithMarkup(text) + renderDataSourceCards();
+  }
+
+  // Check for field mapping content
+  if (text.includes('|') && (text.includes('Tableau') || text.includes('Field') || text.includes('Power BI'))) {
+    return renderWithFieldTable(text);
+  }
+
+  // Check for QA content
+  if (intent === 'pipeline' && (text.toLowerCase().includes('qa') || text.toLowerCase().includes('validation') || text.toLowerCase().includes('quality'))) {
+    return renderWithQA(text);
+  }
+
+  // General: parse code blocks and render
+  return renderTextWithMarkup(text);
 }
 
-// --- TAB SWITCHING ---
-document.querySelectorAll('.nav-tab').forEach(function(tab) {
-  tab.addEventListener('click', function() {
-    document.querySelectorAll('.nav-tab').forEach(function(t) { t.classList.remove('active'); });
-    tab.classList.add('active');
-    var target = tab.dataset.tab;
-    // Show/hide main content areas
-    var uploadEl = document.getElementById('upload-state');
-    var pipelineEl = document.getElementById('pipeline-state');
-    var cloudEl = document.getElementById('cloud-state');
-    if (target === 'cloud') {
-      uploadEl.classList.add('hidden');
-      pipelineEl.classList.add('hidden');
-      cloudEl.classList.remove('hidden');
-    } else if (target === 'migration') {
-      cloudEl.classList.add('hidden');
-      // Restore upload/pipeline visibility based on state
-      if (_jobId || _fileId) {
-        uploadEl.classList.add('hidden');
-        pipelineEl.classList.remove('hidden');
-      } else {
-        uploadEl.classList.remove('hidden');
-        pipelineEl.classList.add('hidden');
+function renderTextWithMarkup(text) {
+  // Split by code fences
+  const parts = text.split(/(```[\s\S]*?```)/g);
+  let html = '';
+  for (const part of parts) {
+    if (part.startsWith('```')) {
+      const match = part.match(/```(\w*)\n?([\s\S]*?)```/);
+      if (match) {
+        const lang = match[1] || 'dax';
+        const code = match[2].trim();
+        html += renderDaxBlock(code, lang);
       }
     } else {
-      // quality/audit tabs -- keep current migration view, hide cloud
-      cloudEl.classList.add('hidden');
+      // Convert markdown-lite
+      let p = escapeHtml(part);
+      p = p.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+      p = p.replace(/`([^`]+)`/g, '<code style="background:var(--surface-3);padding:1px 5px;border-radius:3px;font-size:12px;">$1</code>');
+      p = p.replace(/\n\n+/g, '</p><p>');
+      p = p.replace(/\n/g, '<br>');
+      html += `<p>${p}</p>`;
     }
-  });
-});
+  }
+  return html;
+}
 
-// --- TABLEAU CLOUD ---
-var _cloudJobId = null;
-var _cloudWorkbooks = [];
+function renderDaxBlock(code, lang, fieldName) {
+  const id = 'dax_' + Math.random().toString(36).slice(2, 8);
+  const label = lang.toUpperCase() || 'DAX';
+  const field = fieldName ? ` data-field="${escapeAttr(fieldName)}"` : '';
+  return `<div class="dax-block" id="${id}"${field}>
+    <div class="dax-header">
+      <span>${label}${fieldName ? ' — ' + escapeHtml(fieldName) : ''}</span>
+      <div class="dax-header-actions">
+        <button class="dax-btn copy-btn" onclick="copyDax('${id}')">Copy</button>
+        <button class="dax-btn edit-btn" onclick="editDax('${id}')">Edit</button>
+      </div>
+    </div>
+    <div class="dax-code">${escapeHtml(code)}</div>
+  </div>`;
+}
 
-async function cloudConnect() {
-  var btn = document.getElementById('cloud-connect-btn');
-  var status = document.getElementById('cloud-status');
-  var list = document.getElementById('cloud-workbook-list');
-  btn.disabled = true;
-  btn.textContent = 'Connecting...';
-  status.textContent = '';
+function renderDataSourceCards() {
+  return `<div class="ds-cards">
+    <div class="ds-card" onclick="pickDataSource('synthetic')">
+      <div class="ds-card-icon">&#9881;</div>
+      <div class="ds-card-title">Synthetic Data</div>
+      <div class="ds-card-sub">Auto-generate sample data</div>
+    </div>
+    <div class="ds-card" onclick="pickDataSource('upload')">
+      <div class="ds-card-icon">&#8593;</div>
+      <div class="ds-card-title">Upload Excel/CSV</div>
+      <div class="ds-card-sub">Use your own data file</div>
+    </div>
+    <div class="ds-card" onclick="pickDataSource('database')">
+      <div class="ds-card-icon">&#9107;</div>
+      <div class="ds-card-title">Database</div>
+      <div class="ds-card-sub">Snowflake, SQL Server, Postgres</div>
+    </div>
+    <div class="ds-card" onclick="pickDataSource('wireframe')">
+      <div class="ds-card-icon">&#9634;</div>
+      <div class="ds-card-title">Wireframe Only</div>
+      <div class="ds-card-sub">No data — structure only</div>
+    </div>
+  </div>`;
+}
 
-  try {
-    var resp = await fetch('/api/tableau/workbooks');
-    var data = await resp.json();
-    if (data.error) throw new Error(data.detail || data.error);
-    _cloudWorkbooks = data.workbooks || [];
-    status.textContent = _cloudWorkbooks.length + ' workbooks found';
-    btn.textContent = 'Refresh';
-    btn.disabled = false;
+function renderWithFieldTable(text) {
+  // Try to extract markdown table and render as styled table
+  const lines = text.split('\n');
+  let tableLines = [];
+  let before = [];
+  let after = [];
+  let inTable = false;
+  let pastTable = false;
 
-    // Render workbook cards
-    list.innerHTML = '';
-    list.classList.remove('hidden');
-    list.style.display = 'flex';
-    _cloudWorkbooks.forEach(function(wb) {
-      var card = document.createElement('div');
-      card.className = 'cloud-wb-card';
-      card.innerHTML =
-        '<div>' +
-          '<div class="cloud-wb-name">' + wb.name + '</div>' +
-          '<div class="cloud-wb-meta">' + wb.project_name +
-            ' | ' + (wb.views ? wb.views.length : 0) + ' views' +
-            (wb.updated_at ? ' | Updated ' + wb.updated_at.split('T')[0] : '') +
-          '</div>' +
-        '</div>' +
-        '<button class="cloud-wb-btn" onclick="cloudMigrate(\'' + wb.id + '\',\'' +
-          wb.name.replace(/'/g, "\\'") + '\')">Migrate</button>';
-      list.appendChild(card);
-    });
-  } catch(e) {
-    status.textContent = 'Error: ' + e.message;
-    btn.textContent = 'Retry';
-    btn.disabled = false;
+  for (const line of lines) {
+    if (!pastTable && line.trim().startsWith('|') && line.trim().endsWith('|')) {
+      inTable = true;
+      if (!line.match(/^\|[\s-:|]+\|$/)) tableLines.push(line);
+    } else {
+      if (inTable) { pastTable = true; inTable = false; }
+      if (pastTable) after.push(line); else before.push(line);
+    }
+  }
+
+  let html = before.length ? renderTextWithMarkup(before.join('\n')) : '';
+
+  if (tableLines.length) {
+    const headers = tableLines[0].split('|').filter(c => c.trim()).map(c => c.trim());
+    html += '<div class="field-table"><table><tr>';
+    for (const h of headers) html += `<th>${escapeHtml(h)}</th>`;
+    html += '<th>Actions</th></tr>';
+    for (let i = 1; i < tableLines.length; i++) {
+      const cells = tableLines[i].split('|').filter(c => c.trim()).map(c => c.trim());
+      html += '<tr>';
+      for (let j = 0; j < cells.length; j++) {
+        const cls = j === 0 ? 'col-tableau' : j === cells.length - 1 ? 'col-type' : 'col-pbi';
+        html += `<td class="${cls}">${escapeHtml(cells[j])}</td>`;
+      }
+      const fieldName = cells[0] || '';
+      html += `<td class="col-actions">
+        <button class="accept-btn" onclick="acceptField('${escapeAttr(fieldName)}')">Accept</button>
+        <button class="edit-field-btn" onclick="editField('${escapeAttr(fieldName)}')">Edit</button>
+      </td></tr>`;
+    }
+    html += '</table></div>';
+  }
+
+  if (after.length) html += renderTextWithMarkup(after.join('\n'));
+  return html;
+}
+
+function renderWithQA(text) {
+  // Parse QA pass/fail lines
+  const lines = text.split('\n');
+  let qaItems = [];
+  let otherLines = [];
+  for (const line of lines) {
+    const pass = line.match(/[✓✅☑]\s*(.*)/);
+    const fail = line.match(/[✗❌☒✘]\s*(.*)/);
+    const warn = line.match(/[⚠⚡]\s*(.*)/);
+    if (pass) qaItems.push({ status: 'pass', text: pass[1] });
+    else if (fail) qaItems.push({ status: 'fail', text: fail[1] });
+    else if (warn) qaItems.push({ status: 'warn', text: warn[1] });
+    else otherLines.push(line);
+  }
+
+  let html = renderTextWithMarkup(otherLines.join('\n'));
+  if (qaItems.length) {
+    html += '<div class="qa-block"><div class="qa-title">QA Validation</div>';
+    for (const item of qaItems) {
+      const icon = item.status === 'pass' ? '&#10003;' : item.status === 'fail' ? '&#10007;' : '&#9888;';
+      html += `<div class="qa-item qa-${item.status}">${icon} ${escapeHtml(item.text)}</div>`;
+    }
+    html += '</div>';
+  }
+  return html;
+}
+
+function renderDownloads(files) {
+  let html = '<div class="dl-buttons">';
+  for (const f of files) {
+    const name = f.filename || f.name || 'Download';
+    const url = f.url || f.path || '#';
+    html += `<a class="dl-btn" href="${escapeAttr(url)}" download>&#8615; ${escapeHtml(name)}</a>`;
+  }
+  html += '</div>';
+  return html;
+}
+
+// ============================================================
+//  DAX EDITING
+// ============================================================
+window.copyDax = function(id) {
+  const el = document.querySelector(`#${id} .dax-code`);
+  if (el) navigator.clipboard.writeText(el.textContent);
+};
+
+window.editDax = function(id) {
+  const block = document.getElementById(id);
+  const codeEl = block.querySelector('.dax-code');
+  const code = codeEl.textContent;
+  const field = block.dataset.field || '';
+
+  codeEl.innerHTML = `<textarea class="dax-edit-area">${escapeHtml(code)}</textarea>`;
+
+  const actions = block.querySelector('.dax-header-actions');
+  actions.innerHTML = `
+    <button class="dax-btn save-btn" onclick="saveDax('${id}','${escapeAttr(field)}')">Save</button>
+    <button class="dax-btn cancel-btn" onclick="cancelDax('${id}','${escapeAttr(escapeHtml(code))}')">Cancel</button>`;
+
+  block.querySelector('.dax-edit-area').focus();
+};
+
+window.saveDax = function(id, fieldName) {
+  const block = document.getElementById(id);
+  const textarea = block.querySelector('.dax-edit-area');
+  const newCode = textarea.value;
+
+  // Restore display
+  const codeEl = block.querySelector('.dax-code');
+  codeEl.textContent = newCode;
+  const actions = block.querySelector('.dax-header-actions');
+  actions.innerHTML = `
+    <button class="dax-btn copy-btn" onclick="copyDax('${id}')">Copy</button>
+    <button class="dax-btn edit-btn" onclick="editDax('${id}')">Edit</button>`;
+
+  // Send correction via chat
+  const msg = fieldName
+    ? `EDIT_FORMULA:${fieldName}:${newCode}`
+    : `EDIT_DAX:${newCode}`;
+  sendChatMessage(msg);
+};
+
+window.cancelDax = function(id, origCode) {
+  const block = document.getElementById(id);
+  block.querySelector('.dax-code').textContent = origCode;
+  const actions = block.querySelector('.dax-header-actions');
+  actions.innerHTML = `
+    <button class="dax-btn copy-btn" onclick="copyDax('${id}')">Copy</button>
+    <button class="dax-btn edit-btn" onclick="editDax('${id}')">Edit</button>`;
+};
+
+// ============================================================
+//  DATA SOURCE + FIELD ACTIONS
+// ============================================================
+window.pickDataSource = function(choice) {
+  sendChatMessage(`DATA_SOURCE:${choice}`);
+};
+
+window.acceptField = function(name) {
+  // Visual feedback — could also send to backend
+  addBotMessage(`<p style="font-size:13px;color:var(--green)">&#10003; Field <strong>${escapeHtml(name)}</strong> accepted.</p>`);
+};
+
+window.editField = function(name) {
+  chatInput.value = `EDIT_FORMULA:${name}:`;
+  chatInput.focus();
+};
+
+// ============================================================
+//  CHAT HELPERS
+// ============================================================
+function sendChatMessage(text) {
+  chatInput.value = text;
+  sendMessage();
+}
+
+function addUserMessage(text) {
+  const div = document.createElement('div');
+  div.className = 'msg user';
+  div.innerHTML = `<div class="msg-avatar">Y</div><div class="msg-body">${escapeHtml(text)}</div>`;
+  chatArea.appendChild(div);
+  scrollBottom();
+}
+
+function addBotMessage(html) {
+  const div = document.createElement('div');
+  div.className = 'msg bot';
+  div.innerHTML = `<div class="msg-avatar">D</div><div class="msg-body">${html}</div>`;
+  chatArea.appendChild(div);
+  scrollBottom();
+}
+
+function addTypingIndicator() {
+  const div = document.createElement('div');
+  div.className = 'msg bot';
+  div.innerHTML = `<div class="msg-avatar">D</div><div class="msg-body"><div class="typing"><span></span><span></span><span></span></div></div>`;
+  chatArea.appendChild(div);
+  scrollBottom();
+  return div;
+}
+
+function hideWelcome() {
+  if (welcome) welcome.style.display = 'none';
+}
+
+function scrollBottom() {
+  requestAnimationFrame(() => { chatArea.scrollTop = chatArea.scrollHeight; });
+}
+
+// ============================================================
+//  PIPELINE BANNER
+// ============================================================
+const PIPELINE_STAGES = ['parse', 'data_source', 'field_mapping', 'dax_translation', 'visual_mapping', 'qa', 'build'];
+
+function updatePipelineBanner(p) {
+  if (!p) return;
+  const banner = $('#pipeline-banner');
+  banner.classList.remove('hidden');
+  $('#pipeline-stage').textContent = (p.current_stage || 'complete').replace('_', ' ');
+
+  const dotsEl = $('#pipeline-dots');
+  dotsEl.innerHTML = '';
+  const completed = p.completed_stages || [];
+  for (const stage of PIPELINE_STAGES) {
+    const dot = document.createElement('div');
+    dot.className = 'pipeline-dot';
+    dot.title = stage.replace('_', ' ');
+    if (completed.includes(stage)) dot.classList.add('done');
+    else if (stage === p.current_stage) dot.classList.add('active');
+    dotsEl.appendChild(dot);
   }
 }
 
-async function cloudMigrate(workbookId, workbookName) {
-  // Disable all migrate buttons
-  document.querySelectorAll('.cloud-wb-btn').forEach(function(b) { b.disabled = true; });
-
-  // Show log area
-  var logArea = document.getElementById('cloud-log');
-  var terminal = document.getElementById('cloud-log-terminal');
-  logArea.classList.remove('hidden');
-  terminal.innerHTML = '';
-  document.getElementById('cloud-result').classList.add('hidden');
-  document.getElementById('cloud-kpi-row').classList.add('hidden');
-
-  cloudAppendLog('phase', 'STARTING MIGRATION', '');
-  cloudAppendLog('info', 'Workbook: ' + workbookName);
-
-  // Reset left panel steps for cloud
-  document.querySelectorAll('.step').forEach(function(s) { s.className = 'step'; });
-
-  try {
-    var resp = await fetch('/api/tableau/migrate/' + workbookId, { method: 'POST' });
-    var data = await resp.json();
-    _cloudJobId = data.job_id;
-    cloudConnectSSE(data.job_id);
-  } catch(e) {
-    cloudAppendLog('error', 'Migration start failed: ' + e.message);
-    document.querySelectorAll('.cloud-wb-btn').forEach(function(b) { b.disabled = false; });
-  }
+// ============================================================
+//  UTILITIES
+// ============================================================
+function escapeHtml(s) {
+  if (!s) return '';
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-function cloudConnectSSE(jobId) {
-  var source = new EventSource('/api/tableau/stream/' + jobId);
-  source.onmessage = function(event) {
-    var d = JSON.parse(event.data);
-    var phase = d.phase || '';
-    var status = d.status || '';
-    var detail = d.detail || '';
-
-    // Update left panel steps
-    if (status === 'start') {
-      setStep(phase, 'active');
-      cloudAppendLog('phase', phase.toUpperCase(), '');
-    }
-    if (status === 'complete') setStep(phase, 'done');
-    if (status === 'error' || status === 'failed') setStep(phase, 'error');
-
-    if (detail) {
-      var cls = (status === 'error' || status === 'failed') ? 'error' :
-                (status === 'complete' ? 'success' : 'info');
-      cloudAppendLog(cls, detail);
-    }
-
-    // KPIs from translate phase
-    if (phase === 'translate' && status === 'complete') {
-      if (d.pages !== undefined) document.getElementById('cloud-kpi-pages').textContent = d.pages;
-      if (d.visuals !== undefined) document.getElementById('cloud-kpi-visuals').textContent = d.visuals;
-      if (d.measures !== undefined) document.getElementById('cloud-kpi-measures').textContent = d.measures;
-      if (d.rows !== undefined) document.getElementById('cloud-kpi-rows').textContent = d.rows;
-      document.getElementById('cloud-kpi-row').classList.remove('hidden');
-    }
-
-    // Fidelity score in nav
-    if (d.fidelity && d.fidelity.score !== undefined) {
-      document.getElementById('nav-score').textContent = d.fidelity.score + '%';
-    }
-
-    // Done -- show result
-    if (phase === 'done') {
-      source.close();
-      cloudShowResult(d);
-      document.querySelectorAll('.cloud-wb-btn').forEach(function(b) { b.disabled = false; });
-    }
-    if (phase === 'error') {
-      source.close();
-      document.querySelectorAll('.cloud-wb-btn').forEach(function(b) { b.disabled = false; });
-    }
-  };
-  source.onerror = function() {
-    cloudAppendLog('error', 'SSE connection lost.');
-    source.close();
-    document.querySelectorAll('.cloud-wb-btn').forEach(function(b) { b.disabled = false; });
-  };
+function escapeAttr(s) {
+  if (!s) return '';
+  return s.replace(/'/g, "\\'").replace(/"/g, '&quot;');
 }
 
-function cloudShowResult(data) {
-  var resultArea = document.getElementById('cloud-result');
-  resultArea.classList.remove('hidden');
-
-  // Fidelity score
-  var score = (data.fidelity && data.fidelity.score) || 0;
-  var scoreEl = document.getElementById('cloud-fidelity-score');
-  scoreEl.textContent = score + '%';
-  if (score >= 70) scoreEl.style.color = 'var(--auto)';
-  else if (score >= 40) scoreEl.style.color = 'var(--review)';
-  else scoreEl.style.color = 'var(--blocked)';
-
-  // Tableau image
-  var imgArea = document.getElementById('cloud-tableau-img');
-  var tViews = data.tableau_images || [];
-  if (tViews.length > 0 && _cloudJobId) {
-    imgArea.innerHTML = '<img src="/api/tableau/images/' + _cloudJobId + '/' +
-      encodeURIComponent(tViews[0]) + '" style="width:100%;height:auto;display:block;" ' +
-      'onerror="this.parentNode.textContent=\'Screenshot not available\'">';
-  } else {
-    imgArea.textContent = 'No screenshot available';
-  }
-
-  // PBI link
-  var pbiArea = document.getElementById('cloud-pbi-link');
-  if (data.report_url) {
-    pbiArea.innerHTML = '<a class="report-link" href="' + data.report_url +
-      '" target="_blank" style="margin:20px;">' +
-      '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">' +
-      '<path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3"/>' +
-      '</svg> Open in Power BI</a>';
-  } else {
-    pbiArea.innerHTML = '<span style="color:var(--blocked);font-size:12px;">Publish failed</span>';
-  }
-
-  // Update nav fidelity
-  document.getElementById('nav-score').textContent = score + '%';
+function formatBytes(b) {
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
+  return (b/1048576).toFixed(1) + ' MB';
 }
-
-function cloudAppendLog(type, text) {
-  var terminal = document.getElementById('cloud-log-terminal');
-  var div = document.createElement('div');
-  if (type === 'phase') {
-    div.className = 'log-phase';
-    div.textContent = '--- ' + text + ' ---';
-  } else if (type === 'success') {
-    div.className = 'log-success';
-    div.textContent = text;
-  } else if (type === 'error') {
-    div.className = 'log-error-line';
-    div.textContent = text;
-  } else {
-    div.className = 'log-info';
-    div.textContent = text;
-  }
-  terminal.appendChild(div);
-  terminal.scrollTop = terminal.scrollHeight;
-}
-
-// --- INIT ---
-fetch('/api/health').then(function(r) { return r.json(); }).then(function(d) {
-  if (d.status === 'ok') document.getElementById('nav-status').style.background = 'var(--auto)';
-}).catch(function() {
-  document.getElementById('nav-status').style.background = 'var(--blocked)';
-});
 </script>
 </body>
 </html>

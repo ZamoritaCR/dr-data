@@ -755,6 +755,35 @@ def parse_twb(path):
                     ws_info["sort_field"] = sort_field
                     break
 
+            # -- Datasource-dependencies fallback for empty shelves --
+            # BAN/card worksheets often have no rows/cols shelves.
+            # Extract field roles from datasource-dependencies instead.
+            if not ws_info["rows_fields"] and not ws_info["cols_fields"]:
+                dep_dims = []
+                dep_measures = []
+                for dep in ws.findall(".//datasource-dependencies"):
+                    for col in dep.findall("column"):
+                        col_name = _safe_strip_brackets(col.get("name", ""))
+                        col_caption = col.get("caption", "")
+                        col_role = col.get("role", "")
+                        # Resolve through calc_id_map
+                        resolved = spec["calc_id_map"].get(col_name, col_caption or col_name)
+                        if not resolved or resolved.lower() in ("number of records",):
+                            continue
+                        if col_role == "measure":
+                            dep_measures.append(resolved)
+                        elif col_role == "dimension":
+                            dep_dims.append(resolved)
+                if dep_measures:
+                    ws_info["measures"] = dep_measures
+                if dep_dims:
+                    ws_info["dimensions"] = dep_dims
+                # Also put the first measure on cols_fields so _classify_fields_for_chart finds it
+                if dep_measures:
+                    ws_info["cols_fields"] = dep_measures[:2]
+                if dep_dims:
+                    ws_info["rows_fields"] = dep_dims[:2]
+
             # Per-worksheet design metadata
             ws_info["design"] = _extract_ws_design(ws)
 

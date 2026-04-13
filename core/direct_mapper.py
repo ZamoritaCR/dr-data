@@ -445,16 +445,21 @@ def _classify_fields_for_chart(ws, chart_type, profile_col_names, col_types):
 
     # Second fallback: if STILL no fields, pick the first dimension and
     # first measure from the profile. Every visual should show *something*.
+    # IMPORTANT: Skip Calculation_XXX names — prefer human-readable columns.
     if not all_dims and not all_measures and profile_col_names:
-        profile_dims = [c for c in profile_col_names
+        profile_dims = [c for c in sorted(profile_col_names)
                         if col_types.get(c) != "measure"
-                        and col_types.get(c) != "date"]
-        profile_measures = [c for c in profile_col_names
-                            if col_types.get(c) == "measure"]
+                        and col_types.get(c) != "date"
+                        and not c.startswith("Calculation_")
+                        and len(c) < 40]
+        profile_measures = [c for c in sorted(profile_col_names)
+                            if col_types.get(c) == "measure"
+                            and not c.startswith("Calculation_")
+                            and len(c) < 40]
         if profile_dims:
-            all_dims = [sorted(profile_dims)[0]]
+            all_dims = [profile_dims[0]]
         if profile_measures:
-            all_measures = [sorted(profile_measures)[0]]
+            all_measures = [profile_measures[0]]
         if all_dims or all_measures:
             print(f"    [DIRECT-MAPPER] Auto-assigned fallback fields for "
                   f"'{ws_name}': dims={all_dims}, measures={all_measures}")

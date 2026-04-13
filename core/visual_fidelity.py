@@ -465,50 +465,81 @@ class VisualFidelityChecker:
         tableau_images: List[str],
         pbi_report_url: str = "",
         pbi_screenshots: Optional[List[str]] = None,
+        fabric_token: str = "",
+        workspace_id: str = "",
+        report_id: str = "",
     ) -> Dict[str, Any]:
-        """Compare Tableau screenshots against PBI output using Google Vision.
+        """Compare Tableau screenshots against PBI output.
 
-        Takes Tableau screenshot paths and either a PBI report URL (screenshots
-        it via Playwright) or pre-captured PBI screenshot paths.
-
-        Falls back to structural comparison if Vision API is unavailable.
+        4-tier fallback chain:
+          1. Google Vision API (label + text + color detection)
+          2. Playwright screenshot + PIL histogram comparison
+          3. Fabric REST API page export + PIL histogram comparison
+          4. Structural comparison only (chart types, field counts)
 
         Args:
             tableau_images: list of file paths to Tableau dashboard screenshots
-            pbi_report_url: URL of published PBI report (for live screenshotting)
-            pbi_screenshots: pre-captured PBI screenshot paths (skips Playwright)
+            pbi_report_url: URL of published PBI report (for Playwright)
+            pbi_screenshots: pre-captured PBI screenshot paths (skips capture)
+            fabric_token: Bearer token for Fabric REST API
+            workspace_id: Power BI workspace GUID (for Fabric export)
+            report_id: Power BI report GUID (for Fabric export)
 
         Returns:
             {
                 "overall_similarity": float 0-1,
-                "per_page": [{page, similarity, tableau_labels, pbi_labels, diffs}],
-                "method": "google_vision" | "structural_fallback",
+                "per_page": [{page, similarity, ...}],
+                "method": str,
                 "summary": str,
             }
         """
-        # Validate inputs
+        # Validate Tableau inputs
         valid_tableau = [p for p in tableau_images if Path(p).exists()]
         if not valid_tableau:
             return self._fallback_result("No valid Tableau screenshots found")
 
-        # Get PBI screenshots
+        # ── Acquire PBI screenshots (3 methods) ──
         pbi_paths = []
+        pbi_source = ""
+
+        # Method A: Pre-captured screenshots
         if pbi_screenshots:
             pbi_paths = [p for p in pbi_screenshots if Path(p).exists()]
-        elif pbi_report_url:
-            pbi_paths = self._screenshot_pbi_report(pbi_report_url)
+            if pbi_paths:
+                pbi_source = "pre-captured"
+
+        # Method B: Playwright browser screenshot
+        if not pbi_paths and pbi_report_url:
+            pbi_paths = self._screenshot_pbi_playwright(pbi_report_url)
+            if pbi_paths:
+                pbi_source = "playwright"
+
+        # Method C: Fabric REST API page export
+        if not pbi_paths and fabric_token and workspace_id and report_id:
+            pbi_paths = self._export_pbi_fabric(
+                fabric_token, workspace_id, report_id
+            )
+            if pbi_paths:
+                pbi_source = "fabric_api"
 
         if not pbi_paths:
             return self._fallback_result(
-                "No PBI screenshots available — using structural comparison only"
+                "No PBI screenshots from any source (pre-captured / Playwright / Fabric API)"
             )
 
-        # Try Google Vision
-        if self._vision_available():
-            return self._compare_with_vision(valid_tableau, pbi_paths)
+        logger.info(f"PBI screenshots acquired via {pbi_source}: {len(pbi_paths)} pages")
 
-        # Fallback: pixel-level color histogram comparison
-        return self._compare_with_histograms(valid_tableau, pbi_paths)
+        # ── Compare: Google Vision → PIL histogram fallback ──
+        if self._vision_available():
+            result = self._compare_with_vision(valid_tableau, pbi_paths)
+            if result.get("method") == "google_vision":
+                result["pbi_source"] = pbi_source
+                return result
+
+        # PIL histogram comparison (always available)
+        result = self._compare_with_histograms(valid_tableau, pbi_paths)
+        result["pbi_source"] = pbi_source
+        return result
 
     def _vision_available(self) -> bool:
         """Check if Google Vision API credentials are available."""
@@ -666,7 +697,7 @@ class VisualFidelityChecker:
     def _compare_with_histograms(
         self, tableau_paths: List[str], pbi_paths: List[str]
     ) -> Dict[str, Any]:
-        """Fallback: compare images using color histogram similarity."""
+        """Fallback: compare images using color histogram + brightness layout."""
         per_page = []
         pairs = list(zip(tableau_paths, pbi_paths))
         if not pairs:
@@ -675,11 +706,19 @@ class VisualFidelityChecker:
         for i, (tab_path, pbi_path) in enumerate(pairs):
             tab_colors = self._extract_image_colors(tab_path)
             pbi_colors = self._extract_image_colors(pbi_path)
-            similarity = self._color_similarity(tab_colors, pbi_colors)
+            color_sim = self._color_similarity(tab_colors, pbi_colors)
+
+            # Brightness layout: compare 4x4 grid of average brightness
+            layout_sim = self._compare_brightness_grid(tab_path, pbi_path)
+
+            # Combined: 60% color + 40% layout structure
+            similarity = color_sim * 0.60 + layout_sim * 0.40
 
             diffs = []
-            if similarity < 0.5:
-                diffs.append("Color distribution significantly different")
+            if color_sim < 0.4:
+                diffs.append(f"Color palette divergence (color={color_sim:.0%})")
+            if layout_sim < 0.4:
+                diffs.append(f"Layout structure divergence (layout={layout_sim:.0%})")
 
             per_page.append({
                 "page": i + 1,
@@ -687,15 +726,30 @@ class VisualFidelityChecker:
                 "tableau_labels": [],
                 "pbi_labels": [],
                 "diffs": diffs,
-                "color_similarity": round(similarity, 3),
+                "color_similarity": round(color_sim, 3),
+                "layout_similarity": round(layout_sim, 3),
             })
 
         overall = sum(p["similarity"] for p in per_page) / max(len(per_page), 1)
+
+        summary_lines = [
+            f"Histogram+Layout comparison: {overall:.0%} overall ({len(per_page)} pages)"
+        ]
+        for p in per_page:
+            status = "✓" if p["similarity"] >= 0.5 else "✗"
+            summary_lines.append(
+                f"  Page {p['page']}: {p['similarity']:.0%} "
+                f"(color={p['color_similarity']:.0%}, "
+                f"layout={p['layout_similarity']:.0%}) {status}"
+            )
+            for d in p.get("diffs", []):
+                summary_lines.append(f"    - {d}")
+
         return {
             "overall_similarity": round(overall, 3),
             "per_page": per_page,
             "method": "histogram_fallback",
-            "summary": f"Histogram comparison: {overall:.0%} color similarity ({len(per_page)} pages)",
+            "summary": "\n".join(summary_lines),
         }
 
     def _extract_image_colors(self, image_path: str) -> List[str]:
@@ -704,45 +758,224 @@ class VisualFidelityChecker:
             from PIL import Image
             img = Image.open(image_path).convert("RGB").resize((100, 100))
             pixels = list(img.getdata())
-            # Count most common colors (quantized to 6-bit)
             from collections import Counter
             quantized = Counter()
             for r, g, b in pixels:
+                # Quantize to 4-bit per channel (16 levels each)
                 qr, qg, qb = (r >> 4) << 4, (g >> 4) << 4, (b >> 4) << 4
                 quantized[f"{qr:02x}{qg:02x}{qb:02x}"] += 1
-            return [c for c, _ in quantized.most_common(10)]
+            return [c for c, _ in quantized.most_common(12)]
         except Exception:
             return []
+
+    def _compare_brightness_grid(
+        self, path_a: str, path_b: str, grid: int = 4
+    ) -> float:
+        """Compare spatial brightness layout using a grid of average brightness.
+
+        Divides each image into a grid x grid cells, computes average brightness
+        per cell, then measures correlation. Catches layout differences (e.g.,
+        chart in top-left vs bottom-right) that color histograms miss.
+        """
+        try:
+            from PIL import Image
+
+            def _grid_brightness(path):
+                img = Image.open(path).convert("L").resize(
+                    (grid * 32, grid * 32)
+                )
+                cell_w = img.width // grid
+                cell_h = img.height // grid
+                cells = []
+                for row in range(grid):
+                    for col in range(grid):
+                        box = (
+                            col * cell_w, row * cell_h,
+                            (col + 1) * cell_w, (row + 1) * cell_h,
+                        )
+                        region = img.crop(box)
+                        pixels = list(region.getdata())
+                        avg = sum(pixels) / max(len(pixels), 1)
+                        cells.append(avg)
+                return cells
+
+            grid_a = _grid_brightness(path_a)
+            grid_b = _grid_brightness(path_b)
+
+            if not grid_a or not grid_b or len(grid_a) != len(grid_b):
+                return 0.0
+
+            # Normalized correlation
+            n = len(grid_a)
+            mean_a = sum(grid_a) / n
+            mean_b = sum(grid_b) / n
+            num = sum((a - mean_a) * (b - mean_b) for a, b in zip(grid_a, grid_b))
+            den_a = sum((a - mean_a) ** 2 for a in grid_a) ** 0.5
+            den_b = sum((b - mean_b) ** 2 for b in grid_b) ** 0.5
+            denom = den_a * den_b
+            if denom == 0:
+                return 1.0 if den_a == 0 and den_b == 0 else 0.0
+            corr = num / denom
+            # Map correlation [-1, 1] to similarity [0, 1]
+            return max(0.0, (corr + 1.0) / 2.0)
+        except Exception:
+            return 0.0
 
     def _color_similarity(self, colors_a: List[str], colors_b: List[str]) -> float:
         """Compare two color lists by overlap."""
         if not colors_a or not colors_b:
             return 0.0
-        set_a = set(colors_a[:10])
-        set_b = set(colors_b[:10])
+        set_a = set(colors_a[:12])
+        set_b = set(colors_b[:12])
         overlap = len(set_a & set_b)
         return overlap / max(len(set_a | set_b), 1)
 
-    def _screenshot_pbi_report(self, url: str) -> List[str]:
-        """Screenshot a PBI report URL using Playwright."""
+    def _screenshot_pbi_playwright(self, url: str) -> List[str]:
+        """Screenshot a PBI report URL using Playwright (fallback tier 2)."""
         try:
             from playwright.sync_api import sync_playwright
+        except ImportError:
+            logger.warning("Playwright not installed — skipping browser screenshot")
+            return []
+
+        try:
             screenshots = []
             with sync_playwright() as p:
                 browser = p.chromium.launch(headless=True)
                 page = browser.new_page(viewport={"width": 1280, "height": 720})
                 page.goto(url, wait_until="networkidle", timeout=30000)
-                # Wait for PBI to render
                 page.wait_for_timeout(5000)
 
-                path = f"/tmp/pbi_vision_qa_page1.png"
+                path = "/tmp/pbi_vision_qa_page1.png"
                 page.screenshot(path=path, full_page=False)
                 screenshots.append(path)
+
+                # Try clicking PBI page tabs for multi-page reports
+                try:
+                    tabs = page.query_selector_all(
+                        '[role="tab"], .navigation-tab, [data-testid="page-tab"]'
+                    )
+                    for idx, tab in enumerate(tabs[1:5], 2):
+                        tab.click()
+                        page.wait_for_timeout(3000)
+                        tab_path = f"/tmp/pbi_vision_qa_page{idx}.png"
+                        page.screenshot(path=tab_path, full_page=False)
+                        screenshots.append(tab_path)
+                except Exception:
+                    pass  # Single-page report or tab navigation failed
+
                 browser.close()
             return screenshots
         except Exception as exc:
-            logger.warning(f"PBI screenshot failed: {exc}")
+            logger.warning(f"Playwright screenshot failed: {exc}")
             return []
+
+    def _export_pbi_fabric(
+        self, token: str, workspace_id: str, report_id: str
+    ) -> List[str]:
+        """Export PBI report pages as PNG via Fabric REST API (fallback tier 3).
+
+        Uses: GET /v1.0/myorg/groups/{workspace}/reports/{report}/pages
+        Then:  POST /v1.0/myorg/groups/{workspace}/reports/{report}/ExportTo
+        """
+        import requests as req
+
+        base = "https://api.powerbi.com/v1.0/myorg"
+        headers = {"Authorization": f"Bearer {token}"}
+        screenshots = []
+
+        try:
+            # Step 1: List report pages
+            pages_url = f"{base}/groups/{workspace_id}/reports/{report_id}/pages"
+            resp = req.get(pages_url, headers=headers, timeout=15)
+            if resp.status_code != 200:
+                logger.warning(f"Fabric pages API: {resp.status_code} {resp.text[:200]}")
+                return []
+
+            pages = resp.json().get("value", [])
+            if not pages:
+                logger.warning("Fabric API: no pages returned")
+                return []
+
+            # Step 2: Export each page as PNG
+            for i, page_info in enumerate(pages[:5]):
+                page_name = page_info.get("name", page_info.get("displayName", f"Page{i}"))
+                export_url = (
+                    f"{base}/groups/{workspace_id}/reports/{report_id}"
+                    f"/ExportTo"
+                )
+                export_body = {
+                    "format": "PNG",
+                    "paginatedReportConfiguration": None,
+                    "powerBIReportConfiguration": {
+                        "pages": [{"pageName": page_name}],
+                    },
+                }
+                export_resp = req.post(
+                    export_url, headers=headers, json=export_body, timeout=60
+                )
+                if export_resp.status_code == 202:
+                    # Async export — poll for completion
+                    export_id = export_resp.json().get("id", "")
+                    if export_id:
+                        png_path = self._poll_fabric_export(
+                            token, workspace_id, report_id, export_id, i
+                        )
+                        if png_path:
+                            screenshots.append(png_path)
+                elif export_resp.status_code == 200:
+                    # Synchronous export (some API versions)
+                    png_path = f"/tmp/pbi_fabric_page{i+1}.png"
+                    with open(png_path, "wb") as f:
+                        f.write(export_resp.content)
+                    screenshots.append(png_path)
+                else:
+                    logger.warning(
+                        f"Fabric export page '{page_name}': "
+                        f"{export_resp.status_code}"
+                    )
+
+        except Exception as exc:
+            logger.warning(f"Fabric API export failed: {exc}")
+
+        return screenshots
+
+    def _poll_fabric_export(
+        self, token: str, workspace_id: str, report_id: str,
+        export_id: str, page_idx: int, max_polls: int = 12
+    ) -> Optional[str]:
+        """Poll Fabric export status and download PNG when ready."""
+        import requests as req
+        import time
+
+        base = "https://api.powerbi.com/v1.0/myorg"
+        headers = {"Authorization": f"Bearer {token}"}
+        status_url = (
+            f"{base}/groups/{workspace_id}/reports/{report_id}"
+            f"/exports/{export_id}"
+        )
+
+        for _ in range(max_polls):
+            time.sleep(5)
+            resp = req.get(status_url, headers=headers, timeout=15)
+            if resp.status_code != 200:
+                continue
+            status = resp.json().get("status", "")
+            if status == "Succeeded":
+                file_url = (
+                    f"{status_url}/file"
+                )
+                file_resp = req.get(file_url, headers=headers, timeout=30)
+                if file_resp.status_code == 200:
+                    png_path = f"/tmp/pbi_fabric_page{page_idx+1}.png"
+                    with open(png_path, "wb") as f:
+                        f.write(file_resp.content)
+                    return png_path
+                break
+            elif status == "Failed":
+                break
+
+        return None
 
     def _fallback_result(self, reason: str) -> Dict[str, Any]:
         """Return a structural-fallback result."""

@@ -765,13 +765,13 @@ def parse_twb(path):
             ci_measures = []
             for dep in ws.findall(".//datasource-dependencies"):
                 for ci in dep.findall("column-instance"):
-                    col_ref = _safe_strip_brackets(ci.get("column", ""))
+                    col_ref = _safe_strip_brackets(ci.get("column", "")).strip()
                     derivation = ci.get("derivation", "")
                     ci_type = ci.get("type", "")
                     pivot = ci.get("pivot", "")
                     if not col_ref:
                         continue
-                    resolved = spec["calc_id_map"].get(col_ref, col_ref)
+                    resolved = spec["calc_id_map"].get(col_ref, col_ref).strip()
                     if resolved.lower() in ("number of records",):
                         continue
                     is_active = pivot == "key"

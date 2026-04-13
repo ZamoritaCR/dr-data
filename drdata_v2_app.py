@@ -85,6 +85,31 @@ def _get_agent(session_id: str):
 
 
 # ------------------------------------------------------------------ #
+#  Pipeline State Machine (human-gated)
+# ------------------------------------------------------------------ #
+
+from core.pipeline_state import PipelineState, StageStatus, StageName
+from core.pipeline_runner import (
+    run_parse, run_field_mapping, run_formula_translation,
+    run_visual_mapping, run_generate, run_synthetic_data,
+    dispatch_multi_brain,
+)
+
+# Active pipeline states per session
+_pipelines: Dict[str, PipelineState] = {}
+
+
+def _get_pipeline(session_id: str) -> Optional[PipelineState]:
+    return _pipelines.get(session_id)
+
+
+def _create_pipeline(session_id: str, workbook_name: str) -> PipelineState:
+    ps = PipelineState(session_id, workbook_name)
+    _pipelines[session_id] = ps
+    return ps
+
+
+# ------------------------------------------------------------------ #
 #  Models
 # ------------------------------------------------------------------ #
 
@@ -223,26 +248,341 @@ class ChatRequestV2(BaseModel):
     file_id: str = ""
 
 
+# ------------------------------------------------------------------ #
+#  Pipeline Endpoints (human-gated state machine)
+# ------------------------------------------------------------------ #
+
+@app.get("/api/pipeline/{session_id}")
+async def pipeline_status(session_id: str):
+    """Get current pipeline state for a session."""
+    ps = _get_pipeline(session_id)
+    if not ps:
+        return {"active": False, "session_id": session_id}
+    return {"active": True, **ps.to_dict()}
+
+
+@app.post("/api/pipeline/{session_id}/approve")
+async def pipeline_approve(session_id: str):
+    """Approve the current awaiting stage and advance."""
+    ps = _get_pipeline(session_id)
+    if not ps:
+        raise HTTPException(404, "No active pipeline")
+    if not ps.is_awaiting_approval:
+        return {"error": "No stage awaiting approval", **ps.to_dict()}
+
+    stage = ps.current_stage
+    ps.approve_stage(stage)
+    return {"approved": stage, **ps.to_dict()}
+
+
+class CorrectionRequest(BaseModel):
+    corrections: dict = {}
+
+
+@app.post("/api/pipeline/{session_id}/correct")
+async def pipeline_correct(session_id: str, req: CorrectionRequest):
+    """Apply analyst corrections to the current awaiting stage."""
+    ps = _get_pipeline(session_id)
+    if not ps:
+        raise HTTPException(404, "No active pipeline")
+    if not ps.is_awaiting_approval:
+        return {"error": "No stage awaiting approval", **ps.to_dict()}
+
+    stage = ps.current_stage
+    ps.correct_stage(stage, req.corrections)
+    return {"corrected": stage, **ps.to_dict()}
+
+
+@app.post("/api/pipeline/{session_id}/run-next")
+async def pipeline_run_next(session_id: str):
+    """Execute the next pending stage in the pipeline.
+
+    This is called after an approval to actually run the next stage.
+    Returns the stage output for presentation in chat.
+    """
+    ps = _get_pipeline(session_id)
+    if not ps:
+        raise HTTPException(404, "No active pipeline")
+    if ps.is_complete:
+        return {"complete": True, **ps.to_dict()}
+    if ps.is_awaiting_approval:
+        return {"awaiting": ps.current_stage, **ps.to_dict()}
+
+    stage = ps.current_stage
+    ps.start_stage(stage)
+
+    try:
+        if stage == "parse":
+            # Need file_id from context
+            file_id = ps.context.get("file_id", "")
+            if file_id not in _uploads:
+                ps.fail_stage(stage, "No file uploaded")
+                return {"error": "No file uploaded", **ps.to_dict()}
+
+            filepath = _uploads[file_id]["path"]
+            result = run_parse(filepath)
+            ps.context["tableau_spec"] = result["tableau_spec"]
+            ps.context["palette"] = result["palette"]
+            ps.complete_stage(stage, result["summary"], result)
+
+        elif stage == "data_source":
+            # This stage waits for analyst choice
+            ps.complete_stage(stage,
+                "How should Power BI get its data?\n"
+                "  A) Synthetic data (generated from Tableau structure)\n"
+                "  B) Upload Excel/CSV\n"
+                "  C) Database connection\n"
+                "  D) Wireframe (no data)\n\n"
+                "Reply with A, B, C, or D.",
+                {"choices": ["synthetic", "upload", "database", "wireframe"]})
+
+        elif stage == "field_mapping":
+            spec = ps.context.get("tableau_spec")
+            profile = ps.context.get("data_profile")
+            if not spec or not profile:
+                ps.fail_stage(stage, "Missing tableau_spec or data_profile")
+                return {"error": "Missing context", **ps.to_dict()}
+
+            result = run_field_mapping(spec, profile)
+            ps.context["config"] = result["config"]
+            ps.context["dashboard_spec"] = result["dashboard_spec"]
+            ps.complete_stage(stage, result["summary"], result,
+                              qa_notes=result.get("qa_notes", []))
+
+        elif stage == "formula_trans":
+            spec = ps.context.get("tableau_spec", {})
+            calcs = spec.get("calculated_fields", [])
+            df = ps.context.get("dataframe")
+
+            if not calcs:
+                ps.complete_stage(stage,
+                    "No calculated fields to translate.", {"translations": []})
+                ps.approve_stage(stage)  # auto-approve if nothing to translate
+                return await pipeline_run_next(session_id)
+
+            result = run_formula_translation(calcs, spec, df)
+
+            # Multi-brain for REVIEW/BLOCKED
+            if result["review_needed"]:
+                for r in result["review_needed"][:3]:
+                    prompt = (
+                        f"Translate this Tableau calculated field to DAX:\n"
+                        f"Name: {r['name']}\n"
+                        f"Tableau formula: {r['tableau_formula']}\n\n"
+                        f"Return ONLY the DAX expression."
+                    )
+                    brain_result = dispatch_multi_brain(prompt)
+                    r["brain_consensus"] = brain_result["results"]
+
+            ps.complete_stage(stage, result["summary"], result,
+                              qa_notes=result.get("qa_notes", []))
+
+        elif stage == "visual_mapping":
+            spec = ps.context.get("tableau_spec")
+            config = ps.context.get("config")
+            palette = ps.context.get("palette", [])
+            if not config:
+                ps.fail_stage(stage, "No config from field mapping")
+                return {"error": "Missing config", **ps.to_dict()}
+
+            result = run_visual_mapping(spec, config, palette)
+            ps.complete_stage(stage, result["summary"], result)
+
+        elif stage == "semantic_model":
+            config = ps.context.get("config", {})
+            tmdl = config.get("tmdl_model", {})
+            tables = tmdl.get("tables", [])
+            measures = tables[0].get("measures", []) if tables else []
+            relationships = tmdl.get("relationships", [])
+
+            summary_lines = [
+                f"Semantic Model:",
+                f"  Tables: {len(tables)}",
+                f"  Measures: {len(measures)}",
+                f"  Relationships: {len(relationships)}",
+            ]
+            if measures:
+                summary_lines.append("\nDAX Measures:")
+                for m in measures[:10]:
+                    summary_lines.append(f"  {m.get('name','')}: {m.get('expression','')[:80]}")
+
+            ps.complete_stage(stage, "\n".join(summary_lines),
+                              {"tables": len(tables), "measures": len(measures),
+                               "relationships": len(relationships)})
+
+        elif stage == "report_layout":
+            config = ps.context.get("config", {})
+            sections = config.get("report_layout", {}).get("sections", [])
+            total_visuals = sum(len(s.get("visualContainers", [])) for s in sections)
+
+            summary_lines = [
+                f"Report Layout:",
+                f"  {len(sections)} pages, {total_visuals} visuals",
+            ]
+            for s in sections:
+                name = s.get("displayName", "Page")
+                vc_count = len(s.get("visualContainers", []))
+                summary_lines.append(f"  - {name}: {vc_count} visuals")
+
+            ps.complete_stage(stage, "\n".join(summary_lines),
+                              {"pages": len(sections), "visuals": total_visuals})
+
+        elif stage == "generate":
+            config = ps.context.get("config")
+            profile = ps.context.get("data_profile")
+            dspec = ps.context.get("dashboard_spec")
+            df = ps.context.get("dataframe")
+            palette = ps.context.get("palette", [])
+
+            if not config or not profile:
+                ps.fail_stage(stage, "Missing config or profile")
+                return {"error": "Missing context", **ps.to_dict()}
+
+            result = run_generate(config, profile, dspec, df, palette, session_id)
+            ps.context["pbip_path"] = result["pbip_path"]
+            ps.complete_stage(stage, result["summary"], result)
+
+        else:
+            ps.fail_stage(stage, f"Unknown stage: {stage}")
+
+    except Exception as e:
+        logger.exception(f"Pipeline stage {stage} failed")
+        ps.fail_stage(stage, str(e)[:500])
+        return {"error": str(e)[:500], **ps.to_dict()}
+
+    return {
+        "stage": stage,
+        "summary": ps.format_stage_summary_for_chat(stage),
+        **ps.to_dict(),
+    }
+
+
+# ------------------------------------------------------------------ #
+#  Chat (V1 agent + pipeline awareness)
+# ------------------------------------------------------------------ #
+
 @app.post("/api/chat")
 async def chat(req: ChatRequestV2):
-    """Full conversational chat with V1 Dr. Data agent.
+    """Full conversational chat with Dr. Data agent.
 
-    Uses intent classification (Claude Haiku) to route:
-    - build_powerbi, build_dashboard, build_pdf, build_pptx, build_word -> generates files
-    - analyze -> deep analysis with specific numbers
-    - chat -> tool-calling conversation (up to 10 iterations)
-
-    Returns generated files as downloadable links.
+    Pipeline-aware: detects migration intent and starts the human-gated
+    pipeline. For all other intents, delegates to the V1 agent.
     """
     session_id = req.session_id or req.file_id or "default"
+    msg = req.message.strip()
+    msg_lower = msg.lower()
     progress_msgs = []
 
-    def _progress(msg):
-        progress_msgs.append(msg)
+    def _progress(m):
+        progress_msgs.append(m)
 
+    # ---- Check for pipeline approval/correction commands ----
+    ps = _get_pipeline(session_id)
+    if ps and ps.is_awaiting_approval:
+        stage = ps.current_stage
+
+        if msg_lower in ("approve", "yes", "ok", "looks good", "proceed", "continue", "y", "lgtm"):
+            ps.approve_stage(stage)
+            # If data_source stage, handle the choice
+            # Otherwise run next stage automatically
+            if stage == "data_source":
+                return {
+                    "response": "Data source approved. Moving to field mapping...",
+                    "pipeline": ps.to_dict(),
+                    "files": [],
+                    "intent": "pipeline",
+                }
+            # Auto-run next stage
+            return await _run_next_and_respond(session_id)
+
+        elif stage == "data_source":
+            # Handle data source choice
+            choice = None
+            if any(x in msg_lower for x in ["a", "synthetic"]):
+                choice = "synthetic"
+            elif any(x in msg_lower for x in ["b", "upload", "excel", "csv"]):
+                choice = "upload"
+            elif any(x in msg_lower for x in ["c", "database", "db", "snowflake", "sql"]):
+                choice = "database"
+            elif any(x in msg_lower for x in ["d", "wireframe", "no data"]):
+                choice = "wireframe"
+
+            if choice:
+                ps.context["data_source_choice"] = choice
+                ps.log_decision(stage, "analyst", f"chose: {choice}",
+                                ["synthetic", "upload", "database", "wireframe"])
+
+                # Generate data based on choice
+                if choice == "synthetic":
+                    spec = ps.context.get("tableau_spec", {})
+                    data_result = run_synthetic_data(spec)
+                    ps.context["dataframe"] = data_result["dataframe"]
+                    ps.context["data_profile"] = data_result["profile"]
+                    ps.approve_stage(stage)
+                    return {
+                        "response": f"Synthetic data generated.\n\n{data_result['summary']}\n\nMoving to field mapping...",
+                        "pipeline": ps.to_dict(),
+                        "files": [],
+                        "intent": "pipeline",
+                    }
+                elif choice == "wireframe":
+                    ps.context["dataframe"] = None
+                    ps.context["data_profile"] = {"table_name": "Data", "row_count": 0, "columns": []}
+                    ps.approve_stage(stage)
+                    return {
+                        "response": "Wireframe mode -- no data will be embedded. Moving to field mapping...",
+                        "pipeline": ps.to_dict(),
+                        "files": [],
+                        "intent": "pipeline",
+                    }
+                elif choice == "upload":
+                    return {
+                        "response": "Upload your Excel or CSV file using the upload button. I will use it as the data source.",
+                        "pipeline": ps.to_dict(),
+                        "files": [],
+                        "intent": "pipeline",
+                    }
+                elif choice == "database":
+                    return {
+                        "response": "What is your database connection? Provide: type (Snowflake/SQL Server/PostgreSQL), server, database, schema, table.",
+                        "pipeline": ps.to_dict(),
+                        "files": [],
+                        "intent": "pipeline",
+                    }
+
+        else:
+            # Treat as correction
+            ps.correct_stage(stage, {"analyst_note": msg})
+            return await _run_next_and_respond(session_id)
+
+    # ---- Detect migration intent ----
+    is_migrate = any(x in msg_lower for x in [
+        "convert", "migrate", "power bi", "powerbi", "pbip",
+        "translate to", "build pbi", "transform to pbi",
+    ])
+
+    if is_migrate and req.file_id and req.file_id in _uploads:
+        filename = _uploads[req.file_id]["filename"]
+        ps = _create_pipeline(session_id, filename)
+        ps.context["file_id"] = req.file_id
+
+        # Run parse immediately
+        return await _run_next_and_respond(session_id)
+
+    # ---- Default: V1 agent chat ----
     try:
         agent = _get_agent(session_id)
         if agent:
+            # Attach uploaded file context if available
+            if req.file_id and req.file_id in _uploads:
+                info = _uploads[req.file_id]
+                filepath = info["path"]
+                if not agent.tableau_spec and filepath.endswith((".twbx", ".twb")):
+                    try:
+                        agent.analyze_uploaded_file(file_path=filepath)
+                    except Exception:
+                        pass
+
             result = agent.respond(
                 user_message=req.message,
                 conversation_history=agent.messages,
@@ -250,7 +590,6 @@ async def chat(req: ChatRequestV2):
                 progress_callback=_progress,
             )
 
-            # Extract response text
             if isinstance(result, str):
                 text = result
                 downloads = []
@@ -261,26 +600,7 @@ async def chat(req: ChatRequestV2):
                 text = str(result)
                 downloads = []
 
-            # Convert file paths to download-ready entries
-            served_files = []
-            for dl in downloads:
-                if isinstance(dl, dict) and dl.get("path"):
-                    fpath = dl["path"]
-                    fname = dl.get("filename", os.path.basename(fpath))
-                    # Copy to static/downloads for serving
-                    dl_dir = STATIC_DIR / "downloads"
-                    dl_dir.mkdir(exist_ok=True)
-                    dest = dl_dir / fname
-                    try:
-                        shutil.copy2(fpath, str(dest))
-                        served_files.append({
-                            "name": dl.get("name", fname),
-                            "filename": fname,
-                            "url": f"/static/downloads/{fname}",
-                            "description": dl.get("description", ""),
-                        })
-                    except Exception as cp_err:
-                        logger.warning(f"File copy failed: {cp_err}")
+            served_files = _serve_downloads(downloads)
 
             return {
                 "response": text,
@@ -289,11 +609,11 @@ async def chat(req: ChatRequestV2):
                 "progress": progress_msgs,
             }
     except Exception as agent_err:
-        logger.warning(f"Agent chat error, falling back to simple Claude: {agent_err}")
+        logger.warning(f"Agent chat error: {agent_err}")
         import traceback
         traceback.print_exc()
 
-    # Fallback: direct Claude call with Dr. Data personality
+    # Fallback: direct Claude
     try:
         api_key = os.getenv("ANTHROPIC_API_KEY", "")
         if not api_key:
@@ -302,16 +622,13 @@ async def chat(req: ChatRequestV2):
         from anthropic import Anthropic
         client = Anthropic(api_key=api_key)
 
-        # Use the REAL Dr. Data system prompt
         try:
             from config.prompts import DR_DATA_SYSTEM_PROMPT
             system = DR_DATA_SYSTEM_PROMPT
         except ImportError:
             system = (
-                "You are Dr. Data, Chief Data Intelligence Officer. You are not a chatbot. "
-                "You are a senior data analyst with 25 years of experience who takes initiative, "
-                "has strong opinions backed by evidence, and does work before being asked. "
-                "Be direct, give code examples, reference actual field names. No fluff. No emojis."
+                "You are Dr. Data, Chief Data Intelligence Officer. "
+                "Senior data analyst, 25 years experience. Be direct, give code, no fluff."
             )
 
         context = req.context
@@ -321,17 +638,193 @@ async def chat(req: ChatRequestV2):
         if context:
             system += f"\n\nCurrent context:\n{context}"
 
-        msg = client.messages.create(
+        msg_resp = client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=2048,
             system=system,
             messages=[{"role": "user", "content": req.message}],
         )
-        return {"response": msg.content[0].text, "files": [], "intent": "chat"}
+        return {"response": msg_resp.content[0].text, "files": [], "intent": "chat"}
 
     except Exception as e:
         logger.error(f"Chat error: {e}")
         return {"response": f"Error: {str(e)[:200]}", "files": [], "intent": "error"}
+
+
+async def _run_next_and_respond(session_id: str) -> dict:
+    """Helper: run the next pipeline stage and format for chat response."""
+    ps = _get_pipeline(session_id)
+    if not ps or ps.is_complete:
+        return {"response": "Pipeline complete.", "pipeline": ps.to_dict() if ps else {}, "files": [], "intent": "pipeline"}
+
+    # Run stage synchronously (in thread for CPU work)
+    import asyncio
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, _sync_run_next, session_id)
+    return result
+
+
+def _sync_run_next(session_id: str) -> dict:
+    """Synchronous pipeline stage runner."""
+    ps = _get_pipeline(session_id)
+    if not ps:
+        return {"response": "No active pipeline.", "files": [], "intent": "error"}
+
+    stage = ps.current_stage
+    if not stage:
+        # Pipeline complete -- serve final files
+        pbip_path = ps.context.get("pbip_path", "")
+        served = []
+        if pbip_path:
+            zip_base = Path(pbip_path).parent / Path(pbip_path).name
+            zip_path = str(zip_base) + ".zip"
+            if os.path.exists(zip_path):
+                served = _serve_downloads([{"path": zip_path, "name": "PBIP Project", "filename": os.path.basename(zip_path)}])
+        return {
+            "response": "Pipeline complete. All stages approved.\n\n" + _format_audit_log(ps),
+            "pipeline": ps.to_dict(),
+            "files": served,
+            "intent": "pipeline",
+        }
+
+    ps.start_stage(stage)
+
+    try:
+        if stage == "parse":
+            file_id = ps.context.get("file_id", "")
+            if file_id not in _uploads:
+                ps.fail_stage(stage, "No file uploaded")
+                return {"response": "No file uploaded.", "pipeline": ps.to_dict(), "files": [], "intent": "error"}
+
+            filepath = _uploads[file_id]["path"]
+            result = run_parse(filepath)
+            ps.context["tableau_spec"] = result["tableau_spec"]
+            ps.context["palette"] = result["palette"]
+            ps.complete_stage(stage, result["summary"], result)
+
+        elif stage == "data_source":
+            ps.complete_stage(stage,
+                "How should Power BI get its data?\n\n"
+                "  A) Synthetic data (generated from Tableau structure)\n"
+                "  B) Upload Excel/CSV\n"
+                "  C) Database connection\n"
+                "  D) Wireframe (no data)\n\n"
+                "Reply with your choice.",
+                {"choices": ["synthetic", "upload", "database", "wireframe"]})
+
+        elif stage == "field_mapping":
+            spec = ps.context.get("tableau_spec")
+            profile = ps.context.get("data_profile")
+            if not spec or not profile:
+                ps.fail_stage(stage, "Missing context")
+                return {"response": "Missing tableau spec or data profile.", "pipeline": ps.to_dict(), "files": [], "intent": "error"}
+            result = run_field_mapping(spec, profile)
+            ps.context["config"] = result["config"]
+            ps.context["dashboard_spec"] = result["dashboard_spec"]
+            ps.complete_stage(stage, result["summary"], result)
+
+        elif stage == "formula_trans":
+            spec = ps.context.get("tableau_spec", {})
+            calcs = spec.get("calculated_fields", [])
+            if not calcs:
+                ps.complete_stage(stage, "No calculated fields to translate.", {})
+                ps.approve_stage(stage)
+                return _sync_run_next(session_id)
+            result = run_formula_translation(calcs, spec, ps.context.get("dataframe"))
+            if result["review_needed"]:
+                for r in result["review_needed"][:3]:
+                    prompt = (
+                        f"Translate this Tableau calculated field to DAX:\n"
+                        f"Name: {r['name']}\nTableau: {r['tableau_formula']}\n"
+                        f"Return ONLY the DAX expression."
+                    )
+                    r["brain_consensus"] = dispatch_multi_brain(prompt)["results"]
+            ps.complete_stage(stage, result["summary"], result, qa_notes=result.get("qa_notes", []))
+
+        elif stage == "visual_mapping":
+            config = ps.context.get("config")
+            result = run_visual_mapping(ps.context.get("tableau_spec"), config, ps.context.get("palette", []))
+            ps.complete_stage(stage, result["summary"], result)
+
+        elif stage == "semantic_model":
+            config = ps.context.get("config", {})
+            tmdl = config.get("tmdl_model", {})
+            tables = tmdl.get("tables", [])
+            measures = tables[0].get("measures", []) if tables else []
+            summary = f"Semantic Model: {len(tables)} tables, {len(measures)} measures"
+            ps.complete_stage(stage, summary, {"tables": len(tables), "measures": len(measures)})
+
+        elif stage == "report_layout":
+            config = ps.context.get("config", {})
+            sections = config.get("report_layout", {}).get("sections", [])
+            total = sum(len(s.get("visualContainers", [])) for s in sections)
+            summary = f"Report Layout: {len(sections)} pages, {total} visuals"
+            ps.complete_stage(stage, summary, {"pages": len(sections), "visuals": total})
+
+        elif stage == "generate":
+            config = ps.context.get("config")
+            profile = ps.context.get("data_profile")
+            dspec = ps.context.get("dashboard_spec")
+            result = run_generate(config, profile, dspec, ps.context.get("dataframe"),
+                                  ps.context.get("palette", []), session_id)
+            ps.context["pbip_path"] = result["pbip_path"]
+            served = []
+            if result.get("zip_path") and os.path.exists(result["zip_path"]):
+                served = _serve_downloads([{"path": result["zip_path"], "name": "PBIP Project",
+                                            "filename": os.path.basename(result["zip_path"])}])
+            ps.complete_stage(stage, result["summary"], result)
+            return {
+                "response": ps.format_stage_summary_for_chat(stage),
+                "pipeline": ps.to_dict(),
+                "files": served,
+                "intent": "pipeline",
+            }
+        else:
+            ps.fail_stage(stage, f"Unknown stage: {stage}")
+
+    except Exception as e:
+        logger.exception(f"Stage {stage} failed")
+        ps.fail_stage(stage, str(e)[:500])
+        return {"response": f"Stage {stage} failed: {str(e)[:300]}", "pipeline": ps.to_dict(), "files": [], "intent": "error"}
+
+    return {
+        "response": ps.format_stage_summary_for_chat(stage),
+        "pipeline": ps.to_dict(),
+        "files": [],
+        "intent": "pipeline",
+    }
+
+
+def _serve_downloads(downloads: list) -> list:
+    """Copy files to static/downloads and return served entries."""
+    served = []
+    for dl in downloads:
+        if isinstance(dl, dict) and dl.get("path"):
+            fpath = dl["path"]
+            fname = dl.get("filename", os.path.basename(fpath))
+            dl_dir = STATIC_DIR / "downloads"
+            dl_dir.mkdir(exist_ok=True)
+            dest = dl_dir / fname
+            try:
+                shutil.copy2(fpath, str(dest))
+                served.append({
+                    "name": dl.get("name", fname),
+                    "filename": fname,
+                    "url": f"/static/downloads/{fname}",
+                    "description": dl.get("description", ""),
+                })
+            except Exception as e:
+                logger.warning(f"File copy failed: {e}")
+    return served
+
+
+def _format_audit_log(ps: PipelineState) -> str:
+    """Format the full audit log for final presentation."""
+    lines = ["Decision Audit Log:"]
+    for d in ps.audit_log:
+        ts = time.strftime("%H:%M:%S", time.localtime(d.timestamp))
+        lines.append(f"  [{ts}] {d.stage}: {d.made_by} -- {d.decision}")
+    return "\n".join(lines)
 
 
 @app.get("/api/jobs/{job_id}")

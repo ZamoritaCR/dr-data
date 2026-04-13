@@ -693,6 +693,8 @@ def parse_twb(path):
                 "cols_fields": [],
                 "dimensions": [],
                 "measures": [],
+                "column_instances": [],
+                "filter_values": [],
                 "filters": ws_filters,
                 "color_field": "",
                 "size_field": "",
@@ -755,34 +757,80 @@ def parse_twb(path):
                     ws_info["sort_field"] = sort_field
                     break
 
-            # -- Datasource-dependencies fallback for empty shelves --
-            # BAN/card worksheets often have no rows/cols shelves.
-            # Extract field roles from datasource-dependencies instead.
+            # -- column-instance extraction (ALL worksheets) --
+            # This is the authoritative source for which fields a visual
+            # actually binds, with their derivation (Sum, None, Quarter...)
+            # and type (quantitative = measure, nominal = dimension).
+            ci_dims = []
+            ci_measures = []
+            for dep in ws.findall(".//datasource-dependencies"):
+                for ci in dep.findall("column-instance"):
+                    col_ref = _safe_strip_brackets(ci.get("column", ""))
+                    derivation = ci.get("derivation", "")
+                    ci_type = ci.get("type", "")
+                    pivot = ci.get("pivot", "")
+                    if not col_ref:
+                        continue
+                    resolved = spec["calc_id_map"].get(col_ref, col_ref)
+                    if resolved.lower() in ("number of records",):
+                        continue
+                    is_active = pivot == "key"
+                    is_measure = (ci_type == "quantitative"
+                                  or derivation in ("Sum", "Avg", "Count",
+                                                    "CountD", "Min", "Max",
+                                                    "Median"))
+                    is_dimension = (ci_type in ("nominal", "ordinal")
+                                    or derivation in ("None", ""))
+                    entry = {
+                        "field": resolved,
+                        "raw_field": col_ref,
+                        "derivation": derivation,
+                        "type": ci_type,
+                        "is_active": is_active,
+                        "is_measure": is_measure,
+                        "is_dimension": is_dimension and not is_measure,
+                    }
+                    ws_info["column_instances"].append(entry)
+                    if is_active:
+                        if is_measure and resolved not in ci_measures:
+                            ci_measures.append(resolved)
+                        elif not is_measure and resolved not in ci_dims:
+                            ci_dims.append(resolved)
+
+                # Also extract <column> elements for role info
+                for col in dep.findall("column"):
+                    col_name = _safe_strip_brackets(col.get("name", ""))
+                    col_caption = col.get("caption", "")
+                    col_role = col.get("role", "")
+                    resolved = spec["calc_id_map"].get(col_name, col_caption or col_name)
+                    if not resolved or resolved.lower() in ("number of records",):
+                        continue
+                    if col_role == "measure" and resolved not in ci_measures:
+                        ci_measures.append(resolved)
+                    elif col_role == "dimension" and resolved not in ci_dims:
+                        ci_dims.append(resolved)
+
+            # Populate dims/measures from column-instances when shelves are empty
             if not ws_info["rows_fields"] and not ws_info["cols_fields"]:
-                dep_dims = []
-                dep_measures = []
-                for dep in ws.findall(".//datasource-dependencies"):
-                    for col in dep.findall("column"):
-                        col_name = _safe_strip_brackets(col.get("name", ""))
-                        col_caption = col.get("caption", "")
-                        col_role = col.get("role", "")
-                        # Resolve through calc_id_map
-                        resolved = spec["calc_id_map"].get(col_name, col_caption or col_name)
-                        if not resolved or resolved.lower() in ("number of records",):
-                            continue
-                        if col_role == "measure":
-                            dep_measures.append(resolved)
-                        elif col_role == "dimension":
-                            dep_dims.append(resolved)
-                if dep_measures:
-                    ws_info["measures"] = dep_measures
-                if dep_dims:
-                    ws_info["dimensions"] = dep_dims
-                # Also put the first measure on cols_fields so _classify_fields_for_chart finds it
-                if dep_measures:
-                    ws_info["cols_fields"] = dep_measures[:2]
-                if dep_dims:
-                    ws_info["rows_fields"] = dep_dims[:2]
+                if ci_measures:
+                    ws_info["measures"] = ci_measures
+                    ws_info["cols_fields"] = ci_measures[:2]
+                if ci_dims:
+                    ws_info["dimensions"] = ci_dims
+                    ws_info["rows_fields"] = ci_dims[:2]
+            # Even when shelves ARE populated, store column-instance data
+            # so the mapper can use it as authoritative field classification
+            if ci_measures and not ws_info["measures"]:
+                ws_info["measures"] = ci_measures
+            if ci_dims and not ws_info["dimensions"]:
+                ws_info["dimensions"] = ci_dims
+
+            # -- Filter value extraction --
+            for filt in ws.findall(".//filter"):
+                for gf in filt.findall(".//groupfilter"):
+                    member = gf.get("member", "").strip('"').strip("'")
+                    if member and member not in ws_info["filter_values"]:
+                        ws_info["filter_values"].append(member)
 
             # Per-worksheet design metadata
             ws_info["design"] = _extract_ws_design(ws)

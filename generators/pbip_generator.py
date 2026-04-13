@@ -924,10 +924,58 @@ class PBIPGenerator:
                 print(f"    [FALLBACK] Assigned default fields for empty visual: "
                       f"{', '.join(used)}")
 
+        # ── Enforce PBI visual type field limits ──
+        _ROLE_LIMITS = {
+            "card":              {"Values": 1},
+            "cardVisual":        {"Values": 1},
+            "multiRowCard":      {"Values": 4},
+            "kpi":               {"Values": 1},
+            "clusteredBarChart": {"Category": 1, "Y": 3, "Series": 1},
+            "barChart":          {"Category": 1, "Y": 2, "Series": 1},
+            "stackedBarChart":   {"Category": 1, "Y": 2, "Legend": 1},
+            "hundredPercentStackedBarChart": {"Category": 1, "Y": 2, "Legend": 1},
+            "stackedColumnChart": {"Category": 1, "Y": 2, "Legend": 1},
+            "hundredPercentStackedColumnChart": {"Category": 1, "Y": 2, "Legend": 1},
+            "clusteredColumnChart": {"Category": 1, "Y": 3, "Series": 1},
+            "scatterChart":      {"X": 1, "Y": 1, "Size": 1, "Details": 1},
+            "lineChart":         {"Category": 1, "Y": 3, "Series": 1},
+            "areaChart":         {"Category": 1, "Y": 3, "Series": 1},
+            "stackedAreaChart":  {"Category": 1, "Y": 3, "Series": 1},
+            "pieChart":          {"Category": 1, "Y": 1, "Legend": 1},
+            "donutChart":        {"Category": 1, "Y": 1, "Legend": 1},
+            "treemap":           {"Category": 1, "Values": 1, "Legend": 1},
+            "filledMap":         {"Location": 1, "Category": 1, "Legend": 1},
+            "map":               {"Location": 1, "Category": 1, "Legend": 1},
+            "shapeMap":          {"Location": 1, "Category": 1, "Legend": 1},
+            "funnelChart":       {"Category": 1, "Y": 1},
+            "waterfallChart":    {"Category": 1, "Y": 1},
+            "slicer":            {"Values": 1},
+        }
+        limits = _ROLE_LIMITS.get(visual_type, {})
+        for role, max_count in limits.items():
+            if role in query_state:
+                projs = query_state[role].get("projections", [])
+                if len(projs) > max_count:
+                    dropped = [p.get("nativeQueryRef", "?") for p in projs[max_count:]]
+                    query_state[role]["projections"] = projs[:max_count]
+                    print(f"    [LIMIT] {visual_type}.{role}: truncated to {max_count} "
+                          f"(dropped: {', '.join(dropped)})")
+
         return query_state
 
+    # ── Aggregation function mapping (Tableau derivation → PBI Function enum) ──
+    _AGG_FUNCTION_MAP = {
+        "sum": 0,
+        "avg": 1, "average": 1,
+        "count": 2, "cnt": 2,
+        "min": 3,
+        "max": 4,
+        "countd": 5, "distinctcount": 5,
+    }
+
     def _build_field_projection(self, field_name, table_name, measure_names,
-                                aggregate=False, col_types=None):
+                                aggregate=False, col_types=None,
+                                derivation=None):
         """Build a single field projection for queryState.
 
         Matches the reference_template structure from PBI Desktop:
@@ -958,19 +1006,29 @@ class PBIPGenerator:
             }
         }
 
-        # Wrap numeric columns in Aggregation (Sum) when in value roles
-        # This matches how PBI Desktop writes visual.json (see reference_template)
+        # Wrap numeric columns in Aggregation when in value roles.
+        # Use derivation from Tableau parser when available, else default Sum.
         sem = col_types.get(field_name, "dimension")
         if aggregate and sem == "measure":
+            # Resolve aggregation function from Tableau derivation
+            agg_func = 0  # Default: Sum
+            agg_label = "Sum"
+            if derivation:
+                deriv_lower = derivation.lower().strip()
+                mapped = self._AGG_FUNCTION_MAP.get(deriv_lower)
+                if mapped is not None:
+                    agg_func = mapped
+                    agg_label = derivation.capitalize()
+
             return {
                 "field": {
                     "Aggregation": {
                         "Expression": col_ref,
-                        "Function": 0,  # 0 = Sum
+                        "Function": agg_func,
                     }
                 },
-                "queryRef": f"Sum({table_name}.{field_name})",
-                "nativeQueryRef": f"Sum of {field_name}",
+                "queryRef": f"{agg_label}({table_name}.{field_name})",
+                "nativeQueryRef": f"{agg_label} of {field_name}",
             }
 
         # Plain column reference for dimensions / category axes

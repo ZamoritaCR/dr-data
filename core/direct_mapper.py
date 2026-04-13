@@ -210,6 +210,29 @@ def _detect_aggregated_fields(field_refs):
     return aggregated
 
 
+def _build_derivation_map(field_refs):
+    """Build a map of field_name -> Tableau aggregation derivation.
+
+    Parses shelf refs like '[sum:Sales:qk]' to extract the aggregation type.
+    Returns dict: {"Sales": "Sum", "Days to Close": "Avg", ...}
+    """
+    agg_prefixes = {"sum", "avg", "count", "countd", "min", "max", "median",
+                    "attr", "usr"}
+    deriv_map = {}
+    for ref in field_refs:
+        if not ref:
+            continue
+        ref = ref.strip()
+        m = _SHELF_PREFIX_RE.match(ref)
+        if m:
+            prefix = m.group(1).lower()
+            field = m.group(2)
+            if prefix in agg_prefixes and field:
+                # Capitalize for consistency with Tableau derivation attr
+                deriv_map[field] = prefix.capitalize()
+    return deriv_map
+
+
 def _detect_aggregated_color(color_ref):
     """Detect if color_field reference has an aggregation prefix.
 
@@ -308,19 +331,74 @@ def _infer_fields_from_worksheet_name(ws_name, profile_col_names, col_types):
 def _classify_fields_for_chart(ws, chart_type, profile_col_names, col_types):
     """Determine category, values, and series fields for a worksheet.
 
-    Uses the worksheet shelf fields and chart type to assign PBI roles.
-    When shelf fields are empty or contain only Tableau-generated fields,
-    infers fields from the worksheet name and available profile columns.
-
-    Args:
-        ws: worksheet dict from the parser
-        chart_type: PBI visual type string
-        profile_col_names: set of column names from data profile
-        col_types: dict of col_name -> semantic_type (dimension/measure)
+    Priority chain:
+    1. column-instance data (authoritative — Tableau's own classification)
+    2. Shelf expressions (rows_fields, cols_fields)
+    3. Worksheet name inference
+    4. Profile-based fallback
 
     Returns:
         dict with category, values, series lists
     """
+    # ── Priority 1: column-instance data ──
+    ci_list = ws.get("column_instances", [])
+    if ci_list:
+        ci_dims = []
+        ci_measures = []
+        for ci in ci_list:
+            if not ci.get("is_active"):
+                continue
+            field = ci["field"]
+            # Resolve through calc_id_map and profile
+            resolved = _resolve_field_against_profile(field, profile_col_names)
+            if ci["is_measure"] and resolved not in ci_measures:
+                ci_measures.append(resolved)
+            elif ci.get("is_dimension") and resolved not in ci_dims:
+                ci_dims.append(resolved)
+        # If column-instances gave us usable fields, use them directly
+        if ci_dims or ci_measures:
+            # For cards: only first measure, no dims
+            if chart_type in ("card", "cardVisual", "multiRowCard"):
+                ci_measures = ci_measures[:1]
+                ci_dims = []
+            # For bar/line: limit dimensions and measures
+            elif chart_type in ("clusteredBarChart", "barChart",
+                                "clusteredColumnChart", "stackedBarChart",
+                                "stackedColumnChart", "lineChart", "areaChart"):
+                ci_dims = ci_dims[:1]
+                ci_measures = ci_measures[:3]
+            # For scatter: x=measure, y=measure, details=dimension
+            elif chart_type in ("scatterChart",):
+                ci_measures = ci_measures[:2]
+                ci_dims = ci_dims[:1]
+            # For tables: show all
+            elif chart_type in ("tableEx",):
+                pass
+            else:
+                ci_dims = ci_dims[:2]
+                ci_measures = ci_measures[:3]
+
+            color_field = ws.get("color_field", "")
+            if color_field:
+                color_field = _resolve_field_against_profile(
+                    _clean_field_name(color_field), profile_col_names)
+
+            # Build derivation map from column-instance data
+            ci_derivations = {}
+            for ci in ci_list:
+                if ci.get("is_active") and ci.get("derivation"):
+                    field = ci["field"]
+                    resolved = _resolve_field_against_profile(field, profile_col_names)
+                    ci_derivations[resolved] = ci["derivation"]
+
+            return {
+                "category": ci_dims,
+                "values": ci_measures,
+                "series": [color_field] if color_field and color_field in profile_col_names else [],
+                "derivations": ci_derivations,
+            }
+
+    # ── Priority 2: shelf expressions ──
     raw_rows = ws.get("rows_fields", [])
     raw_cols = ws.get("cols_fields", [])
     raw_color = ws.get("color_field", "")
@@ -331,7 +409,10 @@ def _classify_fields_for_chart(ws, chart_type, profile_col_names, col_types):
 
     # Detect fields that Tableau treats as measures (aggregation prefix)
     # even if the profiler classifies them as dimensions (low cardinality).
+    # Also build derivation map: field_name -> aggregation type (Sum, Avg, etc.)
     tableau_agg_fields = _detect_aggregated_fields(raw_rows) | _detect_aggregated_fields(raw_cols)
+    shelf_derivations = _build_derivation_map(raw_rows)
+    shelf_derivations.update(_build_derivation_map(raw_cols))
     agg_color = _detect_aggregated_color(raw_color)
     if agg_color:
         tableau_agg_fields.add(agg_color)
@@ -563,10 +644,17 @@ def _classify_fields_for_chart(ws, chart_type, profile_col_names, col_types):
                 print(f"    [DIRECT-MAPPER] Fallback: assigned dimension "
                       f"{category} for '{ws_name}' (had values, no category)")
 
+    # Build resolved derivation map: resolved_field_name -> aggregation
+    resolved_derivations = {}
+    for raw_name, deriv in shelf_derivations.items():
+        resolved = _resolve_field_against_profile(raw_name, profile_col_names)
+        resolved_derivations[resolved] = deriv
+
     return {
         "category": category,
         "values": values,
         "series": series,
+        "derivations": resolved_derivations,
     }
 
 

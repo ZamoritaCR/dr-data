@@ -541,8 +541,14 @@ class VisualFidelityChecker:
         if not pairs:
             pairs = [(tableau_paths[0], pbi_paths[0])]
 
+        # Probe first image — if Vision API is disabled, fall back immediately
+        probe = self._vision_detect(client, tableau_paths[0])
+        if not probe.get("labels") and not probe.get("text_tokens") and not probe.get("colors"):
+            logger.warning("Vision API returned no data — falling back to histogram comparison")
+            return self._compare_with_histograms(tableau_paths, pbi_paths)
+
         for i, (tab_path, pbi_path) in enumerate(pairs):
-            tab_labels = self._vision_detect(client, tab_path)
+            tab_labels = probe if i == 0 else self._vision_detect(client, tab_path)
             pbi_labels = self._vision_detect(client, pbi_path)
 
             # Compare label sets

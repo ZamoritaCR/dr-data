@@ -72,6 +72,77 @@ def _hex_to_hsl(hex6):
     return (hue, saturation, lightness)
 
 
+def extract_deep_palette(root, max_colors=12):
+    """Extract the complete visual palette from a Tableau workbook.
+
+    Goes beyond extract_all_colors by scanning ALL format attributes and
+    text content for hex colors, filtering noise, and building a ranked
+    palette suitable for PBI theme injection.
+
+    Args:
+        root: XML Element (TWB root or workbook element).
+        max_colors: maximum palette size.
+
+    Returns:
+        list of hex color strings with # prefix, ranked by visual importance.
+    """
+    import xml.etree.ElementTree as ET
+
+    # Phase 1: Collect every hex color from every attribute and text node
+    raw_counter = Counter()
+
+    def _scan(el):
+        for k, v in el.attrib.items():
+            for m in re.findall(r'#([0-9a-fA-F]{6})', v):
+                norm = _normalize_hex(m)
+                if norm:
+                    # Weight by attribute type
+                    weight = 1
+                    if k in ('mark-color', 'color'):
+                        weight = 5
+                    elif k in ('fill', 'background-color'):
+                        weight = 3
+                    elif k in ('font-color', 'border-color'):
+                        weight = 2
+                    raw_counter[norm] += weight
+        if el.text:
+            for m in re.findall(r'#([0-9a-fA-F]{6})', el.text):
+                norm = _normalize_hex(m)
+                if norm:
+                    raw_counter[norm] += 2  # formula-embedded colors
+        for child in el:
+            _scan(child)
+
+    _scan(root)
+
+    # Phase 2: Split into chromatic (saturated) and achromatic (gray) buckets
+    # Boost vivid colors — they are the brand accents even if less frequent
+    chromatic = {}
+    achromatic = {}
+    for hex6, count in raw_counter.items():
+        if _is_noise_color(hex6):
+            continue
+        h, s, l = _hex_to_hsl(hex6)
+        if s < 0.10:
+            achromatic[hex6] = count
+        else:
+            # Saturation boost: vivid colors (S > 0.5) get 3x weight
+            boost = 3.0 if s > 0.5 else (1.5 if s > 0.25 else 1.0)
+            chromatic[hex6] = count * boost
+
+    # Phase 3: Build palette — chromatic colors first (they define the brand),
+    # then fill remaining slots with achromatic
+    chrom_ranked = sorted(chromatic.keys(), key=lambda c: chromatic[c], reverse=True)
+    achrom_ranked = sorted(achromatic.keys(), key=lambda c: achromatic[c], reverse=True)
+
+    palette = chrom_ranked[:max_colors]
+    remaining = max_colors - len(palette)
+    if remaining > 0:
+        palette.extend(achrom_ranked[:remaining])
+
+    return [f"#{c}" for c in palette[:max_colors]]
+
+
 def extract_all_colors(root):
     """Extract ALL color signals from a Tableau workbook XML root.
 

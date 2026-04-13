@@ -22,7 +22,7 @@ OLLAMA_GENERATE = f"{OLLAMA_BASE}/api/generate"
 OLLAMA_TAGS = f"{OLLAMA_BASE}/api/tags"
 
 # Target Ollama model names (substring match)
-OLLAMA_TARGETS = ["deepseek-coder-v2", "qwen2.5-coder", "phi4"]
+OLLAMA_TARGETS = ["deepseek-coder-v2", "qwen2.5-coder", "phi4", "llama3.1"]
 
 # Judge uses full Opus reasoning
 JUDGE_MODEL = "claude-opus-4-6"

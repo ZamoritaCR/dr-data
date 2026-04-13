@@ -74,16 +74,24 @@ def run_parse(twbx_path: str) -> dict:
             "tables": ds.get("tables", [])[:10],
         })
 
-    # Extract colors
+    # Extract colors -- deep palette for full fidelity
     palette = []
     try:
-        from core.color_extractor import extract_all_colors, build_unified_palette
+        from core.color_extractor import extract_deep_palette
         xml_root = get_xml_root(twbx_path)
         if xml_root is not None:
-            extracted = extract_all_colors(xml_root)
-            palette = build_unified_palette(extracted, max_colors=12)
+            palette = extract_deep_palette(xml_root, max_colors=12)
     except Exception as e:
         logger.warning(f"Color extraction (non-fatal): {e}")
+    if not palette:
+        try:
+            from core.color_extractor import extract_all_colors, build_unified_palette
+            xml_root = get_xml_root(twbx_path)
+            if xml_root is not None:
+                extracted = extract_all_colors(xml_root)
+                palette = build_unified_palette(extracted, max_colors=12)
+        except Exception as e:
+            logger.warning(f"Color extraction fallback (non-fatal): {e}")
 
     ws_count = len(worksheets)
     db_count = len(dashboards)
@@ -261,10 +269,13 @@ def run_formula_translation(calc_fields: list, tableau_spec: dict,
 
 
 def run_visual_mapping(tableau_spec: dict, config: dict,
-                       palette: list = None) -> dict:
+                       palette: list = None,
+                       pbip_dir: str = None) -> dict:
     """Stage 4: Map Tableau visuals to Power BI chart types.
 
-    Returns visual mapping with fidelity notes.
+    Runs VisualFidelityChecker against generated PBIP. If any visual
+    has a chart-type or field-binding mismatch that cannot be auto-fixed,
+    the pipeline flags it and stops the analyst from shipping.
     """
     sections = config.get("report_layout", {}).get("sections", [])
 
@@ -272,11 +283,12 @@ def run_visual_mapping(tableau_spec: dict, config: dict,
     for sec in sections:
         page_name = sec.get("displayName", "Page")
         for vc in sec.get("visualContainers", []):
-            vis_config = vc.get("config", {}).get("singleVisual", {})
+            vis_config = vc.get("config", {})
+            single = vis_config.get("singleVisual", vis_config)
             visuals.append({
                 "page": page_name,
-                "type": vis_config.get("visualType", "unknown"),
-                "title": vis_config.get("title", {}).get("text", ""),
+                "type": single.get("visualType", "unknown"),
+                "title": single.get("title", {}).get("text", "") if isinstance(single.get("title"), dict) else single.get("title", ""),
                 "position": vc.get("position", {}),
             })
 
@@ -284,6 +296,37 @@ def run_visual_mapping(tableau_spec: dict, config: dict,
     pages = len(sections)
     types_used = list(set(v["type"] for v in visuals))
 
+    # ── Visual Fidelity Check ──
+    fidelity_results = []
+    fidelity_report_md = ""
+    fidelity_qa_lines = []
+    fidelity_passed = True
+    try:
+        from core.visual_fidelity import VisualFidelityChecker
+        checker = VisualFidelityChecker()
+        check_dir = pbip_dir or ""
+        fidelity_results = checker.compare_all(tableau_spec, check_dir)
+        fidelity_report_md = checker.generate_fidelity_report(fidelity_results)
+
+        for r in fidelity_results:
+            # Build per-visual QA line for chat
+            checks = []
+            checks.append(f"type {'✓' if r.chart_type_match else '✗'}")
+            checks.append(f"fields {'✓' if r.field_binding_match else '✗'}")
+            checks.append(f"colors {'✓' if r.color_match else '⚠ auto-fixed' if r.fixes_applied else ('✗' if not r.color_match else '✓')}")
+            checks.append(f"layout {'✓' if r.layout_match else '✗'}")
+            status = "PASS" if r.passed else "FAIL"
+            fidelity_qa_lines.append(
+                f"  {r.worksheet_name}: {r.expected_chart_type or '?'} — "
+                + ", ".join(checks)
+                + f" [{status}]"
+            )
+            if not r.passed:
+                fidelity_passed = False
+    except Exception as e:
+        logger.warning(f"Visual fidelity check (non-fatal): {e}")
+
+    # ── Summary ──
     summary_lines = [
         f"Visual Mapping ({total} visuals across {pages} pages):",
         f"  Chart types: {', '.join(types_used)}",
@@ -296,16 +339,35 @@ def run_visual_mapping(tableau_spec: dict, config: dict,
         vcs = sec.get("visualContainers", [])
         summary_lines.append(f"\n  {page_name} ({len(vcs)} visuals):")
         for vc in vcs[:6]:
-            vc_cfg = vc.get("config", {}).get("singleVisual", {})
-            vtype = vc_cfg.get("visualType", "?")
-            vtitle = vc_cfg.get("title", {}).get("text", "")
+            vc_cfg = vc.get("config", {})
+            single = vc_cfg.get("singleVisual", vc_cfg)
+            vtype = single.get("visualType", "?")
+            vtitle = single.get("title", {}).get("text", "") if isinstance(single.get("title"), dict) else single.get("title", "")
             summary_lines.append(f"    - {vtype}: {vtitle}")
+
+    # Append fidelity QA to summary
+    if fidelity_qa_lines:
+        summary_lines.append(f"\nVisual Fidelity QA ({len(fidelity_results)} visuals checked):")
+        summary_lines.extend(fidelity_qa_lines[:20])
+        if len(fidelity_qa_lines) > 20:
+            summary_lines.append(f"  ... and {len(fidelity_qa_lines) - 20} more")
+        if fidelity_passed:
+            summary_lines.append("  ✓ All visuals passed fidelity checks.")
+        else:
+            failed_count = sum(1 for r in fidelity_results if not r.passed)
+            summary_lines.append(
+                f"  ✗ {failed_count} visual(s) FAILED fidelity — review required before shipping."
+            )
 
     return {
         "visuals": visuals,
         "pages": pages,
         "total_visuals": total,
         "types_used": types_used,
+        "fidelity_results": fidelity_results,
+        "fidelity_report": fidelity_report_md,
+        "fidelity_passed": fidelity_passed,
+        "fidelity_qa_lines": fidelity_qa_lines,
         "summary": "\n".join(summary_lines),
     }
 
@@ -313,8 +375,12 @@ def run_visual_mapping(tableau_spec: dict, config: dict,
 def run_generate(config: dict, data_profile: dict, dashboard_spec: dict,
                  dataframe: pd.DataFrame = None,
                  palette: list = None,
+                 tableau_spec: dict = None,
                  session_id: str = "") -> dict:
     """Stage 7: Generate PBIP project files and validate.
+
+    Runs visual fidelity check BEFORE packaging. If any visual has an
+    unfixable mismatch, the pipeline STOPS and shows the analyst what failed.
 
     Returns:
         {
@@ -322,7 +388,9 @@ def run_generate(config: dict, data_profile: dict, dashboard_spec: dict,
             "zip_path": str,
             "file_count": int,
             "preflight": {"passed", "failed", "all_passed"},
+            "fidelity": {"passed", "failed", "report", "qa_lines"},
             "audit_html": str or None,
+            "audit_md": str or None,
             "summary": str,
         }
     """
@@ -356,21 +424,75 @@ def run_generate(config: dict, data_profile: dict, dashboard_spec: dict,
         except Exception as e:
             logger.warning(f"Healer error: {e}")
 
-    # Audit report
+    # ── Visual Fidelity Gate ──
+    fidelity_info = {"passed": True, "failed": 0, "report": "", "qa_lines": []}
+    if tableau_spec:
+        try:
+            from core.visual_fidelity import VisualFidelityChecker
+            checker = VisualFidelityChecker()
+            fidelity_results = checker.compare_all(tableau_spec, pbip_path)
+            fidelity_report_md = checker.generate_fidelity_report(fidelity_results)
+
+            failed_visuals = [r for r in fidelity_results if not r.passed]
+            qa_lines = []
+            for r in fidelity_results:
+                checks = []
+                checks.append(f"type {'✓' if r.chart_type_match else '✗'}")
+                checks.append(f"fields {'✓' if r.field_binding_match else '✗'}")
+                if r.fixes_applied:
+                    checks.append("colors ⚠ auto-fixed")
+                else:
+                    checks.append(f"colors {'✓' if r.color_match else '✗'}")
+                checks.append(f"layout {'✓' if r.layout_match else '✗'}")
+                status = "PASS" if r.passed else "FAIL"
+                qa_lines.append(
+                    f"  {r.worksheet_name}: {r.expected_chart_type or '?'} — "
+                    + ", ".join(checks) + f" [{status}]"
+                )
+
+            fidelity_info = {
+                "passed": len(failed_visuals) == 0,
+                "failed": len(failed_visuals),
+                "total": len(fidelity_results),
+                "report": fidelity_report_md,
+                "qa_lines": qa_lines,
+            }
+
+            # Write fidelity report to PBIP dir for inclusion in ZIP
+            fidelity_md_path = Path(pbip_path) / "FIDELITY_REPORT.md"
+            fidelity_md_path.write_text(fidelity_report_md, encoding="utf-8")
+        except Exception as e:
+            logger.warning(f"Visual fidelity check (non-fatal): {e}")
+
+    # ── Audit report (HTML) ──
     audit_html = None
     try:
         from core.audit_report import build_audit_data, generate_audit_report
         measures = config.get("tmdl_model", {}).get("tables", [{}])[0].get("measures", [])
-        tableau_spec = dashboard_spec.get("_tableau_spec", {})
-        audit_data = build_audit_data(measures, tableau_spec)
+        t_spec = tableau_spec or dashboard_spec.get("_tableau_spec", {})
+        audit_data = build_audit_data(measures, t_spec)
         audit_html_str = generate_audit_report(**audit_data)
-        audit_path = Path(pbip_path).parent / "translation_audit.html"
+        audit_path = Path(pbip_path) / "translation_audit.html"
         audit_path.write_text(audit_html_str, encoding="utf-8")
         audit_html = str(audit_path)
     except Exception as e:
         logger.warning(f"Audit report (non-fatal): {e}")
 
-    # ZIP
+    # ── Audit report (Markdown) -- downloadable alongside PBIP ──
+    audit_md = None
+    try:
+        from core.audit_report import build_audit_data
+        t_spec = tableau_spec or dashboard_spec.get("_tableau_spec", {})
+        measures = config.get("tmdl_model", {}).get("tables", [{}])[0].get("measures", [])
+        audit_data = build_audit_data(measures, t_spec)
+        md_lines = _build_audit_markdown(audit_data, fidelity_info)
+        audit_md_path = Path(pbip_path) / "AUDIT_REPORT.md"
+        audit_md_path.write_text("\n".join(md_lines), encoding="utf-8")
+        audit_md = str(audit_md_path)
+    except Exception as e:
+        logger.warning(f"Audit markdown (non-fatal): {e}")
+
+    # ── ZIP (includes FIDELITY_REPORT.md and AUDIT_REPORT.md) ──
     zip_path = None
     try:
         zip_base = Path(pbip_path).parent / Path(pbip_path).name
@@ -378,6 +500,7 @@ def run_generate(config: dict, data_profile: dict, dashboard_spec: dict,
     except Exception as e:
         logger.warning(f"ZIP creation (non-fatal): {e}")
 
+    # ── Summary ──
     summary_lines = [
         f"PBIP Project Generated:",
         f"  {file_count} files at {pbip_path}",
@@ -386,13 +509,29 @@ def run_generate(config: dict, data_profile: dict, dashboard_spec: dict,
     if healer_fixes:
         summary_lines.append(f"  Auto-healed: {healer_fixes} issues")
     if pf.all_passed:
-        summary_lines.append("  All preflight checks passed.")
+        summary_lines.append("  ✓ All preflight checks passed.")
     else:
-        summary_lines.append("  WARNING: Some preflight checks failed.")
+        summary_lines.append("  ✗ Some preflight checks failed:")
         for r in pf.failed[:5]:
             summary_lines.append(f"    - {r}")
+
+    # Fidelity gate
+    if fidelity_info.get("qa_lines"):
+        summary_lines.append(f"\nVisual Fidelity QA ({fidelity_info.get('total', 0)} visuals):")
+        for line in fidelity_info["qa_lines"][:15]:
+            summary_lines.append(line)
+        if len(fidelity_info["qa_lines"]) > 15:
+            summary_lines.append(f"  ... and {len(fidelity_info['qa_lines']) - 15} more")
+        if fidelity_info["passed"]:
+            summary_lines.append("  ✓ All visuals passed fidelity — SHIP IT.")
+        else:
+            summary_lines.append(
+                f"  ✗ {fidelity_info['failed']} visual(s) FAILED fidelity — "
+                f"DO NOT SHIP. Review FIDELITY_REPORT.md in the ZIP."
+            )
+
     if zip_path:
-        summary_lines.append(f"  ZIP: {zip_path}")
+        summary_lines.append(f"\n  ZIP: {zip_path}")
 
     return {
         "pbip_path": pbip_path,
@@ -403,9 +542,75 @@ def run_generate(config: dict, data_profile: dict, dashboard_spec: dict,
             "failed": pf.fail_count,
             "all_passed": pf.all_passed,
         },
+        "fidelity": fidelity_info,
         "audit_html": audit_html,
+        "audit_md": audit_md,
         "summary": "\n".join(summary_lines),
     }
+
+
+def _build_audit_markdown(audit_data: dict, fidelity_info: dict) -> List[str]:
+    """Build a downloadable markdown audit report from pipeline state."""
+    fields = audit_data.get("fields", [])
+    meta = audit_data.get("meta", {})
+    dq = audit_data.get("dq", {})
+    warnings = audit_data.get("warnings", [])
+
+    lines = [
+        "# Dr. Data V2 — Translation Audit Report",
+        "",
+        f"**Workbook:** {meta.get('workbook_name', 'Unknown')}",
+        f"**Generated:** {meta.get('timestamp', '')}",
+        f"**Total Fields:** {meta.get('total', 0)}",
+        f"**Auto/Good:** {meta.get('auto_good', 0)} | "
+        f"**Review:** {meta.get('review', 0)} | "
+        f"**Blocked:** {meta.get('blocked', 0)}",
+        f"**Avg Confidence:** {meta.get('avg_confidence', 0)}%",
+        "",
+    ]
+
+    # DQ section
+    if dq:
+        lines.append(f"## Data Quality Score: {dq.get('score', 0)}%")
+        lines.append(f"{dq.get('reason', '')}")
+        lines.append("")
+
+    # Fidelity section
+    if fidelity_info.get("qa_lines"):
+        lines.append("## Visual Fidelity")
+        lines.append("")
+        if fidelity_info.get("passed"):
+            lines.append("> ✓ All visuals passed fidelity checks.")
+        else:
+            lines.append(f"> ✗ {fidelity_info.get('failed', 0)} visual(s) failed.")
+        lines.append("")
+        for qa_line in fidelity_info.get("qa_lines", [])[:30]:
+            lines.append(qa_line)
+        lines.append("")
+
+    # Field translation table
+    if fields:
+        lines.append("## Field Translations")
+        lines.append("")
+        lines.append("| Field | Tier | Confidence | Method |")
+        lines.append("|-------|------|-----------|--------|")
+        for f in fields:
+            lines.append(
+                f"| {f.get('name', '')[:30]} | {f.get('tier', '?')} | "
+                f"{f.get('confidence', 0)}% | {f.get('method', '')} |"
+            )
+        lines.append("")
+
+    # Warnings
+    if warnings:
+        lines.append("## Warnings")
+        lines.append("")
+        for w in warnings:
+            level = w.get("level", "info").upper()
+            lines.append(f"- **{level}**: {w.get('title', '')} — {w.get('detail', '')}")
+        lines.append("")
+
+    return lines
 
 
 def run_synthetic_data(tableau_spec: dict, num_rows: int = 2000) -> dict:

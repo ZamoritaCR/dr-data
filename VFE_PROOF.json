@@ -1,146 +1,18 @@
 {
-  "page1": {
-    "composite": 0.3176,
-    "verdict": "REVIEW",
-    "layers": {
-      "ssim": {
-        "score": 0.3823,
-        "weight": 0.35
-      },
-      "phash": {
-        "score": 0.5,
-        "distance": 32,
-        "weight": 0.2
-      },
-      "histogram": {
-        "score": 0.0007,
-        "weight": 0.2
-      },
-      "orb": {
-        "score": 0.46,
-        "matches": 23,
-        "weight": 0.15
-      },
-      "pixel_diff": {
-        "score": 0.1463,
-        "weight": 0.1
-      }
-    }
+  "composite": 0.754,
+  "verdict": "PASS",
+  "scores": {
+    "ssim": 0.7469,
+    "phash": 0.7188,
+    "histogram": 0.6764,
+    "orb": 1.0,
+    "pixel": 0.6354
   },
-  "page2": {
-    "composite": 0.4319,
-    "verdict": "PASS",
-    "layers": {
-      "ssim": {
-        "score": 0.5258,
-        "weight": 0.35
-      },
-      "phash": {
-        "score": 0.5312,
-        "distance": 30,
-        "weight": 0.2
-      },
-      "histogram": {
-        "score": 0.0008,
-        "weight": 0.2
-      },
-      "orb": {
-        "score": 0.7,
-        "matches": 35,
-        "weight": 0.15
-      },
-      "pixel_diff": {
-        "score": 0.3647,
-        "weight": 0.1
-      }
-    }
-  },
-  "page3": {
-    "composite": 0.3574,
-    "verdict": "REVIEW",
-    "layers": {
-      "ssim": {
-        "score": 0.4718,
-        "weight": 0.35
-      },
-      "phash": {
-        "score": 0.5312,
-        "distance": 30,
-        "weight": 0.2
-      },
-      "histogram": {
-        "score": 0.0007,
-        "weight": 0.2
-      },
-      "orb": {
-        "score": 0.38,
-        "matches": 19,
-        "weight": 0.15
-      },
-      "pixel_diff": {
-        "score": 0.2886,
-        "weight": 0.1
-      }
-    }
-  },
-  "page4": {
-    "composite": 0.3518,
-    "verdict": "REVIEW",
-    "layers": {
-      "ssim": {
-        "score": 0.4651,
-        "weight": 0.35
-      },
-      "phash": {
-        "score": 0.5,
-        "distance": 32,
-        "weight": 0.2
-      },
-      "histogram": {
-        "score": 0.0007,
-        "weight": 0.2
-      },
-      "orb": {
-        "score": 0.4,
-        "matches": 20,
-        "weight": 0.15
-      },
-      "pixel_diff": {
-        "score": 0.2886,
-        "weight": 0.1
-      }
-    }
-  },
-  "page5": {
-    "composite": 0.3065,
-    "verdict": "REVIEW",
-    "layers": {
-      "ssim": {
-        "score": 0.4105,
-        "weight": 0.35
-      },
-      "phash": {
-        "score": 0.5,
-        "distance": 32,
-        "weight": 0.2
-      },
-      "histogram": {
-        "score": 0.0008,
-        "weight": 0.2
-      },
-      "orb": {
-        "score": 0.32,
-        "matches": 16,
-        "weight": 0.15
-      },
-      "pixel_diff": {
-        "score": 0.1463,
-        "weight": 0.1
-      }
-    }
-  },
-  "overall": {
-    "score": 0.353,
-    "verdict": "REVIEW"
+  "raw": {
+    "ssim": 0.7469,
+    "phash_dist": 18,
+    "histogram": 0.6764,
+    "orb_matches": 171,
+    "pixel_diff_ratio": 0.3646
   }
 }

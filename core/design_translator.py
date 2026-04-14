@@ -30,6 +30,7 @@ _FONT_MAP = {
 # Tableau "bar" mark = HORIZONTAL bars by convention.
 _CHART_TYPE_MAP = {
     "bar": "clusteredBarChart",           # horizontal bars
+    "stacked bar": "stackedBarChart",     # horizontal stacked bars
     "line": "lineChart",
     "area": "areaChart",
     "circle": "scatterChart",
@@ -40,8 +41,18 @@ _CHART_TYPE_MAP = {
     "polygon": "filledMap",
     "multipolygon": "filledMap",
     "pie": "pieChart",
-    "gantt-bar": "clusteredBarChart",     # horizontal gantt -> horizontal bar
+    "donut": "donutChart",
+    "gantt": "clusteredBarChart",
+    "gantt-bar": "clusteredBarChart",
+    "ganttbar": "clusteredBarChart",
     "automatic": "clusteredColumnChart",  # vertical columns (safe default)
+    "dual": "lineClusteredColumnComboChart",
+    "combo": "lineClusteredColumnComboChart",
+    "waterfall": "waterfallChart",
+    "funnel": "funnelChart",
+    "histogram": "clusteredBarChart",
+    "crosstab": "matrix",
+    "highlight-table": "matrix",
     "shape": "scatterChart",             # fallback; disambiguation usually overrides
     "density": "scatterChart",
     "heatmap": "matrix",

@@ -753,6 +753,44 @@ class PBIPGenerator:
         # objects can cause visuals to render as blank if the format is not
         # exactly what PBI expects for each visual type.
 
+        # Write PBI filter blocks from Tableau filter_values
+        filter_values = cfg_obj.get("filter_values", [])
+        if filter_values and profile_col_names:
+            # Find the most likely filter field: first dimension in the visual
+            filter_field = None
+            for role_key in ("category", "Category", "series", "Series"):
+                fields = data_roles.get(role_key, [])
+                if fields:
+                    filter_field = fields[0]
+                    break
+            # Also check column_instances for a nominal field used as filter
+            if not filter_field:
+                dims = data_roles.get("category", data_roles.get("Category", []))
+                if dims:
+                    filter_field = dims[0]
+            if filter_field and filter_field in (profile_col_names | measure_names):
+                pbi_filter = {
+                    "type": "categorical",
+                    "displayName": filter_field,
+                    "howCreated": 0,
+                    "isHiddenInViewMode": False,
+                    "filter": {
+                        "Version": 2,
+                        "From": [{"Name": "d", "Entity": table_name, "Type": 0}],
+                        "Where": [{
+                            "Condition": {
+                                "In": {
+                                    "Expressions": [{"Column": {"Expression": {"SourceRef": {"Source": "d"}}, "Property": filter_field}}],
+                                    "Values": [[{"Literal": {"Value": f"'{v}'"}}] for v in filter_values[:10]],
+                                }
+                            }
+                        }],
+                    },
+                }
+                doc["visual"]["query"]["filterState"] = {
+                    f"f_{filter_field}": pbi_filter,
+                }
+
         # Validate & fix all field references against real column names
         valid_cols = list(profile_col_names | measure_names) if profile_col_names else []
         doc, fix_stats = self._fix_field_references(doc, valid_cols, table_name)

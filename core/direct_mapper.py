@@ -1102,6 +1102,7 @@ def _build_page_from_dashboard(dashboard, worksheets_by_name, profile_col_names,
             "title": ws.get("name", ws_name),
             "dataRoles": data_roles,
             "worksheet_name": ws.get("name", ""),
+            "filter_values": ws.get("filter_values", []),
         }
 
         visual_containers.append({
@@ -1161,6 +1162,7 @@ def _build_page_for_orphan_worksheets(worksheets, profile_col_names,
             "title": ws.get("name", f"Visual {idx + 1}"),
             "dataRoles": data_roles,
             "worksheet_name": ws.get("name", ""),
+            "filter_values": ws.get("filter_values", []),
         }
 
         visual_containers.append({

@@ -611,6 +611,20 @@ def run_generate(config: dict, data_profile: dict, dashboard_spec: dict,
     if zip_path:
         summary_lines.append(f"\n  ZIP: {zip_path}")
 
+    # ── BLOCKING GATE: If more than 20% of visuals fail fidelity, block publish ──
+    fidelity_total = fidelity_info.get("total", 0)
+    fidelity_failed = fidelity_info.get("failed", 0)
+    fidelity_blocked = False
+    if fidelity_total > 0 and fidelity_failed > 0:
+        fail_rate = fidelity_failed / fidelity_total
+        if fail_rate > 0.20:
+            fidelity_blocked = True
+            summary_lines.append(
+                f"\n  BLOCKED: {fidelity_failed}/{fidelity_total} visuals "
+                f"({fail_rate:.0%}) failed fidelity. Threshold is 20%. "
+                f"Fix visuals before publishing."
+            )
+
     return {
         "pbip_path": pbip_path,
         "zip_path": zip_path,
@@ -621,6 +635,7 @@ def run_generate(config: dict, data_profile: dict, dashboard_spec: dict,
             "all_passed": pf.all_passed,
         },
         "fidelity": fidelity_info,
+        "fidelity_blocked": fidelity_blocked,
         "audit_html": audit_html,
         "audit_md": audit_md,
         "vision_qa": vision_result,

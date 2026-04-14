@@ -1103,6 +1103,17 @@ async def get_job(job_id: str):
     }
 
 
+@app.get("/api/evidence/{job_id}")
+async def get_evidence_report(job_id: str):
+    if job_id not in _jobs:
+        raise HTTPException(404, f"Job {job_id} not found")
+    result = _job_results.get(job_id, {})
+    evidence_path = result.get("evidence_report", "")
+    if evidence_path and os.path.exists(evidence_path):
+        return FileResponse(evidence_path, media_type="text/html")
+    raise HTTPException(404, f"Evidence report not found for job {job_id}")
+
+
 # ------------------------------------------------------------------ #
 #  Pipeline (runs in background thread)
 # ------------------------------------------------------------------ #
@@ -1123,15 +1134,31 @@ def _emit(q, phase, status, detail="", **extra):
 def _run_pipeline(job_id: str, file_id: str, q):
     """Full migration pipeline: parse -> translate -> build -> validate -> publish."""
     import pandas as pd
+    from core.evidence_logger import EvidenceLogger
 
     info = _uploads[file_id]
     filepath = info["path"]
     filename = info["filename"]
     _jobs[job_id]["status"] = "running"
+    proof_dir = OUTPUT_DIR / job_id
+    proof_dir.mkdir(parents=True, exist_ok=True)
+    evidence = EvidenceLogger(job_id, filename)
+
+    def _emit_logged(phase, status, detail="", input_data=None, output_data=None, **extra):
+        _emit(q, phase, status, detail, **extra)
+        evidence.log(
+            phase=phase,
+            action=status,
+            input_data=input_data,
+            output_data=output_data if output_data is not None else extra,
+            status="error" if status in ("error", "failed") else "ok",
+            detail=detail,
+            **extra,
+        )
 
     try:
         # ---- PHASE: PARSE ----
-        _emit(q, "parse", "start", f"Parsing {filename}")
+        _emit_logged("parse", "start", f"Parsing {filename}", input_data={"filename": filename, "path": filepath})
 
         from core.enhanced_tableau_parser import parse_twb
         spec = parse_twb(filepath)
@@ -1144,13 +1171,21 @@ def _run_pipeline(job_id: str, file_id: str, q):
         ws_names = [w.get("name", "") for w in spec.get("worksheets", [])]
         db_names = [d.get("name", "") for d in spec.get("dashboards", [])]
 
-        _emit(q, "parse", "complete",
-              f"{ws_count} worksheets, {db_count} dashboards, {cf_count} calcs, {ds_count} datasources",
-              worksheets=ws_names[:10], dashboards=db_names[:5],
-              calc_count=cf_count, datasource_count=ds_count)
+        _emit_logged(
+            "parse", "complete",
+            f"{ws_count} worksheets, {db_count} dashboards, {cf_count} calcs, {ds_count} datasources",
+            output_data={
+                "worksheets": ws_names,
+                "dashboards": db_names,
+                "calc_count": cf_count,
+                "datasource_count": ds_count,
+            },
+            worksheets=ws_names[:10], dashboards=db_names[:5],
+            calc_count=cf_count, datasource_count=ds_count,
+        )
 
         # ---- PHASE: TRANSLATE ----
-        _emit(q, "translate", "start", "Generating synthetic data + mapping fields")
+        _emit_logged("translate", "start", "Generating synthetic data + mapping fields", input_data={"worksheet_count": ws_count})
 
         from core.synthetic_data import generate_from_tableau_spec
         df, col_map, gen_log = generate_from_tableau_spec(spec)
@@ -1186,8 +1221,11 @@ def _run_pipeline(job_id: str, file_id: str, q):
                 palette = build_unified_palette(extracted, max_colors=12)
                 if palette:
                     dspec["_unified_palette"] = palette
-                    _emit(q, "translate", "progress",
-                          f"Extracted {len(palette)} Tableau colors for PBI theme")
+                    _emit_logged(
+                        "translate", "progress",
+                        f"Extracted {len(palette)} Tableau colors for PBI theme",
+                        output_data={"palette": palette[:12]},
+                    )
         except Exception as color_err:
             logger.warning(f"Color extraction (non-fatal): {color_err}")
 
@@ -1195,14 +1233,38 @@ def _run_pipeline(job_id: str, file_id: str, q):
         total_visuals = sum(len(s.get("visualContainers", [])) for s in sections)
         measure_count = len(config.get("tmdl_model", {}).get("tables", [{}])[0].get("measures", []))
 
-        _emit(q, "translate", "complete",
-              f"{len(df)} rows, {len(df.columns)} cols, {len(sections)} pages, "
-              f"{total_visuals} visuals, {measure_count} DAX measures",
-              rows=len(df), cols=len(df.columns), pages=len(sections),
-              visuals=total_visuals, measures=measure_count)
+        field_bindings = [
+            {
+                "page": s.get("displayName", ""),
+                "visual_count": len(s.get("visualContainers", [])),
+            }
+            for s in sections
+        ]
+        dax_translations = [
+            {
+                "name": m.get("name", ""),
+                "expression": m.get("expression", m.get("dax", ""))[:200],
+            }
+            for m in config.get("tmdl_model", {}).get("tables", [{}])[0].get("measures", [])
+        ]
+        _emit_logged(
+            "translate", "complete",
+            f"{len(df)} rows, {len(df.columns)} cols, {len(sections)} pages, "
+            f"{total_visuals} visuals, {measure_count} DAX measures",
+            output_data={
+                "rows": len(df),
+                "columns": list(df.columns),
+                "pages": len(sections),
+                "visuals": total_visuals,
+                "measures": dax_translations,
+                "field_bindings": field_bindings,
+            },
+            rows=len(df), cols=len(df.columns), pages=len(sections),
+            visuals=total_visuals, measures=measure_count,
+        )
 
         # ---- PHASE: BUILD ----
-        _emit(q, "build", "start", "Generating PBIP project files")
+        _emit_logged("build", "start", "Generating PBIP project files", input_data={"proof_dir": str(proof_dir)})
 
         out_dir = str(OUTPUT_DIR / f"v2_{job_id}")
         from generators.pbip_generator import PBIPGenerator
@@ -1215,12 +1277,15 @@ def _run_pipeline(job_id: str, file_id: str, q):
         pbip_path = gen_result["path"]
         file_count = gen_result.get("file_count", 0)
 
-        _emit(q, "build", "complete",
-              f"{file_count} files generated",
-              pbip_path=pbip_path, file_count=file_count)
+        _emit_logged(
+            "build", "complete",
+            f"{file_count} files generated",
+            output_data={"pbip_path": pbip_path, "file_count": file_count},
+            pbip_path=pbip_path, file_count=file_count,
+        )
 
         # ---- PHASE: VALIDATE ----
-        _emit(q, "validate", "start", "Running preflight checks")
+        _emit_logged("validate", "start", "Running preflight checks", input_data={"pbip_path": pbip_path})
 
         from core.preflight_validator import validate as preflight
         pf = preflight(pbip_path)
@@ -1229,23 +1294,35 @@ def _run_pipeline(job_id: str, file_id: str, q):
             try:
                 from core.pbip_healer import heal
                 fixes = heal(pbip_path, pf)
-                _emit(q, "validate", "progress",
-                      f"{pf.fail_count} issues found, {len(fixes)} auto-healed")
+                _emit_logged(
+                    "validate", "progress",
+                    f"{pf.fail_count} issues found, {len(fixes)} auto-healed",
+                    output_data={"fail_count": pf.fail_count, "fixes": fixes},
+                )
                 pf = preflight(pbip_path)
             except Exception as heal_err:
-                _emit(q, "validate", "progress",
-                      f"Healer error (non-fatal): {heal_err}")
+                _emit_logged(
+                    "validate", "progress",
+                    f"Healer error (non-fatal): {heal_err}",
+                    output_data={"healer_error": str(heal_err)},
+                )
 
-        _emit(q, "validate", "complete",
-              f"{pf.pass_count} passed, {pf.fail_count} failed",
-              passed=pf.pass_count, failed=pf.fail_count)
+        _emit_logged(
+            "validate", "complete",
+            f"{pf.pass_count} passed, {pf.fail_count} failed",
+            output_data={"passed": pf.pass_count, "failed": pf.fail_count},
+            passed=pf.pass_count, failed=pf.fail_count,
+        )
 
         # ---- PHASE: PUBLISH ----
-        _emit(q, "publish", "start", "Publishing to Power BI")
+        _emit_logged("publish", "start", "Publishing to Power BI", input_data={"pbip_path": pbip_path})
 
         report_url = ""
         report_id = ""
         sm_id = ""
+        render_proof = ""
+        render_proof_status = ""
+        render_proof_error = ""
         fidelity = {"score": 0, "data": 0, "structure": 0, "quality": 0}
 
         try:
@@ -1255,31 +1332,39 @@ def _run_pipeline(job_id: str, file_id: str, q):
             workspaces = list_workspaces(token)
 
             if not workspaces:
-                _emit(q, "publish", "error",
-                      "No Power BI workspaces found. Add service principal to a workspace.")
+                _emit_logged("publish", "error",
+                             "No Power BI workspaces found. Add service principal to a workspace.")
             else:
                 target = workspaces[0]
                 ws_id = target["id"]
                 ws_name = target.get("displayName", "?")
 
-                _emit(q, "publish", "progress",
-                      f"Target workspace: {ws_name}")
+                _emit_logged(
+                    "publish", "progress",
+                    f"Target workspace: {ws_name}",
+                    output_data={"workspace_id": ws_id, "workspace_name": ws_name},
+                )
 
                 display_name = filename.replace(".twbx", "").replace(".twb", "")[:40]
                 display_name = f"DrData-{display_name}-{job_id[:6]}"
 
-                pub = publish_pbip(token, ws_id, pbip_path, display_name)
+                pub = publish_pbip(token, ws_id, pbip_path, display_name, proof_output_dir=str(proof_dir))
 
                 if pub.get("error"):
-                    _emit(q, "publish", "error",
-                          f"Publish failed: {pub.get('error')}")
+                    _emit_logged("publish", "error",
+                                 f"Publish failed: {pub.get('error')}",
+                                 output_data=pub)
                 else:
                     report_id = pub.get("report_id", "")
                     sm_id = pub.get("semantic_model_id", "")
                     report_url = pub.get("report_url", "")
+                    render_proof = pub.get("render_proof", "")
+                    render_proof_status = pub.get("render_proof_status", "")
+                    render_proof_error = pub.get("render_proof_error", "")
 
-                    _emit(q, "publish", "progress",
-                          f"Published. Running QA Agent (3-loop self-heal)...")
+                    _emit_logged("publish", "progress",
+                                 f"Published. Running QA Agent (3-loop self-heal)...",
+                                 output_data=pub)
 
                     # Full QA Agent: read-back, score, diagnose, fix, republish
                     try:
@@ -1305,28 +1390,42 @@ def _run_pipeline(job_id: str, file_id: str, q):
                         loops = qa_result.get("loops", 1)
                         score = fidelity.get("score", 0)
 
-                        _emit(q, "qa", "complete",
-                              f"Fidelity: {score}% "
-                              f"(identity={fidelity.get('tab_identity', 0)} "
-                              f"charts={fidelity.get('chart_types', 0)} "
-                              f"fields={fidelity.get('field_bindings', 0)} "
-                              f"layout={fidelity.get('layout', 0)}) "
-                              f"[{loops} QA loops]",
-                              fidelity=fidelity)
+                        _emit_logged(
+                            "qa", "complete",
+                            f"Fidelity: {score}% "
+                            f"(identity={fidelity.get('tab_identity', 0)} "
+                            f"charts={fidelity.get('chart_types', 0)} "
+                            f"fields={fidelity.get('field_bindings', 0)} "
+                            f"layout={fidelity.get('layout', 0)}) "
+                            f"[{loops} QA loops]",
+                            output_data={"fidelity": fidelity, "qa_result": qa_result},
+                            fidelity=fidelity,
+                        )
                     except Exception as qa_err:
                         logger.warning(f"QA Agent error (non-fatal): {qa_err}")
                         fidelity = {"score": 50, "data": 20, "structure": 20, "quality": 10}
-                        _emit(q, "qa", "complete",
-                              f"QA skipped: {qa_err}", fidelity=fidelity)
+                        _emit_logged(
+                            "qa", "complete",
+                            f"QA skipped: {qa_err}",
+                            output_data={"qa_error": str(qa_err), "fidelity": fidelity},
+                            fidelity=fidelity,
+                        )
 
         except Exception as pub_err:
-            _emit(q, "publish", "error", f"Publish error: {pub_err}")
+            _emit_logged("publish", "error", f"Publish error: {pub_err}")
+
+        evidence_report = evidence.export_html(str(proof_dir / "evidence_report.html"))
 
         # ---- PHASE: DONE ----
         result = {
+            "job_id": job_id,
             "report_url": report_url,
             "report_id": report_id,
             "semantic_model_id": sm_id,
+            "render_proof": render_proof,
+            "render_proof_status": render_proof_status,
+            "render_proof_error": render_proof_error,
+            "evidence_report": evidence_report,
             "fidelity": fidelity,
             "pbip_path": pbip_path,
             "file_count": file_count,
@@ -1341,12 +1440,17 @@ def _run_pipeline(job_id: str, file_id: str, q):
         _job_results[job_id] = result
         _jobs[job_id]["status"] = "complete"
 
-        _emit(q, "done", "complete", "Pipeline finished", **result)
+        _emit_logged("done", "complete", "Pipeline finished", output_data=result, **result)
 
     except Exception as e:
         logger.exception(f"Pipeline failed: {e}")
         _jobs[job_id]["status"] = "failed"
-        _emit(q, "error", "failed", str(e)[:500])
+        evidence.log("error", "failed", output_data={"error": str(e)[:500]}, status="failed")
+        evidence_path = evidence.export_html(str(proof_dir / "evidence_report.html"))
+        current = _job_results.get(job_id, {"job_id": job_id})
+        current["evidence_report"] = evidence_path
+        _job_results[job_id] = current
+        _emit(q, "error", "failed", str(e)[:500], evidence_report=evidence_path)
 
 
 # ------------------------------------------------------------------ #

@@ -926,6 +926,10 @@ function renderGenerateStage(data) {
     html += `<div class="dl-buttons"><a class="dl-btn" href="/static/downloads/${esc(fname)}" download>Download PBIP Project</a></div>`;
   }
 
+  if (data.evidence_report && data.job_id) {
+    html += `<div class="dl-buttons"><a class="dl-btn" href="/api/evidence/${esc(data.job_id)}" target="_blank">Download Evidence Report</a></div>`;
+  }
+
   return html;
 }
 

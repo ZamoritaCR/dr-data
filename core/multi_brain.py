@@ -14,8 +14,26 @@ import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 import requests
+
+
+# ---------------------------------------------------------------------------
+#  .env loader (home directory)
+# ---------------------------------------------------------------------------
+
+def _load_env():
+    """Load key=value pairs from ~/.env into os.environ (setdefault)."""
+    env_path = Path.home() / ".env"
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            line = line.strip()
+            if "=" in line and not line.startswith("#"):
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip())
+
+_load_env()
 
 OLLAMA_BASE = "http://localhost:11434"
 OLLAMA_GENERATE = f"{OLLAMA_BASE}/api/generate"
@@ -199,18 +217,28 @@ class MultiBrainEngine:
 
         raw_results: dict[str, dict] = {}
 
-        # ── Parallel dispatch ──
-        with ThreadPoolExecutor(max_workers=6) as pool:
-            futures: dict = {}
+        # ── Sequential Ollama dispatch (avoids OOM on 14GB RAM) ──
+        for model in self.ollama_models:
+            print(f"[MULTI-BRAIN] Calling Ollama model: {model}")
+            try:
+                raw_results[model] = self._call_ollama(model, translation_prompt)
+            except Exception as exc:
+                raw_results[model] = {"error": str(exc), "dax": "", "confidence": 0.0}
+            time.sleep(5)  # let previous model unload from VRAM
 
-            for model in self.ollama_models:
-                futures[pool.submit(self._call_ollama, model, translation_prompt)] = model
+        # ── Parallel paid API calls (network-bound) ──
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures: dict = {}
 
             if os.getenv("ANTHROPIC_API_KEY"):
                 futures[pool.submit(self._call_claude, translation_prompt)] = "claude-opus"
+            else:
+                print("[MULTI-BRAIN] ANTHROPIC_API_KEY not set -- skipping Claude")
 
             if os.getenv("OPENAI_API_KEY"):
                 futures[pool.submit(self._call_gpt4o, translation_prompt)] = "gpt-4o"
+            else:
+                print("[MULTI-BRAIN] OPENAI_API_KEY not set -- skipping GPT-4o")
 
             for future in as_completed(futures, timeout=90):
                 brain = futures[future]
@@ -476,3 +504,42 @@ def run_batch(
                 print(f"  → DAX: {preview}...")
 
     return results
+
+
+# ---------------------------------------------------------------------------
+#  Convenience wrapper (importable as top-level function)
+# ---------------------------------------------------------------------------
+
+def dispatch_multi_brain(
+    tableau_formula: str,
+    table_name: str = "Data",
+    columns: list = None,
+    rule_engine_result: dict = None,
+    timeout: int = 90,
+) -> dict:
+    """Convenience wrapper around MultiBrainEngine.translate_formula().
+
+    Returns the consensus dict with keys:
+        best_dax, confidence, agreement_score, winner, reasoning,
+        per_brain, all_results, disagreements, original
+    """
+    engine = MultiBrainEngine()
+    result = engine.translate_formula(
+        tableau_formula=tableau_formula,
+        table_name=table_name,
+        columns=columns or [],
+        rule_engine_result=rule_engine_result,
+    )
+    # Normalize response keys for callers expecting 'responses'/'consensus'
+    return {
+        "responses": result.get("all_results", {}),
+        "consensus": {
+            "dax": result.get("best_dax", ""),
+            "confidence": result.get("confidence", 0.0),
+            "agreement_score": result.get("agreement_score", 0.0),
+            "winner": result.get("winner", ""),
+            "reasoning": result.get("reasoning", ""),
+        },
+        "judge_model": JUDGE_MODEL,
+        **result,
+    }

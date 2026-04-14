@@ -230,6 +230,35 @@ def run_formula_translation(calc_fields: list, tableau_spec: dict,
         if tier in ("REVIEW", "BLOCKED"):
             review_needed.append(entry)
 
+    # ── Multi-brain consensus for REVIEW/BLOCKED formulas ──
+    if review_needed:
+        try:
+            from core.multi_brain import MultiBrainEngine
+            mb_engine = MultiBrainEngine()
+            table_name = tableau_spec.get("data_source", {}).get("name", "Data")
+            col_names = [c.get("name", c) if isinstance(c, dict) else str(c)
+                         for c in tableau_spec.get("cols_fields", tableau_spec.get("columns", []))]
+            for entry in review_needed:
+                print(f"[PIPELINE] Multi-brain consensus for: {entry['name']}")
+                mb_result = mb_engine.translate_formula(
+                    tableau_formula=entry["tableau_formula"],
+                    table_name=table_name,
+                    columns=col_names,
+                    rule_engine_result={"dax": entry["dax"], "confidence": entry["confidence"]},
+                )
+                if mb_result.get("best_dax"):
+                    entry["dax"] = mb_result["best_dax"]
+                    entry["confidence"] = mb_result.get("confidence", entry["confidence"])
+                    entry["multi_brain"] = True
+                    entry["mb_winner"] = mb_result.get("winner", "")
+                    entry["mb_agreement"] = mb_result.get("agreement_score", 0.0)
+                    # Upgrade tier if confidence improved
+                    if entry["confidence"] >= 0.7:
+                        entry["tier"] = "GOOD"
+                    entry["notes"] = f"Multi-brain ({mb_result.get('winner', '?')}); " + entry.get("notes", "")
+        except Exception as exc:
+            print(f"[PIPELINE] Multi-brain failed, keeping transpiler results: {exc}")
+
     # QA: flag formulas with warnings
     qa_notes = []
     for t in translations:
@@ -709,66 +738,11 @@ def run_synthetic_data(tableau_spec: dict, num_rows: int = 2000) -> dict:
     }
 
 
-def dispatch_multi_brain(formula_prompt: str) -> dict:
-    """Fire a formula translation prompt to multiple brains for consensus.
+def dispatch_multi_brain(formula_prompt: str = "", **kwargs) -> dict:
+    """Delegate to core.multi_brain.dispatch_multi_brain.
 
-    Returns {"results": {model: response}, "consensus": str, "summary": str}
+    Kept here for backward compatibility with callers that import from
+    pipeline_runner. New code should import from core.multi_brain directly.
     """
-    import requests
-
-    OLLAMA_URL = "http://localhost:11434/api/generate"
-    results = {}
-
-    # Local brains (free)
-    for model in ["deepseek-coder-v2", "qwen2.5-coder", "phi4"]:
-        try:
-            resp = requests.post(
-                OLLAMA_URL,
-                json={"model": model, "prompt": formula_prompt, "stream": False},
-                timeout=60,
-            )
-            if resp.status_code == 200:
-                results[model] = resp.json().get("response", "")
-        except Exception as e:
-            results[model] = f"[unavailable: {e}]"
-
-    # Claude (paid)
-    try:
-        import anthropic
-        api_key = os.getenv("ANTHROPIC_API_KEY", "")
-        if api_key:
-            client = anthropic.Anthropic(api_key=api_key)
-            msg = client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=1024,
-                messages=[{"role": "user", "content": formula_prompt}],
-            )
-            results["claude-sonnet"] = msg.content[0].text
-    except Exception as e:
-        results["claude-sonnet"] = f"[unavailable: {e}]"
-
-    # GPT-4o (paid)
-    try:
-        from openai import OpenAI
-        openai_key = os.getenv("OPENAI_API_KEY", "")
-        if openai_key:
-            client = OpenAI(api_key=openai_key)
-            resp = client.chat.completions.create(
-                model="gpt-4o",
-                messages=[{"role": "user", "content": formula_prompt}],
-                max_tokens=1024,
-            )
-            results["gpt-4o"] = resp.choices[0].message.content
-    except Exception as e:
-        results["gpt-4o"] = f"[unavailable: {e}]"
-
-    # Build summary
-    summary_lines = [f"Multi-brain consensus ({len(results)} brains consulted):"]
-    for model, response in results.items():
-        preview = response[:120].replace("\n", " ")
-        summary_lines.append(f"  {model}: {preview}")
-
-    return {
-        "results": results,
-        "summary": "\n".join(summary_lines),
-    }
+    from core.multi_brain import dispatch_multi_brain as _dispatch
+    return _dispatch(**kwargs) if kwargs else _dispatch(tableau_formula=formula_prompt)

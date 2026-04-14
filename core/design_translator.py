@@ -35,7 +35,7 @@ _CHART_TYPE_MAP = {
     "area": "areaChart",
     "circle": "scatterChart",
     "square": "matrix",                   # Tableau filled-square grid → PBI matrix
-    "text": "tableEx",
+    "text": "cardVisual",
     "map": "filledMap",
     "filled-map": "filledMap",
     "polygon": "filledMap",

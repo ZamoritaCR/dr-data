@@ -39,7 +39,7 @@ _MARK_TO_PBI: Dict[str, str] = {
     "area":         "areaChart",
     "circle":       "scatterChart",
     "square":       "matrix",
-    "text":         "tableEx",
+    "text":         "cardVisual",
     "polygon":      "filledMap",
     "multipolygon": "filledMap",
     "map":          "filledMap",
@@ -78,7 +78,7 @@ _PBI_ALIASES: Dict[str, List[str]] = {
     "filledMap":            ["map", "azureMap", "shapeMap"],
     "scatterChart":         ["scatterChart"],
     "card":                 ["cardVisual", "multiRowCard", "kpi"],
-    "cardVisual":           ["card", "multiRowCard", "kpi"],
+    "cardVisual":           ["card", "multiRowCard", "kpi", "tableEx"],
 }
 
 
@@ -678,11 +678,17 @@ class VisualFidelityChecker:
         return result
 
     def _vision_available(self) -> bool:
-        """Check if Google Vision API credentials are available."""
+        """Check if Google Vision API credentials are available.
+
+        Supports three auth methods:
+          1. GOOGLE_APPLICATION_CREDENTIALS env var (service account JSON)
+          2. Well-known service account JSON files in home directory
+          3. GEMINI_API_KEY / GOOGLE_API_KEY as API key (Cloud Vision API key auth)
+        """
         creds_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
         if creds_path and Path(creds_path).exists():
             return True
-        # Check common locations
+        # Check common locations for service account
         for path in [
             Path.home() / "google-service-account.json",
             Path.home() / "google_service_account.json",
@@ -690,6 +696,11 @@ class VisualFidelityChecker:
             if path.exists():
                 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(path)
                 return True
+        # API key auth (GEMINI_API_KEY or GOOGLE_API_KEY)
+        api_key = os.environ.get("GEMINI_API_KEY", "") or os.environ.get("GOOGLE_API_KEY", "")
+        if api_key:
+            self._vision_api_key = api_key
+            return True
         return False
 
     def _compare_with_vision(
@@ -698,7 +709,13 @@ class VisualFidelityChecker:
         """Use Google Cloud Vision to compare screenshots."""
         try:
             from google.cloud import vision
-            client = vision.ImageAnnotatorClient()
+            api_key = getattr(self, "_vision_api_key", "")
+            if api_key:
+                client = vision.ImageAnnotatorClient(
+                    client_options={"api_key": api_key}
+                )
+            else:
+                client = vision.ImageAnnotatorClient()
         except Exception as exc:
             logger.warning(f"Google Vision init failed: {exc}")
             return self._compare_with_histograms(tableau_paths, pbi_paths)

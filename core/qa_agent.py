@@ -19,6 +19,7 @@ import re
 import json
 import glob
 import time
+import uuid
 import datetime
 import requests
 
@@ -2197,5 +2198,103 @@ class QAAgent:
                         break  # One field per repair
                     except Exception:
                         continue
+
+            elif rtype == "ADD_PAGE":
+                # Generate a new page with visuals for orphan worksheets.
+                ws_names = repair.get("expected_value", "")
+                # Parse worksheet names from the expected_value string
+                import re as _re
+                ws_match = _re.search(r"worksheets?:\s*\[([^\]]+)\]", ws_names)
+                ws_list = []
+                if ws_match:
+                    ws_list = [w.strip().strip("'\"") for w in ws_match.group(1).split(",")]
+                if not ws_list:
+                    continue
+
+                page_name = repair.get("target", "Additional Sheets")
+                page_id = uuid.uuid4().hex[:20]
+                page_dir = os.path.join(pages_dir, page_id)
+                os.makedirs(os.path.join(page_dir, "visuals"), exist_ok=True)
+
+                # Write page.json
+                page_json = {
+                    "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/page/2.0.0/schema.json",
+                    "name": page_id,
+                    "displayName": page_name,
+                    "displayOption": "FitToPage",
+                    "height": 720,
+                    "width": 1280,
+                }
+                with open(os.path.join(page_dir, "page.json"), "w") as f:
+                    json.dump(page_json, f, indent=2)
+
+                # Generate one visual per worksheet
+                ws_by_name = {w.get("name", ""): w
+                              for w in self.source_spec.get("worksheets", [])}
+                grid_w = 1256 // max(len(ws_list), 1)
+                for vi, ws_name in enumerate(ws_list):
+                    ws = ws_by_name.get(ws_name, {})
+                    mark = (ws.get("mark_type") or ws.get("chart_type") or "automatic").lower()
+                    try:
+                        from core.design_translator import translate_chart_type
+                        vis_type = translate_chart_type(mark)
+                    except Exception:
+                        vis_type = "clusteredBarChart"
+
+                    # Pick fields from column_instances or measures/dimensions
+                    ci_list = ws.get("column_instances", [])
+                    dims = [c["field"] for c in ci_list if c.get("is_dimension") and c.get("is_active")]
+                    measures = [c["field"] for c in ci_list if c.get("is_measure") and c.get("is_active")]
+                    if not dims:
+                        dims = ws.get("dimensions", [])[:1]
+                    if not measures:
+                        measures = ws.get("measures", [])[:1]
+
+                    # Build queryState
+                    qs = {}
+                    if dims:
+                        dim_name = dims[0] if dims[0] in valid_cols else (list(valid_cols)[:1] or ["Category"])[0]
+                        qs["Category"] = {"projections": [{
+                            "field": {"Column": {"Expression": {"SourceRef": {"Entity": "Data"}}, "Property": dim_name}},
+                            "queryRef": f"Data.{dim_name}", "nativeQueryRef": dim_name,
+                        }]}
+                    if measures:
+                        meas_name = measures[0] if measures[0] in valid_cols else (
+                            [c for c in valid_cols if col_types.get(c) == "measure"][:1] or ["Sales"])[0]
+                        qs["Y"] = {"projections": [{
+                            "field": {"Aggregation": {"Expression": {"Column": {
+                                "Expression": {"SourceRef": {"Entity": "Data"}}, "Property": meas_name}}, "Function": 0}},
+                            "queryRef": f"Sum(Data.{meas_name})", "nativeQueryRef": f"Sum of {meas_name}",
+                        }]}
+
+                    viz_id = uuid.uuid4().hex[:20]
+                    viz_dir = os.path.join(page_dir, "visuals", viz_id)
+                    os.makedirs(viz_dir, exist_ok=True)
+                    visual_doc = {
+                        "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.5.0/schema.json",
+                        "name": viz_id,
+                        "position": {"x": 12 + vi * grid_w, "y": 12, "z": vi, "height": 696, "width": grid_w - 8, "tabOrder": vi},
+                        "visual": {"visualType": vis_type, "query": {"queryState": qs}, "drillFilterOtherVisuals": True},
+                    }
+                    with open(os.path.join(viz_dir, "visual.json"), "w") as f:
+                        json.dump(visual_doc, f, indent=2)
+
+                # Update pages.json to include the new page
+                pages_meta = os.path.join(pages_dir, "pages.json")
+                if os.path.exists(pages_meta):
+                    try:
+                        with open(pages_meta) as f:
+                            pm = json.load(f)
+                        if page_id not in pm.get("pageOrder", []):
+                            pm["pageOrder"].append(page_id)
+                            with open(pages_meta, "w") as f:
+                                json.dump(pm, f, indent=2)
+                    except Exception:
+                        pass
+
+                patches += 1
+                self._log("PATCH",
+                          f"Added page '{page_name}' with {len(ws_list)} visuals "
+                          f"for worksheets: {ws_list}", "fix")
 
         return patches

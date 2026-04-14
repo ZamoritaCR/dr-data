@@ -216,23 +216,68 @@ def _color_score(tableau_path: str, pbi_path: str) -> float:
     return float(len(tab & pbi) / len(tab | pbi))
 
 
+def _is_blank_image(arr: np.ndarray, stddev_threshold: float = 8.0) -> bool:
+    """Return True if the image is essentially blank or a solid colour.
+
+    We compute the per-channel standard deviation across all pixels.  If the
+    mean stddev is below ``stddev_threshold`` the image is considered blank
+    (e.g. a white/gray/black placeholder with no meaningful visual content).
+    """
+    per_channel_std = [float(arr[:, :, c].std()) for c in range(arr.shape[2])]
+    mean_std = sum(per_channel_std) / max(len(per_channel_std), 1)
+    return mean_std < stddev_threshold
+
+
 def compare_images(tableau_path: str, pbi_path: str) -> Dict[str, object]:
     tab_img, tab_arr = _load_resized_rgb(tableau_path)
     pbi_img, pbi_arr = _load_resized_rgb(pbi_path)
 
-    layers = {
-        "ssim": round(_ssim_score(tab_arr, pbi_arr), 4),
-        "phash": round(_phash_score(tab_img, pbi_img), 4),
-        "orb": round(_orb_score(tab_arr, pbi_arr), 4),
-        "histogram": round(_histogram_score(tab_arr, pbi_arr), 4),
-        "color": round(_color_score(tableau_path, pbi_path), 4),
-    }
-    composite = round(sum(layers.values()) / len(layers), 4)
-    return {
+    tab_blank = _is_blank_image(tab_arr)
+    pbi_blank = _is_blank_image(pbi_arr)
+
+    # Base layers that are always computed
+    ssim_val = round(_ssim_score(tab_arr, pbi_arr), 4)
+    phash_val = round(_phash_score(tab_img, pbi_img), 4)
+    histogram_val = round(_histogram_score(tab_arr, pbi_arr), 4)
+
+    # ORB and color are unreliable when either reference image is blank /
+    # low-information (e.g. a locally rendered Tableau preview with no data,
+    # or a gray placeholder).  When that happens, skip those layers and
+    # reweight the remaining three to sum to the full composite.
+    if tab_blank or pbi_blank:
+        layers = {
+            "ssim": ssim_val,
+            "phash": phash_val,
+            "orb": None,       # skipped – image too blank for feature detection
+            "histogram": histogram_val,
+            "color": None,     # skipped – dominant colours meaningless on blank img
+        }
+        active_vals = [ssim_val, phash_val, histogram_val]
+        composite = round(sum(active_vals) / max(len(active_vals), 1), 4)
+        skipped_reason = (
+            "tableau_image_blank" if tab_blank else "pbi_image_blank"
+        )
+    else:
+        orb_val = round(_orb_score(tab_arr, pbi_arr), 4)
+        color_val = round(_color_score(tableau_path, pbi_path), 4)
+        layers = {
+            "ssim": ssim_val,
+            "phash": phash_val,
+            "orb": orb_val,
+            "histogram": histogram_val,
+            "color": color_val,
+        }
+        composite = round(sum(layers.values()) / len(layers), 4)
+        skipped_reason = None
+
+    result = {
         "composite_score": composite,
         "layers": layers,
         "verdict": "PASS" if composite >= 0.7 else "FAIL",
     }
+    if skipped_reason:
+        result["skipped_layers"] = skipped_reason
+    return result
 
 
 def run_real_vfe(

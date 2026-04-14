@@ -11,9 +11,13 @@ from typing import Dict, Optional
 
 import cv2
 import imagehash
+import matplotlib
 import numpy as np
 from PIL import Image
 from skimage.metrics import structural_similarity as ssim_metric
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 
 def _normalized_name(name: str) -> str:
@@ -79,6 +83,74 @@ def _download_tableau_cloud_image(filename: str, output_dir: str) -> Dict[str, s
         }
     except Exception:
         return {}
+
+
+def _render_local_twbx_preview(twbx_path: str, output_dir: str) -> Optional[str]:
+    try:
+        from app.file_handler import _extract_twbx_data
+
+        _, dfs = _extract_twbx_data(twbx_path)
+        if not dfs:
+            return None
+        df = next(iter(dfs.values())).copy()
+        if df.empty:
+            return None
+
+        date_col = next((c for c in df.columns if "date" in c.lower()), "")
+        sales_col = next((c for c in df.columns if "sale" in c.lower()), "")
+        region_col = next((c for c in df.columns if c.lower() == "region"), "")
+        subregion_col = next((c for c in df.columns if "sub-region" in c.lower()), "")
+        customer_col = next((c for c in df.columns if "customer" in c.lower()), "")
+        state_col = next((c for c in df.columns if "state" in c.lower() and "code" not in c.lower()), "")
+
+        fig, axes = plt.subplots(2, 2, figsize=(14, 8), facecolor="#0d0d22")
+        axes = axes.flatten()
+        for ax in axes:
+            ax.set_facecolor("#171733")
+            ax.tick_params(colors="#e8ecff")
+            for spine in ax.spines.values():
+                spine.set_color("#394055")
+
+        if customer_col and sales_col:
+            by_customer = df.groupby(customer_col)[sales_col].sum().sort_values(ascending=False)
+            axes[0].bar(by_customer.index.astype(str), by_customer.values, color="#00ff88")
+            axes[0].set_title("Sales by Customer Type", color="#ffd700")
+            axes[0].tick_params(axis="x", rotation=20)
+
+        if region_col and sales_col:
+            by_region = df.groupby(region_col)[sales_col].sum().sort_values(ascending=False)
+            axes[1].bar(by_region.index.astype(str), by_region.values, color="#ffd700")
+            axes[1].set_title("Sales by Region", color="#ffd700")
+            axes[1].tick_params(axis="x", rotation=20)
+
+        if state_col and sales_col:
+            by_state = df.groupby(state_col)[sales_col].sum().sort_values(ascending=False).head(10)
+            axes[2].barh(by_state.index.astype(str), by_state.values, color="#66d9ff")
+            axes[2].set_title("Top States by Sales", color="#ffd700")
+
+        if date_col and sales_col:
+            series = df[[date_col, sales_col]].copy()
+            series[date_col] = np.array(series[date_col], dtype="datetime64[ns]")
+            series["Quarter"] = (
+                series[date_col].astype("datetime64[ns]")
+            )
+            series["Quarter"] = series[date_col].dt.to_period("Q").astype(str)
+            by_quarter = series.groupby("Quarter")[sales_col].sum().sort_index()
+            axes[3].plot(by_quarter.index.astype(str), by_quarter.values, color="#00ff88", linewidth=2.5)
+            axes[3].set_title("Quarterly Sales", color="#ffd700")
+            axes[3].tick_params(axis="x", rotation=20)
+
+        if subregion_col:
+            axes[1].set_xlabel(subregion_col, color="#98a0b3")
+
+        fig.suptitle(Path(twbx_path).stem, color="#e8ecff", fontsize=18)
+        fig.tight_layout(rect=[0, 0.02, 1, 0.95])
+        out_path = Path(output_dir) / "tableau_local_preview.png"
+        fig.savefig(out_path, dpi=160, facecolor=fig.get_facecolor())
+        plt.close(fig)
+        return str(out_path)
+    except Exception:
+        return None
 
 
 def _load_resized_rgb(path: str, size=(1280, 720)):
@@ -180,6 +252,10 @@ def run_real_vfe(
         tableau_image = _extract_twbx_thumbnail(tableau_file_path, output_dir) or ""
         if tableau_image:
             tableau_meta = {"source": "twbx_thumbnail", "path": tableau_image}
+        else:
+            tableau_image = _render_local_twbx_preview(tableau_file_path, output_dir) or ""
+            if tableau_image:
+                tableau_meta = {"source": "twbx_local_preview", "path": tableau_image}
 
     result = {
         "tableau_image": tableau_image,

@@ -1276,21 +1276,36 @@ def _run_pipeline(job_id: str, file_id: str, q):
         )
         pbip_path = gen_result["path"]
         file_count = gen_result.get("file_count", 0)
-        filters_applied = False
+        filters_detected = False
         try:
             for visual_path in Path(pbip_path).rglob("visual.json"):
                 with open(visual_path, "r", encoding="utf-8") as vf:
                     visual_doc = json.load(vf)
                 if visual_doc.get("filterConfig", {}).get("filters"):
-                    filters_applied = True
+                    filters_detected = True
                     break
         except Exception as filter_err:
             logger.warning(f"Filter detection (non-fatal): {filter_err}")
+        workbook_filters = [
+            f for f in spec.get("filters", [])
+            if "Action (" not in f.get("column", "") and "Tooltip (" not in f.get("column", "")
+        ]
+        tableau_filter_count = len(workbook_filters) + sum(
+            len(ws.get("filters", [])) + len(ws.get("filter_values", []))
+            for ws in spec.get("worksheets", [])
+        )
+        filters_applied = filters_detected or tableau_filter_count == 0
 
         _emit_logged(
             "build", "complete",
             f"{file_count} files generated",
-            output_data={"pbip_path": pbip_path, "file_count": file_count, "filters_applied": filters_applied},
+            output_data={
+                "pbip_path": pbip_path,
+                "file_count": file_count,
+                "filters_applied": filters_applied,
+                "tableau_filter_count": tableau_filter_count,
+                "filters_detected": filters_detected,
+            },
             pbip_path=pbip_path, file_count=file_count, filters_applied=filters_applied,
         )
 

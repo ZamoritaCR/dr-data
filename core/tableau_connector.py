@@ -29,8 +29,14 @@ class TableauCloudConnector:
 
         self.pat_name = os.getenv("TABLEAU_PAT_NAME", "")
         self.pat_secret = os.getenv("TABLEAU_PAT_SECRET", "")
-        self.server_url = os.getenv("TABLEAU_CLOUD_SERVER", "")
-        self.site_name = os.getenv("TABLEAU_CLOUD_SITE", "")
+        self.server_url = (
+            os.getenv("TABLEAU_CLOUD_SERVER", "")
+            or os.getenv("TABLEAU_SERVER_URL", "")
+        )
+        self.site_name = (
+            os.getenv("TABLEAU_CLOUD_SITE", "")
+            or os.getenv("TABLEAU_SITE_ID", "")
+        )
 
         if not all([self.pat_name, self.pat_secret, self.server_url]):
             missing = []

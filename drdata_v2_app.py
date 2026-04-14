@@ -1334,6 +1334,7 @@ def _run_pipeline(job_id: str, file_id: str, q):
         render_proof_status = ""
         render_proof_error = ""
         fidelity = {"score": 0, "data": 0, "structure": 0, "quality": 0}
+        vfe_real = {}
 
         try:
             from core.powerbi_publisher import get_access_token, list_workspaces, publish_pbip
@@ -1423,6 +1424,23 @@ def _run_pipeline(job_id: str, file_id: str, q):
 
         except Exception as pub_err:
             _emit_logged("publish", "error", f"Publish error: {pub_err}")
+
+        if render_proof and os.path.exists(render_proof):
+            try:
+                from core.real_vfe import run_real_vfe
+                vfe_real = run_real_vfe(
+                    tableau_file_path=filepath,
+                    pbi_render_path=render_proof,
+                    output_dir=str(proof_dir),
+                )
+                fidelity["vfe_real"] = vfe_real
+                _emit_logged(
+                    "vfe", "complete",
+                    f"Real VFE: {vfe_real.get('composite_score', 0):.1%} {vfe_real.get('verdict', 'FAIL')}",
+                    output_data=vfe_real,
+                )
+            except Exception as vfe_err:
+                _emit_logged("vfe", "error", f"Real VFE failed: {vfe_err}")
 
         evidence_report = evidence.export_html(str(proof_dir / "evidence_report.html"))
 

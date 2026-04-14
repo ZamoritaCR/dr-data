@@ -3,35 +3,40 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Dr. Data — Tableau → Power BI</title>
+<title>Dr. Data v2 -- Analyst Workbench</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
 <style>
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
 :root {
-  --bg: #0a0e17;
-  --surface: #111827;
-  --surface-2: #1a2438;
-  --surface-3: #232d42;
-  --text: #f0f4ff;
-  --text-dim: #8899bb;
-  --text-muted: #5a6a88;
-  --green: #00ff88;
-  --green-dim: rgba(0,255,136,0.12);
-  --gold: #ffd700;
-  --gold-dim: rgba(255,215,0,0.12);
-  --red: #ff4466;
-  --red-dim: rgba(255,68,102,0.12);
-  --blue: #4488ff;
-  --blue-dim: rgba(68,136,255,0.12);
-  --border: #1e2d44;
-  --radius: 12px;
-  --radius-sm: 8px;
+  --bg-primary: #0d0d22;
+  --bg-card: #1a1a2e;
+  --bg-card-hover: #242440;
+  --bg-input: #12122a;
+  --accent-green: #00ff88;
+  --accent-gold: #ffd700;
+  --accent-red: #ff4466;
+  --accent-blue: #4488ff;
+  --text-primary: #e8e6e3;
+  --text-secondary: #8a8a9a;
+  --text-muted: #5a5a6e;
+  --border: rgba(255,255,255,0.08);
+  --border-active: rgba(0,255,136,0.3);
+  --green-dim: rgba(0,255,136,0.08);
+  --gold-dim: rgba(255,215,0,0.08);
+  --red-dim: rgba(255,68,102,0.08);
+  --blue-dim: rgba(68,136,255,0.08);
+  --font-header: 'Rajdhani', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+  --font-telemetry: 'Space Mono', monospace;
+  --font-body: 'Inter', sans-serif;
+  --radius: 10px;
+  --radius-sm: 6px;
 }
 
-html, body { height: 100%; font-family: 'IBM Plex Sans', sans-serif; background: var(--bg); color: var(--text); }
-code, pre, .mono { font-family: 'IBM Plex Mono', monospace; }
+html, body { height: 100%; font-family: var(--font-body); background: var(--bg-primary); color: var(--text-primary); }
+code, pre, .mono { font-family: var(--font-mono); }
 
 /* ===== LAYOUT ===== */
 .app { display: flex; flex-direction: column; height: 100vh; }
@@ -39,290 +44,375 @@ code, pre, .mono { font-family: 'IBM Plex Mono', monospace; }
 /* --- HEADER --- */
 .header {
   display: flex; align-items: center; gap: 14px;
-  padding: 0 24px; height: 52px; min-height: 52px;
-  background: var(--surface); border-bottom: 1px solid var(--border);
+  padding: 0 24px; height: 56px; min-height: 56px;
+  background: var(--bg-card); border-bottom: 1px solid var(--border);
 }
 .header-logo {
-  font-family: 'IBM Plex Mono', monospace; font-weight: 700; font-size: 15px;
-  color: var(--green); letter-spacing: -0.03em;
+  font-family: var(--font-header); font-weight: 700; font-size: 22px;
+  color: var(--accent-green); letter-spacing: 0.02em;
 }
-.header-logo span { color: var(--text-dim); font-weight: 400; }
+.header-logo span { color: var(--text-secondary); font-weight: 500; font-size: 14px; margin-left: 6px; }
+.header-right { margin-left: auto; display: flex; align-items: center; gap: 14px; }
+.correction-badge {
+  display: none; align-items: center; gap: 6px; padding: 4px 10px;
+  border-radius: 20px; background: var(--gold-dim); border: 1px solid rgba(255,215,0,0.2);
+  font-family: var(--font-telemetry); font-size: 11px; color: var(--accent-gold);
+}
+.correction-badge.visible { display: flex; }
 .header-status {
-  margin-left: auto; display: flex; align-items: center; gap: 8px;
-  font-size: 12px; color: var(--text-muted);
+  display: flex; align-items: center; gap: 8px;
+  font-family: var(--font-telemetry); font-size: 11px; color: var(--text-muted);
 }
 .header-dot {
-  width: 7px; height: 7px; border-radius: 50%; background: var(--green);
+  width: 7px; height: 7px; border-radius: 50%; background: var(--accent-green);
   animation: pulse 2s infinite;
 }
-.header-dot.off { background: var(--red); animation: none; }
+.header-dot.off { background: var(--accent-red); animation: none; }
 @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:.3;} }
-.session-id { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--text-muted); }
+.session-id { font-family: var(--font-telemetry); font-size: 10px; color: var(--text-muted); }
+
+/* --- MAIN CONTENT --- */
+.main-content { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
 
 /* --- UPLOAD ZONE --- */
 .upload-zone {
-  margin: 16px 24px 0; padding: 28px 20px;
+  margin: 16px 24px 0; padding: 24px 20px;
   border: 2px dashed var(--border); border-radius: var(--radius);
-  background: var(--surface); text-align: center; cursor: pointer;
+  background: var(--bg-card); text-align: center; cursor: pointer;
   transition: all .2s;
 }
 .upload-zone:hover, .upload-zone.dragover {
-  border-color: var(--green); background: var(--green-dim);
+  border-color: var(--accent-green); background: var(--green-dim);
 }
 .upload-zone.has-file {
-  border-color: var(--green); border-style: solid;
-  background: var(--green-dim); padding: 14px 20px;
+  border-color: var(--accent-green); border-style: solid;
+  background: var(--green-dim); padding: 12px 20px;
 }
-.upload-icon { font-size: 32px; margin-bottom: 8px; opacity: 0.5; }
-.upload-title { font-size: 14px; font-weight: 600; color: var(--text); }
+.upload-title { font-family: var(--font-header); font-size: 16px; font-weight: 600; color: var(--text-primary); }
 .upload-sub { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
-.upload-file-info {
-  display: flex; align-items: center; gap: 12px; justify-content: center;
-}
-.upload-file-name { font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: var(--green); font-weight: 600; }
-.upload-file-meta { font-size: 12px; color: var(--text-dim); }
+.upload-file-info { display: flex; align-items: center; gap: 12px; justify-content: center; }
+.upload-file-name { font-family: var(--font-mono); font-size: 13px; color: var(--accent-green); font-weight: 600; }
+.upload-file-meta { font-size: 12px; color: var(--text-secondary); }
 .upload-file-clear {
-  background: none; border: 1px solid var(--border); border-radius: 6px;
+  background: none; border: 1px solid var(--border); border-radius: var(--radius-sm);
   color: var(--text-muted); font-size: 11px; padding: 3px 10px; cursor: pointer;
 }
-.upload-file-clear:hover { border-color: var(--red); color: var(--red); }
-.upload-progress {
-  margin-top: 10px; height: 3px; border-radius: 2px; background: var(--surface-2);
-  overflow: hidden;
-}
-.upload-progress-bar {
-  height: 100%; background: var(--green); width: 0%; transition: width .3s;
-}
+.upload-file-clear:hover { border-color: var(--accent-red); color: var(--accent-red); }
+.upload-progress { margin-top: 10px; height: 3px; border-radius: 2px; background: var(--bg-primary); overflow: hidden; }
+.upload-progress-bar { height: 100%; background: var(--accent-green); width: 0%; transition: width .3s; }
 #upload-input { display: none; }
 
 /* --- CHAT AREA --- */
 .chat-area {
-  flex: 1; overflow-y: auto; padding: 20px 24px;
-  display: flex; flex-direction: column; gap: 16px;
-  scroll-behavior: smooth;
+  padding: 16px 24px; display: flex; flex-direction: column; gap: 12px;
+  min-height: 120px;
 }
+.chat-area.expanded { flex: 1; overflow-y: auto; }
 
-/* --- MESSAGES --- */
-.msg {
-  display: flex; gap: 12px; max-width: 820px;
-  animation: fadeIn .25s ease;
-}
+.msg { display: flex; gap: 10px; max-width: 820px; animation: fadeIn .25s ease; }
 .msg.user { align-self: flex-end; flex-direction: row-reverse; }
 .msg.bot { align-self: flex-start; }
-
-@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 
 .msg-avatar {
-  width: 32px; height: 32px; min-width: 32px; border-radius: 50%;
+  width: 30px; height: 30px; min-width: 30px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
-  font-size: 14px; font-weight: 700; margin-top: 2px;
+  font-family: var(--font-header); font-size: 14px; font-weight: 700; margin-top: 2px;
 }
-.msg.bot .msg-avatar { background: var(--green-dim); color: var(--green); }
-.msg.user .msg-avatar { background: var(--blue-dim); color: var(--blue); }
+.msg.bot .msg-avatar { background: var(--green-dim); color: var(--accent-green); }
+.msg.user .msg-avatar { background: var(--blue-dim); color: var(--accent-blue); }
 
 .msg-body {
-  padding: 14px 18px; border-radius: var(--radius);
-  font-size: 14px; line-height: 1.6; min-width: 80px;
+  padding: 12px 16px; border-radius: var(--radius); font-size: 13px; line-height: 1.6;
 }
 .msg.bot .msg-body {
-  background: var(--surface); border: 1px solid var(--border);
-  border-top-left-radius: 4px;
+  background: var(--bg-card); border: 1px solid var(--border); border-top-left-radius: 3px;
 }
 .msg.user .msg-body {
-  background: var(--surface-2); border: 1px solid var(--border);
-  border-top-right-radius: 4px; color: var(--text);
+  background: rgba(68,136,255,0.08); border: 1px solid rgba(68,136,255,0.15);
+  border-top-right-radius: 3px;
+}
+.msg-body strong { color: var(--accent-green); font-weight: 600; }
+.msg-body code {
+  background: rgba(255,255,255,0.05); padding: 1px 5px; border-radius: 3px;
+  font-family: var(--font-mono); font-size: 12px;
 }
 
-/* Message content formatting */
-.msg-body p { margin-bottom: 8px; }
-.msg-body p:last-child { margin-bottom: 0; }
-.msg-body strong { color: var(--green); font-weight: 600; }
-
-/* --- CODE BLOCKS (DAX) --- */
-.dax-block {
-  margin: 12px 0; border-radius: var(--radius-sm); overflow: hidden;
-  border: 1px solid var(--border);
+/* --- PIPELINE STAGES SECTION --- */
+.pipeline-section {
+  padding: 0 24px 24px; display: flex; flex-direction: column; gap: 0;
 }
-.dax-header {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 8px 14px; background: var(--surface-3);
-  font-size: 11px; font-weight: 600; text-transform: uppercase;
-  letter-spacing: 0.05em; color: var(--text-muted);
-}
-.dax-header-actions { display: flex; gap: 6px; }
-.dax-btn {
-  padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: 600;
-  cursor: pointer; border: 1px solid var(--border); background: var(--surface);
-  color: var(--text-dim); transition: all .15s;
-}
-.dax-btn:hover { border-color: var(--blue); color: var(--blue); }
-.dax-btn.edit-btn:hover { border-color: var(--blue); color: var(--blue); background: var(--blue-dim); }
-.dax-btn.copy-btn:hover { border-color: var(--green); color: var(--green); }
-.dax-btn.save-btn { border-color: var(--green); color: var(--green); background: var(--green-dim); }
-.dax-btn.cancel-btn { border-color: var(--red); color: var(--red); }
-.dax-code {
-  padding: 14px; background: #060a12; font-family: 'IBM Plex Mono', monospace;
-  font-size: 13px; line-height: 1.5; color: var(--text); white-space: pre-wrap;
-  overflow-x: auto;
-}
-.dax-edit-area {
-  width: 100%; padding: 14px; background: #060a12; border: none;
-  font-family: 'IBM Plex Mono', monospace; font-size: 13px; line-height: 1.5;
-  color: var(--blue); resize: vertical; min-height: 80px; outline: none;
-}
-
-/* --- FIELD MAPPING TABLE --- */
-.field-table {
-  margin: 12px 0; border-radius: var(--radius-sm); overflow: hidden;
-  border: 1px solid var(--border);
-}
-.field-table table {
-  width: 100%; border-collapse: collapse; font-size: 13px;
-}
-.field-table th {
-  padding: 8px 12px; background: var(--surface-3);
-  text-align: left; font-size: 11px; font-weight: 600;
-  text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted);
+.pipeline-header {
+  display: flex; align-items: center; gap: 12px; margin-bottom: 16px; padding: 12px 0;
   border-bottom: 1px solid var(--border);
 }
-.field-table td {
-  padding: 8px 12px; border-bottom: 1px solid var(--border);
-  font-family: 'IBM Plex Mono', monospace; font-size: 12px;
+.pipeline-title {
+  font-family: var(--font-header); font-size: 18px; font-weight: 700;
+  color: var(--accent-green); text-transform: uppercase; letter-spacing: 0.05em;
 }
-.field-table tr:last-child td { border-bottom: none; }
-.field-table .col-tableau { color: var(--text-dim); }
-.field-table .col-pbi { color: var(--green); }
-.field-table .col-type { color: var(--gold); font-size: 11px; }
-.field-table .col-actions { text-align: right; }
-.field-table .col-actions button {
-  padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600;
-  cursor: pointer; border: 1px solid var(--border); background: var(--surface);
-  color: var(--text-dim); margin-left: 4px; transition: all .15s;
+.pipeline-progress-text {
+  font-family: var(--font-telemetry); font-size: 11px; color: var(--text-secondary);
+  margin-left: auto;
 }
-.field-table .accept-btn:hover { border-color: var(--green); color: var(--green); }
-.field-table .edit-field-btn:hover { border-color: var(--blue); color: var(--blue); }
 
-/* --- DATA SOURCE CARDS --- */
-.ds-cards {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0;
+/* Stage Cards */
+.stage-card {
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-card); margin-bottom: 8px;
+  transition: all .2s; overflow: hidden;
 }
+.stage-card:hover { border-color: rgba(255,255,255,0.12); }
+.stage-card.active { border-color: var(--accent-gold); }
+.stage-card.done { border-color: rgba(0,255,136,0.2); }
+.stage-card.error { border-color: rgba(255,68,102,0.3); }
+
+.stage-card-header {
+  display: flex; align-items: center; gap: 10px; padding: 12px 16px;
+  cursor: pointer; user-select: none;
+}
+.stage-indicator {
+  width: 28px; height: 28px; border-radius: 50%; display: flex;
+  align-items: center; justify-content: center;
+  font-family: var(--font-header); font-size: 14px; font-weight: 700;
+  background: rgba(255,255,255,0.04); color: var(--text-muted);
+  border: 1px solid var(--border); flex-shrink: 0;
+}
+.stage-card.done .stage-indicator { background: var(--green-dim); color: var(--accent-green); border-color: rgba(0,255,136,0.3); }
+.stage-card.active .stage-indicator { background: var(--gold-dim); color: var(--accent-gold); border-color: rgba(255,215,0,0.3); animation: pulse 1.5s infinite; }
+.stage-card.error .stage-indicator { background: var(--red-dim); color: var(--accent-red); border-color: rgba(255,68,102,0.3); }
+.stage-card.running .stage-indicator { background: var(--blue-dim); color: var(--accent-blue); border-color: rgba(68,136,255,0.3); animation: pulse 1s infinite; }
+
+.stage-name {
+  font-family: var(--font-header); font-size: 15px; font-weight: 600;
+  color: var(--text-primary); flex: 1;
+}
+.stage-card.pending .stage-name { color: var(--text-muted); }
+
+.stage-badge {
+  font-family: var(--font-telemetry); font-size: 10px; font-weight: 700;
+  padding: 3px 8px; border-radius: 4px; text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.badge-pending { background: rgba(255,255,255,0.04); color: var(--text-muted); }
+.badge-running { background: var(--blue-dim); color: var(--accent-blue); }
+.badge-awaiting { background: var(--gold-dim); color: var(--accent-gold); }
+.badge-done { background: var(--green-dim); color: var(--accent-green); }
+.badge-error { background: var(--red-dim); color: var(--accent-red); }
+
+.stage-chevron {
+  color: var(--text-muted); font-size: 14px; transition: transform .2s; flex-shrink: 0;
+}
+.stage-card.expanded .stage-chevron { transform: rotate(90deg); }
+
+.stage-body {
+  display: none; padding: 0 16px 16px; border-top: 1px solid var(--border);
+}
+.stage-card.expanded .stage-body { display: block; }
+
+.stage-summary {
+  font-size: 13px; color: var(--text-secondary); line-height: 1.6;
+  padding: 12px 0; white-space: pre-wrap;
+  font-family: var(--font-mono); font-size: 12px;
+}
+
+/* Stage Tables */
+.stage-table {
+  width: 100%; border-collapse: collapse; margin: 8px 0;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden;
+}
+.stage-table th {
+  padding: 8px 12px; background: rgba(255,255,255,0.03);
+  text-align: left; font-family: var(--font-header); font-size: 12px;
+  font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--text-muted); border-bottom: 1px solid var(--border);
+}
+.stage-table td {
+  padding: 8px 12px; border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.stage-table tr:last-child td { border-bottom: none; }
+.stage-table tr:hover { background: rgba(255,255,255,0.02); }
+
+/* Editable cells */
+.editable-cell {
+  cursor: pointer; position: relative; display: flex; align-items: center; gap: 6px;
+}
+.editable-cell:hover { color: var(--accent-green); }
+.edit-icon {
+  font-size: 11px; color: var(--text-muted); opacity: 0; transition: opacity .15s;
+}
+.editable-cell:hover .edit-icon { opacity: 1; }
+
+.inline-dropdown {
+  background: var(--bg-input); color: var(--accent-green); border: 1px solid var(--accent-green);
+  border-radius: var(--radius-sm); padding: 4px 8px; font-family: var(--font-mono);
+  font-size: 12px; outline: none; cursor: pointer;
+}
+.inline-dropdown option { background: var(--bg-primary); color: var(--text-primary); }
+
+/* DAX Editor */
+.dax-editor {
+  margin: 8px 0; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.dax-editor-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 12px; background: rgba(255,255,255,0.03);
+  font-family: var(--font-header); font-size: 12px; font-weight: 600;
+  color: var(--text-muted); text-transform: uppercase;
+}
+.dax-editor-actions { display: flex; gap: 6px; }
+.dax-textarea {
+  width: 100%; padding: 12px; background: #080818; border: none;
+  font-family: var(--font-mono); font-size: 12px; line-height: 1.5;
+  color: var(--text-primary); resize: vertical; min-height: 60px; outline: none;
+}
+.dax-display {
+  padding: 12px; background: #080818; font-family: var(--font-mono);
+  font-size: 12px; line-height: 1.5; color: var(--text-primary); white-space: pre-wrap;
+}
+.tier-badge {
+  font-family: var(--font-telemetry); font-size: 10px; padding: 2px 6px;
+  border-radius: 3px; font-weight: 700;
+}
+.tier-AUTO, .tier-GOOD { background: var(--green-dim); color: var(--accent-green); }
+.tier-REVIEW { background: var(--gold-dim); color: var(--accent-gold); }
+.tier-BLOCKED { background: var(--red-dim); color: var(--accent-red); }
+
+/* Stage Action Buttons */
+.stage-actions {
+  display: flex; gap: 8px; margin-top: 12px; padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.stage-btn {
+  padding: 8px 16px; border-radius: var(--radius-sm);
+  font-family: var(--font-header); font-size: 13px; font-weight: 600;
+  cursor: pointer; border: 1px solid var(--border); transition: all .15s;
+  text-transform: uppercase; letter-spacing: 0.03em;
+}
+.btn-approve {
+  background: var(--green-dim); border-color: rgba(0,255,136,0.3);
+  color: var(--accent-green);
+}
+.btn-approve:hover { background: rgba(0,255,136,0.15); }
+.btn-rerun {
+  background: transparent; border-color: var(--border); color: var(--text-secondary);
+}
+.btn-rerun:hover { border-color: var(--accent-blue); color: var(--accent-blue); }
+.btn-small {
+  padding: 4px 10px; font-size: 11px; border-radius: 4px;
+  cursor: pointer; border: 1px solid var(--border); background: transparent;
+  color: var(--text-secondary); font-family: var(--font-header); font-weight: 600;
+  transition: all .15s;
+}
+.btn-small:hover { border-color: var(--accent-green); color: var(--accent-green); }
+.btn-small.save { border-color: rgba(0,255,136,0.3); color: var(--accent-green); background: var(--green-dim); }
+.btn-small.cancel { border-color: rgba(255,68,102,0.2); color: var(--accent-red); }
+
+/* VFE Cards */
+.vfe-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; margin: 8px 0; }
+.vfe-card {
+  padding: 12px; border-radius: var(--radius-sm); border: 1px solid var(--border);
+  background: rgba(255,255,255,0.02);
+}
+.vfe-card.pass { border-color: rgba(0,255,136,0.2); }
+.vfe-card.fail { border-color: rgba(255,68,102,0.2); }
+.vfe-card-title { font-family: var(--font-header); font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+.vfe-check { display: flex; align-items: center; gap: 6px; font-size: 11px; margin: 2px 0; }
+.vfe-pass { color: var(--accent-green); }
+.vfe-fail { color: var(--accent-red); }
+
+/* Data Source Cards */
+.ds-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0; }
 .ds-card {
   padding: 16px; border-radius: var(--radius-sm); border: 1px solid var(--border);
-  background: var(--surface-2); cursor: pointer; transition: all .2s;
-  text-align: center;
+  background: var(--bg-card-hover); cursor: pointer; transition: all .2s; text-align: center;
 }
-.ds-card:hover { border-color: var(--green); background: var(--green-dim); transform: translateY(-2px); }
-.ds-card-icon { font-size: 24px; margin-bottom: 6px; }
-.ds-card-title { font-size: 13px; font-weight: 600; color: var(--text); }
-.ds-card-sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.ds-card:hover { border-color: var(--accent-green); background: var(--green-dim); transform: translateY(-2px); }
+.ds-card-title { font-family: var(--font-header); font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }
+.ds-card-sub { font-size: 11px; color: var(--text-muted); }
 
-/* --- QA RESULTS --- */
-.qa-block {
-  margin: 12px 0; padding: 14px; border-radius: var(--radius-sm);
-  border: 1px solid var(--gold); background: var(--gold-dim);
-}
-.qa-title { font-size: 12px; font-weight: 700; color: var(--gold); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
-.qa-item { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; font-size: 13px; }
-.qa-pass { color: var(--green); }
-.qa-fail { color: var(--red); }
-.qa-warn { color: var(--gold); }
-
-/* --- DOWNLOAD BUTTONS --- */
+/* Download Buttons */
 .dl-buttons { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
 .dl-btn {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 8px 16px; border-radius: var(--radius-sm);
-  border: 1px solid var(--green); background: var(--green-dim);
-  color: var(--green); font-size: 13px; font-weight: 600;
+  border: 1px solid var(--accent-green); background: var(--green-dim);
+  color: var(--accent-green); font-family: var(--font-header); font-size: 13px; font-weight: 600;
   cursor: pointer; text-decoration: none; transition: all .15s;
 }
-.dl-btn:hover { background: var(--green); color: var(--bg); }
+.dl-btn:hover { background: var(--accent-green); color: var(--bg-primary); }
 
-/* --- ERROR BLOCK --- */
+/* Error Block */
 .error-block {
-  margin: 12px 0; padding: 12px 14px; border-radius: var(--radius-sm);
-  border: 1px solid var(--red); background: var(--red-dim);
-  font-size: 13px; color: var(--red);
+  margin: 8px 0; padding: 10px 14px; border-radius: var(--radius-sm);
+  border: 1px solid var(--accent-red); background: var(--red-dim);
+  font-size: 12px; color: var(--accent-red);
 }
 
-/* --- TYPING INDICATOR --- */
+/* Typing */
 .typing { display: flex; gap: 4px; padding: 8px 0; }
 .typing span {
-  width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted);
+  width: 5px; height: 5px; border-radius: 50%; background: var(--text-muted);
   animation: typingDot 1.2s infinite;
 }
 .typing span:nth-child(2) { animation-delay: .2s; }
 .typing span:nth-child(3) { animation-delay: .4s; }
-@keyframes typingDot { 0%,60%,100%{opacity:.3;transform:translateY(0)} 30%{opacity:1;transform:translateY(-4px)} }
+@keyframes typingDot { 0%,60%,100%{opacity:.3;transform:translateY(0)} 30%{opacity:1;transform:translateY(-3px)} }
 
 /* --- INPUT BAR --- */
 .input-bar {
-  padding: 16px 24px; background: var(--surface); border-top: 1px solid var(--border);
+  padding: 14px 24px; background: var(--bg-card); border-top: 1px solid var(--border);
   display: flex; gap: 10px; align-items: flex-end;
 }
-.input-wrap {
-  flex: 1; position: relative;
-}
+.input-wrap { flex: 1; }
 .input-wrap textarea {
-  width: 100%; padding: 12px 16px; border-radius: var(--radius);
-  border: 1px solid var(--border); background: var(--surface-2);
-  color: var(--text); font-family: 'IBM Plex Sans', sans-serif; font-size: 14px;
+  width: 100%; padding: 10px 14px; border-radius: var(--radius);
+  border: 1px solid var(--border); background: var(--bg-input);
+  color: var(--text-primary); font-family: var(--font-body); font-size: 13px;
   resize: none; outline: none; transition: border-color .15s;
-  min-height: 44px; max-height: 160px; line-height: 1.5;
+  min-height: 42px; max-height: 140px; line-height: 1.5;
 }
 .input-wrap textarea::placeholder { color: var(--text-muted); }
-.input-wrap textarea:focus { border-color: var(--green); }
+.input-wrap textarea:focus { border-color: var(--accent-green); }
 .send-btn {
-  width: 44px; height: 44px; border-radius: var(--radius);
-  border: none; background: var(--green); color: var(--bg);
-  font-size: 18px; cursor: pointer; display: flex;
-  align-items: center; justify-content: center; transition: all .15s;
-  flex-shrink: 0;
+  width: 42px; height: 42px; border-radius: var(--radius);
+  border: none; background: var(--accent-green); color: var(--bg-primary);
+  font-size: 16px; cursor: pointer; display: flex;
+  align-items: center; justify-content: center; transition: all .15s; flex-shrink: 0;
 }
 .send-btn:hover { background: #00cc6e; }
 .send-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 
-/* --- WELCOME --- */
+/* Welcome */
 .welcome {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  flex: 1; gap: 12px; text-align: center; padding: 40px;
+  flex: 1; gap: 10px; text-align: center; padding: 40px;
 }
-.welcome-icon { font-size: 48px; opacity: 0.3; }
-.welcome h2 { font-size: 20px; font-weight: 600; color: var(--text); }
-.welcome p { font-size: 14px; color: var(--text-muted); max-width: 420px; line-height: 1.6; }
+.welcome h2 { font-family: var(--font-header); font-size: 22px; font-weight: 700; color: var(--text-primary); }
+.welcome p { font-size: 13px; color: var(--text-muted); max-width: 420px; line-height: 1.6; }
 
-/* --- PIPELINE BANNER --- */
-.pipeline-banner {
-  margin: 0 24px; padding: 10px 16px; border-radius: var(--radius-sm);
-  background: var(--surface-2); border: 1px solid var(--border);
-  display: flex; align-items: center; gap: 12px; font-size: 12px;
+/* QA Block */
+.qa-block {
+  margin: 8px 0; padding: 12px; border-radius: var(--radius-sm);
+  border: 1px solid rgba(255,215,0,0.2); background: var(--gold-dim);
 }
-.pipeline-banner.hidden { display: none; }
-.pipeline-stage {
-  font-family: 'IBM Plex Mono', monospace; font-weight: 600;
-  color: var(--gold); text-transform: uppercase; font-size: 11px;
-}
-.pipeline-label { color: var(--text-muted); }
-.pipeline-dots { display: flex; gap: 4px; margin-left: auto; }
-.pipeline-dot {
-  width: 8px; height: 8px; border-radius: 50%; background: var(--surface-3); border: 1px solid var(--border);
-}
-.pipeline-dot.done { background: var(--green); border-color: var(--green); }
-.pipeline-dot.active { background: var(--gold); border-color: var(--gold); animation: pulse 1.5s infinite; }
+.qa-title { font-family: var(--font-header); font-size: 12px; font-weight: 700; color: var(--accent-gold); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
+.qa-item { display: flex; align-items: center; gap: 6px; margin: 2px 0; font-size: 12px; }
+.qa-pass { color: var(--accent-green); }
+.qa-fail { color: var(--accent-red); }
 
 /* Scrollbar */
-.chat-area::-webkit-scrollbar { width: 6px; }
-.chat-area::-webkit-scrollbar-track { background: transparent; }
-.chat-area::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 3px; }
-.chat-area::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+.main-content::-webkit-scrollbar { width: 6px; }
+.main-content::-webkit-scrollbar-track { background: transparent; }
+.main-content::-webkit-scrollbar-thumb { background: var(--bg-card-hover); border-radius: 3px; }
 
 /* Mobile */
 @media (max-width: 640px) {
   .msg { max-width: 100%; }
   .ds-cards { grid-template-columns: 1fr; }
-  .header { padding: 0 14px; }
-  .chat-area { padding: 14px; }
-  .input-bar { padding: 12px 14px; }
+  .vfe-grid { grid-template-columns: 1fr; }
+  .header, .chat-area, .pipeline-section, .input-bar { padding-left: 14px; padding-right: 14px; }
   .upload-zone { margin: 10px 14px 0; }
 }
 </style>
@@ -332,20 +422,24 @@ code, pre, .mono { font-family: 'IBM Plex Mono', monospace; }
 
   <!-- HEADER -->
   <div class="header">
-    <div class="header-logo">Dr. Data <span>v2</span></div>
+    <div class="header-logo">DR. DATA <span>v2</span></div>
     <span class="session-id" id="session-display"></span>
-    <div class="header-status">
-      <div class="header-dot" id="health-dot"></div>
-      <span id="health-label">connecting...</span>
+    <div class="correction-badge" id="correction-badge">
+      <span id="correction-count">0</span> corrections learned
+    </div>
+    <div class="header-right">
+      <div class="header-status">
+        <div class="header-dot" id="health-dot"></div>
+        <span id="health-label">connecting...</span>
+      </div>
     </div>
   </div>
 
   <!-- UPLOAD ZONE -->
   <div class="upload-zone" id="upload-zone">
     <div id="upload-empty">
-      <div class="upload-icon">&#8593;</div>
-      <div class="upload-title">Drop your .twbx or .twb file here</div>
-      <div class="upload-sub">or click to browse — Tableau workbooks only</div>
+      <div class="upload-title">Drop .twbx or .twb here</div>
+      <div class="upload-sub">or click to browse -- Tableau workbooks only</div>
     </div>
     <div id="upload-loaded" style="display:none">
       <div class="upload-file-info">
@@ -360,26 +454,32 @@ code, pre, .mono { font-family: 'IBM Plex Mono', monospace; }
   </div>
   <input type="file" id="upload-input" accept=".twbx,.twb">
 
-  <!-- PIPELINE BANNER -->
-  <div class="pipeline-banner hidden" id="pipeline-banner">
-    <span class="pipeline-label">Pipeline:</span>
-    <span class="pipeline-stage" id="pipeline-stage">—</span>
-    <div class="pipeline-dots" id="pipeline-dots"></div>
-  </div>
+  <!-- MAIN SCROLLABLE CONTENT -->
+  <div class="main-content" id="main-content">
 
-  <!-- CHAT AREA -->
-  <div class="chat-area" id="chat-area">
-    <div class="welcome" id="welcome">
-      <div class="welcome-icon">&#9670;</div>
-      <h2>Dr. Data is ready</h2>
-      <p>Upload a Tableau workbook above, then tell me what you need. I'll parse it, map fields, translate DAX, run QA, and build your Power BI project.</p>
+    <!-- CHAT AREA -->
+    <div class="chat-area expanded" id="chat-area">
+      <div class="welcome" id="welcome">
+        <h2>Dr. Data is ready</h2>
+        <p>Upload a Tableau workbook above, then tell me to convert it. I will parse it, map fields, translate DAX, run QA, and build your Power BI project -- and you can edit every step.</p>
+      </div>
     </div>
+
+    <!-- PIPELINE STAGES (appears after first stage completes) -->
+    <div class="pipeline-section" id="pipeline-section" style="display:none">
+      <div class="pipeline-header">
+        <div class="pipeline-title">MIGRATION PIPELINE</div>
+        <div class="pipeline-progress-text" id="pipeline-progress-text">0 / 8 stages</div>
+      </div>
+      <div id="pipeline-stages"></div>
+    </div>
+
   </div>
 
   <!-- INPUT -->
   <div class="input-bar">
     <div class="input-wrap">
-      <textarea id="chat-input" placeholder="Ask Dr. Data anything..." rows="1"></textarea>
+      <textarea id="chat-input" placeholder="Talk to Dr. Data..." rows="1"></textarea>
     </div>
     <button class="send-btn" id="send-btn" title="Send">&#9654;</button>
   </div>
@@ -396,17 +496,35 @@ const S = {
   fileName: null,
   sending: false,
   pipeline: null,
+  correctionCount: 0,
+  expandedStages: {},
 };
+
+const STAGE_KEYS = ['parse', 'data_source', 'field_mapping', 'formula_trans', 'visual_mapping', 'semantic_model', 'report_layout', 'generate'];
+const STAGE_LABELS = {
+  'parse': 'Parse Tableau Workbook',
+  'data_source': 'Data Source',
+  'field_mapping': 'Field Mapping',
+  'formula_trans': 'Formula Translation',
+  'visual_mapping': 'Visual Mapping',
+  'semantic_model': 'Semantic Model',
+  'report_layout': 'Report Layout',
+  'generate': 'Generate PBIP',
+};
+
+const MARK_TYPE_OPTIONS = ['bar', 'line', 'area', 'circle', 'text', 'square', 'pie', 'gantt', 'polygon', 'map', 'automatic'];
+const PBI_VISUAL_OPTIONS = ['clusteredBarChart', 'clusteredColumnChart', 'lineChart', 'areaChart', 'pieChart', 'donutChart', 'cardVisual', 'tableEx', 'waterfallChart', 'treemap', 'scatterChart', 'filledMap', 'shape', 'slicer', 'kpi'];
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
 
-const chatArea   = $('#chat-area');
-const chatInput  = $('#chat-input');
-const sendBtn    = $('#send-btn');
-const uploadZone = $('#upload-zone');
-const uploadInput= $('#upload-input');
-const welcome    = $('#welcome');
+const chatArea    = $('#chat-area');
+const chatInput   = $('#chat-input');
+const sendBtn     = $('#send-btn');
+const uploadZone  = $('#upload-zone');
+const uploadInput = $('#upload-input');
+const welcome     = $('#welcome');
+const mainContent = $('#main-content');
 
 $('#session-display').textContent = S.sessionId;
 
@@ -416,14 +534,9 @@ $('#session-display').textContent = S.sessionId;
 async function checkHealth() {
   try {
     const r = await fetch('/api/health');
-    if (r.ok) {
-      $('#health-dot').classList.remove('off');
-      $('#health-label').textContent = 'online';
-    } else throw 0;
-  } catch {
-    $('#health-dot').classList.add('off');
-    $('#health-label').textContent = 'offline';
-  }
+    if (r.ok) { $('#health-dot').classList.remove('off'); $('#health-label').textContent = 'online'; }
+    else throw 0;
+  } catch { $('#health-dot').classList.add('off'); $('#health-label').textContent = 'offline'; }
 }
 checkHealth();
 setInterval(checkHealth, 30000);
@@ -453,11 +566,8 @@ async function handleFile(file) {
     addBotMessage('<div class="error-block">Only .twb and .twbx files are supported.</div>');
     return;
   }
-
-  // Show progress
   $('#upload-progress').style.display = 'block';
   $('#upload-bar').style.width = '30%';
-
   const form = new FormData();
   form.append('file', file);
 
@@ -466,44 +576,30 @@ async function handleFile(file) {
     const r = await fetch('/api/upload', { method: 'POST', body: form });
     $('#upload-bar').style.width = '90%';
     const data = await r.json();
-
     S.fileId = data.file_id;
     S.fileName = data.filename;
-
-    // Show file info
     uploadZone.classList.add('has-file');
     $('#upload-empty').style.display = 'none';
     $('#upload-loaded').style.display = '';
     $('#upload-fname').textContent = data.filename;
     $('#upload-fmeta').textContent = formatBytes(data.size);
-
-    // Bot message with parse results
     if (data.analysis) {
       hideWelcome();
-      addBotMessage(renderParseResult(data));
+      const fi = data.file_info || {};
+      addBotMessage(
+        `<p>I found <strong>${fi.worksheets || 0} worksheets</strong>, ` +
+        `<strong>${fi.dashboards || 0} dashboards</strong>, and ` +
+        `<strong>${fi.calc_fields || 0} calculated fields</strong> in <strong>${esc(data.filename)}</strong>.</p>` +
+        `<p style="color:var(--text-secondary);font-size:12px;margin-top:6px">` +
+        `Tell me to <strong>convert to Power BI</strong> when ready, or ask anything about this workbook.</p>`
+      );
     }
-
     $('#upload-bar').style.width = '100%';
     setTimeout(() => { $('#upload-progress').style.display = 'none'; $('#upload-bar').style.width = '0%'; }, 600);
   } catch (err) {
     $('#upload-progress').style.display = 'none';
     addBotMessage(`<div class="error-block">Upload failed: ${err.message}</div>`);
   }
-}
-
-function renderParseResult(data) {
-  const fi = data.file_info || {};
-  let html = `<p><strong>${data.filename}</strong> uploaded and parsed.</p>`;
-  if (fi.worksheets !== undefined) {
-    html += `<div class="field-table"><table>
-      <tr><th>Component</th><th>Count</th></tr>
-      <tr><td class="col-tableau">Worksheets</td><td class="col-pbi">${fi.worksheets}</td></tr>
-      <tr><td class="col-tableau">Dashboards</td><td class="col-pbi">${fi.dashboards}</td></tr>
-      <tr><td class="col-tableau">Calculated Fields</td><td class="col-pbi">${fi.calc_fields}</td></tr>
-    </table></div>`;
-  }
-  html += `<p style="color:var(--text-dim);font-size:13px;margin-top:8px">Tell me to <strong>convert to Power BI</strong> when ready, or ask me anything about this workbook.</p>`;
-  return html;
 }
 
 // ============================================================
@@ -513,33 +609,24 @@ sendBtn.addEventListener('click', sendMessage);
 chatInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
 });
-
-// Auto-resize textarea
 chatInput.addEventListener('input', () => {
   chatInput.style.height = 'auto';
-  chatInput.style.height = Math.min(chatInput.scrollHeight, 160) + 'px';
+  chatInput.style.height = Math.min(chatInput.scrollHeight, 140) + 'px';
 });
 
 async function sendMessage() {
   const text = chatInput.value.trim();
   if (!text || S.sending) return;
-
   hideWelcome();
   addUserMessage(text);
   chatInput.value = '';
   chatInput.style.height = 'auto';
-
   S.sending = true;
   sendBtn.disabled = true;
   const typingEl = addTypingIndicator();
 
   try {
-    const body = {
-      message: text,
-      session_id: S.sessionId,
-      file_id: S.fileId || '',
-      context: '',
-    };
+    const body = { message: text, session_id: S.sessionId, file_id: S.fileId || '', context: '' };
     const r = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -548,21 +635,13 @@ async function sendMessage() {
     const data = await r.json();
     typingEl.remove();
 
-    // Update pipeline state
     if (data.pipeline) {
       S.pipeline = data.pipeline;
-      updatePipelineBanner(data.pipeline);
+      renderPipelineStages(data.pipeline);
     }
-
-    // Render response
     const html = renderResponse(data);
     addBotMessage(html);
-
-    // Handle downloadable files
-    if (data.files && data.files.length) {
-      addBotMessage(renderDownloads(data.files));
-    }
-
+    if (data.files && data.files.length) addBotMessage(renderDownloads(data.files));
   } catch (err) {
     typingEl.remove();
     addBotMessage(`<div class="error-block">Request failed: ${err.message}</div>`);
@@ -574,166 +653,488 @@ async function sendMessage() {
 }
 
 // ============================================================
+//  PIPELINE STAGE RENDERING
+// ============================================================
+function renderPipelineStages(pipeline) {
+  if (!pipeline || !pipeline.stages) return;
+  const section = $('#pipeline-section');
+  section.style.display = '';
+  chatArea.classList.remove('expanded');
+
+  const completedCount = Object.values(pipeline.stages).filter(s =>
+    s === 'approved' || s === 'corrected' || s === 'skipped'
+  ).length;
+  $('#pipeline-progress-text').textContent = `${completedCount} / ${STAGE_KEYS.length} stages`;
+
+  const container = $('#pipeline-stages');
+  container.innerHTML = '';
+
+  for (let i = 0; i < STAGE_KEYS.length; i++) {
+    const key = STAGE_KEYS[i];
+    const status = pipeline.stages[key] || 'pending';
+    const result = pipeline.results ? pipeline.results[key] : null;
+
+    if (status === 'pending' && !result) continue;
+
+    const card = document.createElement('div');
+    card.className = 'stage-card';
+    card.id = `stage-card-${key}`;
+
+    // Status class
+    if (status === 'approved' || status === 'corrected') card.classList.add('done');
+    else if (status === 'awaiting_approval') card.classList.add('active');
+    else if (status === 'running') card.classList.add('running');
+    else if (status === 'failed') card.classList.add('error');
+
+    // Auto-expand active stage
+    if (status === 'awaiting_approval' || S.expandedStages[key]) {
+      card.classList.add('expanded');
+      S.expandedStages[key] = true;
+    }
+
+    const badgeClass = status === 'approved' || status === 'corrected' ? 'badge-done'
+      : status === 'awaiting_approval' ? 'badge-awaiting'
+      : status === 'running' ? 'badge-running'
+      : status === 'failed' ? 'badge-error'
+      : 'badge-pending';
+
+    const badgeText = status === 'awaiting_approval' ? 'REVIEW'
+      : status === 'approved' ? 'DONE'
+      : status === 'corrected' ? 'CORRECTED'
+      : status.toUpperCase();
+
+    card.innerHTML = `
+      <div class="stage-card-header" onclick="toggleStage('${key}')">
+        <div class="stage-indicator">${i + 1}</div>
+        <div class="stage-name">${STAGE_LABELS[key]}</div>
+        <div class="stage-badge ${badgeClass}">${badgeText}</div>
+        <div class="stage-chevron">&#9654;</div>
+      </div>
+      <div class="stage-body" id="stage-body-${key}"></div>
+    `;
+    container.appendChild(card);
+
+    // Fill stage body
+    if (result) {
+      const body = card.querySelector('.stage-body');
+      renderStageBody(body, key, i, status, result, pipeline);
+    }
+  }
+  scrollToBottom();
+}
+
+function renderStageBody(body, key, stageNum, status, result, pipeline) {
+  let html = '';
+
+  // Summary
+  if (result.summary) {
+    html += `<div class="stage-summary">${esc(result.summary)}</div>`;
+  }
+
+  // Stage-specific content
+  const data = result.data || {};
+
+  if (key === 'parse') {
+    html += renderParseStage(data, pipeline);
+  } else if (key === 'data_source') {
+    if (status === 'awaiting_approval') {
+      html += renderDataSourceStage();
+    }
+  } else if (key === 'field_mapping') {
+    html += renderFieldMappingStage(data);
+  } else if (key === 'formula_trans') {
+    html += renderFormulaStage(data);
+  } else if (key === 'visual_mapping') {
+    html += renderVisualMappingStage(data);
+  } else if (key === 'generate') {
+    html += renderGenerateStage(data);
+  }
+
+  // QA Notes
+  if (result.qa_notes && result.qa_notes.length) {
+    html += '<div class="qa-block"><div class="qa-title">QA Notes</div>';
+    for (const note of result.qa_notes) {
+      html += `<div class="qa-item" style="color:var(--accent-gold)">${esc(note)}</div>`;
+    }
+    html += '</div>';
+  }
+
+  // Action buttons
+  if (status === 'awaiting_approval') {
+    html += `<div class="stage-actions">
+      <button class="stage-btn btn-approve" onclick="approveStage('${key}')">Approve & Continue</button>
+      <button class="stage-btn btn-rerun" onclick="rerunStage()">Re-run Stage</button>
+    </div>`;
+  }
+
+  body.innerHTML = html;
+}
+
+// --- PARSE STAGE ---
+function renderParseStage(data, pipeline) {
+  const spec = data.tableau_spec || pipeline.results?.parse?.data?.tableau_spec || {};
+  const worksheets = spec.worksheets || [];
+  if (!worksheets.length) return '';
+
+  let html = '<table class="stage-table"><tr><th>Worksheet</th><th>Mark Type</th><th>Fields</th></tr>';
+  for (let i = 0; i < worksheets.length; i++) {
+    const ws = worksheets[i];
+    const name = ws.name || `Worksheet ${i}`;
+    const mark = ws.mark_type || 'automatic';
+    const dims = (ws.dimensions || []).length;
+    const meas = (ws.measures || []).length;
+    const shelves = ws.shelves || {};
+    const fieldCount = dims + meas || Object.keys(shelves).length || 0;
+
+    html += `<tr>
+      <td style="color:var(--text-primary)">${esc(name)}</td>
+      <td><div class="editable-cell" onclick="editMarkType(${i}, '${esc(mark)}', '${esc(name)}')">
+        <span id="mark-${i}">${esc(mark)}</span>
+        <span class="edit-icon">&#9998;</span>
+      </div></td>
+      <td style="color:var(--text-secondary)">${fieldCount} fields</td>
+    </tr>`;
+  }
+  html += '</table>';
+  return html;
+}
+
+// --- DATA SOURCE ---
+function renderDataSourceStage() {
+  return `<div class="ds-cards">
+    <div class="ds-card" onclick="pickDataSource('synthetic')">
+      <div class="ds-card-title">Synthetic Data</div>
+      <div class="ds-card-sub">Auto-generate sample data</div>
+    </div>
+    <div class="ds-card" onclick="pickDataSource('upload')">
+      <div class="ds-card-title">Upload Excel/CSV</div>
+      <div class="ds-card-sub">Use your own data file</div>
+    </div>
+    <div class="ds-card" onclick="pickDataSource('database')">
+      <div class="ds-card-title">Database</div>
+      <div class="ds-card-sub">Snowflake, SQL Server, Postgres</div>
+    </div>
+    <div class="ds-card" onclick="pickDataSource('wireframe')">
+      <div class="ds-card-title">Wireframe Only</div>
+      <div class="ds-card-sub">No data -- structure only</div>
+    </div>
+  </div>`;
+}
+
+// --- FIELD MAPPING ---
+function renderFieldMappingStage(data) {
+  const config = data.config || {};
+  const fieldMap = data.field_map || {};
+  if (!Object.keys(fieldMap).length) {
+    const sections = config.report_layout?.sections || [];
+    const totalVisuals = sections.reduce((s, p) => s + (p.visualContainers || []).length, 0);
+    return `<p style="font-size:12px;color:var(--text-secondary)">${sections.length} pages, ${totalVisuals} visuals mapped.</p>`;
+  }
+  let html = '<table class="stage-table"><tr><th>Tableau Field</th><th>PBI Column</th><th>Type</th></tr>';
+  for (const [tab, pbi] of Object.entries(fieldMap)) {
+    html += `<tr>
+      <td style="color:var(--text-secondary)">${esc(tab)}</td>
+      <td style="color:var(--accent-green)">${esc(typeof pbi === 'string' ? pbi : pbi.name || tab)}</td>
+      <td style="color:var(--accent-gold);font-size:11px">${esc(typeof pbi === 'object' ? pbi.type || '' : '')}</td>
+    </tr>`;
+  }
+  html += '</table>';
+  return html;
+}
+
+// --- FORMULA TRANSLATION ---
+function renderFormulaStage(data) {
+  const translations = data.translations || [];
+  if (!translations.length) return '<p style="font-size:12px;color:var(--text-secondary)">No calculated fields to translate.</p>';
+
+  let html = '';
+  for (let i = 0; i < translations.length; i++) {
+    const t = translations[i];
+    const tier = t.tier || 'AUTO';
+    const name = t.name || `Formula ${i}`;
+    html += `<div class="dax-editor" id="dax-editor-${i}">
+      <div class="dax-editor-header">
+        <span>${esc(name)} <span class="tier-badge tier-${tier}">${tier}</span></span>
+        <div class="dax-editor-actions">
+          <button class="btn-small" onclick="editDaxFormula(${i})">Edit</button>
+        </div>
+      </div>
+      <div class="dax-display" id="dax-display-${i}">${esc(t.dax || t.dax_formula || '-- no translation --')}</div>
+    </div>`;
+    if (t.tableau_formula) {
+      html += `<div style="font-size:11px;color:var(--text-muted);margin:-4px 0 8px 12px;">Tableau: ${esc(t.tableau_formula)}</div>`;
+    }
+  }
+  return html;
+}
+
+// --- VISUAL MAPPING ---
+function renderVisualMappingStage(data) {
+  const visuals = data.visuals || [];
+  if (!visuals.length) return '';
+
+  let html = '<table class="stage-table"><tr><th>Worksheet</th><th>PBI Visual Type</th><th>Fields</th></tr>';
+  for (let i = 0; i < visuals.length; i++) {
+    const v = visuals[i];
+    html += `<tr>
+      <td style="color:var(--text-primary)">${esc(v.worksheet_name || v.name || `Visual ${i}`)}</td>
+      <td><div class="editable-cell" onclick="editVisualType(${i}, '${esc(v.pbi_type || '')}', '${esc(v.worksheet_name || '')}')">
+        <span id="vtype-${i}">${esc(v.pbi_type || 'auto')}</span>
+        <span class="edit-icon">&#9998;</span>
+      </div></td>
+      <td style="color:var(--text-secondary);font-size:11px">${(v.fields || []).length || '?'} fields</td>
+    </tr>`;
+  }
+  html += '</table>';
+  return html;
+}
+
+// --- GENERATE ---
+function renderGenerateStage(data) {
+  let html = '';
+
+  // Fidelity results
+  const fidelity = data.fidelity || data.fidelity_results || [];
+  if (fidelity.length) {
+    html += '<div class="vfe-grid">';
+    for (const f of fidelity) {
+      const passed = f.passed !== false;
+      html += `<div class="vfe-card ${passed ? 'pass' : 'fail'}">
+        <div class="vfe-card-title" style="color:${passed ? 'var(--accent-green)' : 'var(--accent-red)'}">
+          ${passed ? '&#10003;' : '&#10007;'} ${esc(f.visual_name || f.worksheet_name || 'Visual')}
+        </div>`;
+      if (f.checks) {
+        for (const [check, val] of Object.entries(f.checks)) {
+          html += `<div class="vfe-check ${val ? 'vfe-pass' : 'vfe-fail'}">
+            ${val ? '&#10003;' : '&#10007;'} ${esc(check)}
+          </div>`;
+        }
+      }
+      if (f.flags && f.flags.length) {
+        for (const flag of f.flags) {
+          html += `<div style="font-size:10px;color:var(--accent-gold);margin-top:4px">${esc(flag)}</div>`;
+        }
+      }
+      html += '</div>';
+    }
+    html += '</div>';
+  }
+
+  // Download link
+  if (data.zip_path) {
+    const fname = data.zip_path.split('/').pop();
+    html += `<div class="dl-buttons"><a class="dl-btn" href="/static/downloads/${esc(fname)}" download>Download PBIP Project</a></div>`;
+  }
+
+  return html;
+}
+
+// ============================================================
+//  INLINE EDITING
+// ============================================================
+window.toggleStage = function(key) {
+  const card = $(`#stage-card-${key}`);
+  if (!card) return;
+  card.classList.toggle('expanded');
+  S.expandedStages[key] = card.classList.contains('expanded');
+};
+
+window.editMarkType = function(idx, current, wsName) {
+  const span = $(`#mark-${idx}`);
+  if (!span) return;
+  const cell = span.parentElement;
+  cell.innerHTML = `<select class="inline-dropdown" onchange="saveMarkType(${idx}, '${esc(current)}', this.value, '${esc(wsName)}')">
+    ${MARK_TYPE_OPTIONS.map(o => `<option value="${o}" ${o === current ? 'selected' : ''}>${o}</option>`).join('')}
+  </select>`;
+  cell.querySelector('select').focus();
+};
+
+window.saveMarkType = function(idx, original, newVal, wsName) {
+  $(`#mark-${idx}`).parentElement.innerHTML = `
+    <span id="mark-${idx}">${esc(newVal)}</span>
+    <span class="edit-icon">&#9998;</span>`;
+  if (original !== newVal) {
+    submitCorrection('parse', `worksheets.${idx}.mark_type`, original, newVal, 'chart_type', wsName, original);
+  }
+};
+
+window.editVisualType = function(idx, current, wsName) {
+  const span = $(`#vtype-${idx}`);
+  if (!span) return;
+  const cell = span.parentElement;
+  cell.innerHTML = `<select class="inline-dropdown" onchange="saveVisualType(${idx}, '${esc(current)}', this.value, '${esc(wsName)}')">
+    ${PBI_VISUAL_OPTIONS.map(o => `<option value="${o}" ${o === current ? 'selected' : ''}>${o}</option>`).join('')}
+  </select>`;
+  cell.querySelector('select').focus();
+};
+
+window.saveVisualType = function(idx, original, newVal, wsName) {
+  $(`#vtype-${idx}`).parentElement.innerHTML = `
+    <span id="vtype-${idx}">${esc(newVal)}</span>
+    <span class="edit-icon">&#9998;</span>`;
+  if (original !== newVal) {
+    submitCorrection('visual_mapping', `visuals.${idx}.pbi_type`, original, newVal, 'chart_type', wsName, original);
+  }
+};
+
+window.editDaxFormula = function(idx) {
+  const display = $(`#dax-display-${idx}`);
+  const editor = $(`#dax-editor-${idx}`);
+  if (!display || !editor) return;
+  const code = display.textContent;
+  display.outerHTML = `<textarea class="dax-textarea" id="dax-textarea-${idx}">${esc(code)}</textarea>`;
+  const actions = editor.querySelector('.dax-editor-actions');
+  actions.innerHTML = `
+    <button class="btn-small save" onclick="saveDaxFormula(${idx}, '${esc(code).replace(/'/g, "\\'")}')">Save</button>
+    <button class="btn-small cancel" onclick="cancelDaxEdit(${idx}, '${esc(code).replace(/'/g, "\\'")}')">Cancel</button>`;
+  $(`#dax-textarea-${idx}`).focus();
+};
+
+window.saveDaxFormula = function(idx, original) {
+  const textarea = $(`#dax-textarea-${idx}`);
+  if (!textarea) return;
+  const newVal = textarea.value;
+  textarea.outerHTML = `<div class="dax-display" id="dax-display-${idx}">${esc(newVal)}</div>`;
+  const editor = $(`#dax-editor-${idx}`);
+  const actions = editor.querySelector('.dax-editor-actions');
+  actions.innerHTML = `<button class="btn-small" onclick="editDaxFormula(${idx})">Edit</button>`;
+  if (original !== newVal) {
+    const nameEl = editor.querySelector('.dax-editor-header span');
+    const name = nameEl ? nameEl.textContent.split(' ')[0] : `formula_${idx}`;
+    submitCorrection('formula_trans', `translations.${idx}.dax`, original, newVal, 'dax_formula', name, '');
+  }
+};
+
+window.cancelDaxEdit = function(idx, original) {
+  const textarea = $(`#dax-textarea-${idx}`);
+  if (!textarea) return;
+  textarea.outerHTML = `<div class="dax-display" id="dax-display-${idx}">${esc(original)}</div>`;
+  const editor = $(`#dax-editor-${idx}`);
+  const actions = editor.querySelector('.dax-editor-actions');
+  actions.innerHTML = `<button class="btn-small" onclick="editDaxFormula(${idx})">Edit</button>`;
+};
+
+// ============================================================
+//  CORRECTION SUBMISSION
+// ============================================================
+async function submitCorrection(stage, fieldPath, originalValue, correctedValue, correctionType, wsName, markType) {
+  try {
+    const r = await fetch(`/api/pipeline/${S.sessionId}/correct`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        stage: stage,
+        corrections: [{
+          field_path: fieldPath,
+          original_value: originalValue,
+          corrected_value: correctedValue,
+          correction_type: correctionType,
+          worksheet_name: wsName || '',
+          mark_type: markType || '',
+        }]
+      })
+    });
+    const data = await r.json();
+    S.correctionCount += 1;
+    const badge = $('#correction-badge');
+    badge.classList.add('visible');
+    $('#correction-count').textContent = S.correctionCount;
+
+    addBotMessage(`<p style="font-size:12px;color:var(--accent-green)">Correction stored. ${data.message || ''}</p>`);
+
+    if (data.stages) {
+      S.pipeline = data;
+      renderPipelineStages(data);
+    }
+  } catch (err) {
+    console.error('Correction failed:', err);
+  }
+}
+
+// ============================================================
+//  PIPELINE ACTIONS
+// ============================================================
+window.approveStage = async function(stageKey) {
+  addBotMessage(`<p style="font-size:12px;color:var(--text-secondary)">Approving ${STAGE_LABELS[stageKey] || stageKey}...</p>`);
+  const typingEl = addTypingIndicator();
+
+  try {
+    // Approve
+    await fetch(`/api/pipeline/${S.sessionId}/approve`, { method: 'POST' });
+    // Run next
+    const r = await fetch(`/api/pipeline/${S.sessionId}/run-next`, { method: 'POST' });
+    const data = await r.json();
+    typingEl.remove();
+
+    if (data.pipeline) {
+      S.pipeline = data.pipeline;
+      renderPipelineStages(data.pipeline);
+    } else if (data.stages) {
+      S.pipeline = data;
+      renderPipelineStages(data);
+    }
+
+    if (data.response) {
+      addBotMessage(renderTextWithMarkup(data.response));
+    }
+    if (data.files && data.files.length) {
+      addBotMessage(renderDownloads(data.files));
+    }
+  } catch (err) {
+    typingEl.remove();
+    addBotMessage(`<div class="error-block">Stage advance failed: ${err.message}</div>`);
+  }
+};
+
+window.rerunStage = async function() {
+  const typingEl = addTypingIndicator();
+  try {
+    const r = await fetch(`/api/pipeline/${S.sessionId}/run-next`, { method: 'POST' });
+    const data = await r.json();
+    typingEl.remove();
+    if (data.pipeline) { S.pipeline = data.pipeline; renderPipelineStages(data.pipeline); }
+    if (data.response) addBotMessage(renderTextWithMarkup(data.response));
+  } catch (err) {
+    typingEl.remove();
+    addBotMessage(`<div class="error-block">Re-run failed: ${err.message}</div>`);
+  }
+};
+
+window.pickDataSource = function(choice) {
+  sendChatMessage(choice);
+};
+
+// ============================================================
 //  RESPONSE RENDERER
 // ============================================================
 function renderResponse(data) {
   let text = data.response || '';
   const intent = data.intent || 'chat';
 
-  // Check for data_source choice stage
   if (text.toLowerCase().includes('data source') && S.pipeline && S.pipeline.current_stage === 'data_source') {
-    return renderTextWithMarkup(text) + renderDataSourceCards();
+    return renderTextWithMarkup(text);
   }
-
-  // Check for field mapping content
-  if (text.includes('|') && (text.includes('Tableau') || text.includes('Field') || text.includes('Power BI'))) {
-    return renderWithFieldTable(text);
-  }
-
-  // Check for QA content
-  if (intent === 'pipeline' && (text.toLowerCase().includes('qa') || text.toLowerCase().includes('validation') || text.toLowerCase().includes('quality'))) {
-    return renderWithQA(text);
-  }
-
-  // General: parse code blocks and render
   return renderTextWithMarkup(text);
 }
 
 function renderTextWithMarkup(text) {
-  // Split by code fences
   const parts = text.split(/(```[\s\S]*?```)/g);
   let html = '';
   for (const part of parts) {
     if (part.startsWith('```')) {
       const match = part.match(/```(\w*)\n?([\s\S]*?)```/);
       if (match) {
-        const lang = match[1] || 'dax';
         const code = match[2].trim();
-        html += renderDaxBlock(code, lang);
+        html += `<div style="margin:8px 0;padding:10px;background:#080818;border-radius:6px;border:1px solid var(--border);font-family:var(--font-mono);font-size:12px;line-height:1.5;white-space:pre-wrap;overflow-x:auto">${esc(code)}</div>`;
       }
     } else {
-      // Convert markdown-lite
-      let p = escapeHtml(part);
+      let p = esc(part);
       p = p.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-      p = p.replace(/`([^`]+)`/g, '<code style="background:var(--surface-3);padding:1px 5px;border-radius:3px;font-size:12px;">$1</code>');
+      p = p.replace(/`([^`]+)`/g, '<code>$1</code>');
       p = p.replace(/\n\n+/g, '</p><p>');
       p = p.replace(/\n/g, '<br>');
-      html += `<p>${p}</p>`;
+      if (p.trim()) html += `<p>${p}</p>`;
     }
-  }
-  return html;
-}
-
-function renderDaxBlock(code, lang, fieldName) {
-  const id = 'dax_' + Math.random().toString(36).slice(2, 8);
-  const label = lang.toUpperCase() || 'DAX';
-  const field = fieldName ? ` data-field="${escapeAttr(fieldName)}"` : '';
-  return `<div class="dax-block" id="${id}"${field}>
-    <div class="dax-header">
-      <span>${label}${fieldName ? ' — ' + escapeHtml(fieldName) : ''}</span>
-      <div class="dax-header-actions">
-        <button class="dax-btn copy-btn" onclick="copyDax('${id}')">Copy</button>
-        <button class="dax-btn edit-btn" onclick="editDax('${id}')">Edit</button>
-      </div>
-    </div>
-    <div class="dax-code">${escapeHtml(code)}</div>
-  </div>`;
-}
-
-function renderDataSourceCards() {
-  return `<div class="ds-cards">
-    <div class="ds-card" onclick="pickDataSource('synthetic')">
-      <div class="ds-card-icon">&#9881;</div>
-      <div class="ds-card-title">Synthetic Data</div>
-      <div class="ds-card-sub">Auto-generate sample data</div>
-    </div>
-    <div class="ds-card" onclick="pickDataSource('upload')">
-      <div class="ds-card-icon">&#8593;</div>
-      <div class="ds-card-title">Upload Excel/CSV</div>
-      <div class="ds-card-sub">Use your own data file</div>
-    </div>
-    <div class="ds-card" onclick="pickDataSource('database')">
-      <div class="ds-card-icon">&#9107;</div>
-      <div class="ds-card-title">Database</div>
-      <div class="ds-card-sub">Snowflake, SQL Server, Postgres</div>
-    </div>
-    <div class="ds-card" onclick="pickDataSource('wireframe')">
-      <div class="ds-card-icon">&#9634;</div>
-      <div class="ds-card-title">Wireframe Only</div>
-      <div class="ds-card-sub">No data — structure only</div>
-    </div>
-  </div>`;
-}
-
-function renderWithFieldTable(text) {
-  // Try to extract markdown table and render as styled table
-  const lines = text.split('\n');
-  let tableLines = [];
-  let before = [];
-  let after = [];
-  let inTable = false;
-  let pastTable = false;
-
-  for (const line of lines) {
-    if (!pastTable && line.trim().startsWith('|') && line.trim().endsWith('|')) {
-      inTable = true;
-      if (!line.match(/^\|[\s-:|]+\|$/)) tableLines.push(line);
-    } else {
-      if (inTable) { pastTable = true; inTable = false; }
-      if (pastTable) after.push(line); else before.push(line);
-    }
-  }
-
-  let html = before.length ? renderTextWithMarkup(before.join('\n')) : '';
-
-  if (tableLines.length) {
-    const headers = tableLines[0].split('|').filter(c => c.trim()).map(c => c.trim());
-    html += '<div class="field-table"><table><tr>';
-    for (const h of headers) html += `<th>${escapeHtml(h)}</th>`;
-    html += '<th>Actions</th></tr>';
-    for (let i = 1; i < tableLines.length; i++) {
-      const cells = tableLines[i].split('|').filter(c => c.trim()).map(c => c.trim());
-      html += '<tr>';
-      for (let j = 0; j < cells.length; j++) {
-        const cls = j === 0 ? 'col-tableau' : j === cells.length - 1 ? 'col-type' : 'col-pbi';
-        html += `<td class="${cls}">${escapeHtml(cells[j])}</td>`;
-      }
-      const fieldName = cells[0] || '';
-      html += `<td class="col-actions">
-        <button class="accept-btn" onclick="acceptField('${escapeAttr(fieldName)}')">Accept</button>
-        <button class="edit-field-btn" onclick="editField('${escapeAttr(fieldName)}')">Edit</button>
-      </td></tr>`;
-    }
-    html += '</table></div>';
-  }
-
-  if (after.length) html += renderTextWithMarkup(after.join('\n'));
-  return html;
-}
-
-function renderWithQA(text) {
-  // Parse QA pass/fail lines
-  const lines = text.split('\n');
-  let qaItems = [];
-  let otherLines = [];
-  for (const line of lines) {
-    const pass = line.match(/[✓✅☑]\s*(.*)/);
-    const fail = line.match(/[✗❌☒✘]\s*(.*)/);
-    const warn = line.match(/[⚠⚡]\s*(.*)/);
-    if (pass) qaItems.push({ status: 'pass', text: pass[1] });
-    else if (fail) qaItems.push({ status: 'fail', text: fail[1] });
-    else if (warn) qaItems.push({ status: 'warn', text: warn[1] });
-    else otherLines.push(line);
-  }
-
-  let html = renderTextWithMarkup(otherLines.join('\n'));
-  if (qaItems.length) {
-    html += '<div class="qa-block"><div class="qa-title">QA Validation</div>';
-    for (const item of qaItems) {
-      const icon = item.status === 'pass' ? '&#10003;' : item.status === 'fail' ? '&#10007;' : '&#9888;';
-      html += `<div class="qa-item qa-${item.status}">${icon} ${escapeHtml(item.text)}</div>`;
-    }
-    html += '</div>';
   }
   return html;
 }
@@ -741,83 +1142,10 @@ function renderWithQA(text) {
 function renderDownloads(files) {
   let html = '<div class="dl-buttons">';
   for (const f of files) {
-    const name = f.filename || f.name || 'Download';
-    const url = f.url || f.path || '#';
-    html += `<a class="dl-btn" href="${escapeAttr(url)}" download>&#8615; ${escapeHtml(name)}</a>`;
+    html += `<a class="dl-btn" href="${esc(f.url || f.path || '#')}" download>${esc(f.filename || f.name || 'Download')}</a>`;
   }
-  html += '</div>';
-  return html;
+  return html + '</div>';
 }
-
-// ============================================================
-//  DAX EDITING
-// ============================================================
-window.copyDax = function(id) {
-  const el = document.querySelector(`#${id} .dax-code`);
-  if (el) navigator.clipboard.writeText(el.textContent);
-};
-
-window.editDax = function(id) {
-  const block = document.getElementById(id);
-  const codeEl = block.querySelector('.dax-code');
-  const code = codeEl.textContent;
-  const field = block.dataset.field || '';
-
-  codeEl.innerHTML = `<textarea class="dax-edit-area">${escapeHtml(code)}</textarea>`;
-
-  const actions = block.querySelector('.dax-header-actions');
-  actions.innerHTML = `
-    <button class="dax-btn save-btn" onclick="saveDax('${id}','${escapeAttr(field)}')">Save</button>
-    <button class="dax-btn cancel-btn" onclick="cancelDax('${id}','${escapeAttr(escapeHtml(code))}')">Cancel</button>`;
-
-  block.querySelector('.dax-edit-area').focus();
-};
-
-window.saveDax = function(id, fieldName) {
-  const block = document.getElementById(id);
-  const textarea = block.querySelector('.dax-edit-area');
-  const newCode = textarea.value;
-
-  // Restore display
-  const codeEl = block.querySelector('.dax-code');
-  codeEl.textContent = newCode;
-  const actions = block.querySelector('.dax-header-actions');
-  actions.innerHTML = `
-    <button class="dax-btn copy-btn" onclick="copyDax('${id}')">Copy</button>
-    <button class="dax-btn edit-btn" onclick="editDax('${id}')">Edit</button>`;
-
-  // Send correction via chat
-  const msg = fieldName
-    ? `EDIT_FORMULA:${fieldName}:${newCode}`
-    : `EDIT_DAX:${newCode}`;
-  sendChatMessage(msg);
-};
-
-window.cancelDax = function(id, origCode) {
-  const block = document.getElementById(id);
-  block.querySelector('.dax-code').textContent = origCode;
-  const actions = block.querySelector('.dax-header-actions');
-  actions.innerHTML = `
-    <button class="dax-btn copy-btn" onclick="copyDax('${id}')">Copy</button>
-    <button class="dax-btn edit-btn" onclick="editDax('${id}')">Edit</button>`;
-};
-
-// ============================================================
-//  DATA SOURCE + FIELD ACTIONS
-// ============================================================
-window.pickDataSource = function(choice) {
-  sendChatMessage(`DATA_SOURCE:${choice}`);
-};
-
-window.acceptField = function(name) {
-  // Visual feedback — could also send to backend
-  addBotMessage(`<p style="font-size:13px;color:var(--green)">&#10003; Field <strong>${escapeHtml(name)}</strong> accepted.</p>`);
-};
-
-window.editField = function(name) {
-  chatInput.value = `EDIT_FORMULA:${name}:`;
-  chatInput.focus();
-};
 
 // ============================================================
 //  CHAT HELPERS
@@ -830,9 +1158,9 @@ function sendChatMessage(text) {
 function addUserMessage(text) {
   const div = document.createElement('div');
   div.className = 'msg user';
-  div.innerHTML = `<div class="msg-avatar">Y</div><div class="msg-body">${escapeHtml(text)}</div>`;
+  div.innerHTML = `<div class="msg-avatar">Y</div><div class="msg-body">${esc(text)}</div>`;
   chatArea.appendChild(div);
-  scrollBottom();
+  scrollToBottom();
 }
 
 function addBotMessage(html) {
@@ -840,7 +1168,7 @@ function addBotMessage(html) {
   div.className = 'msg bot';
   div.innerHTML = `<div class="msg-avatar">D</div><div class="msg-body">${html}</div>`;
   chatArea.appendChild(div);
-  scrollBottom();
+  scrollToBottom();
 }
 
 function addTypingIndicator() {
@@ -848,53 +1176,22 @@ function addTypingIndicator() {
   div.className = 'msg bot';
   div.innerHTML = `<div class="msg-avatar">D</div><div class="msg-body"><div class="typing"><span></span><span></span><span></span></div></div>`;
   chatArea.appendChild(div);
-  scrollBottom();
+  scrollToBottom();
   return div;
 }
 
-function hideWelcome() {
-  if (welcome) welcome.style.display = 'none';
-}
+function hideWelcome() { if (welcome) welcome.style.display = 'none'; }
 
-function scrollBottom() {
-  requestAnimationFrame(() => { chatArea.scrollTop = chatArea.scrollHeight; });
-}
-
-// ============================================================
-//  PIPELINE BANNER
-// ============================================================
-const PIPELINE_STAGES = ['parse', 'data_source', 'field_mapping', 'dax_translation', 'visual_mapping', 'qa', 'build'];
-
-function updatePipelineBanner(p) {
-  if (!p) return;
-  const banner = $('#pipeline-banner');
-  banner.classList.remove('hidden');
-  $('#pipeline-stage').textContent = (p.current_stage || 'complete').replace('_', ' ');
-
-  const dotsEl = $('#pipeline-dots');
-  dotsEl.innerHTML = '';
-  const completed = p.completed_stages || [];
-  for (const stage of PIPELINE_STAGES) {
-    const dot = document.createElement('div');
-    dot.className = 'pipeline-dot';
-    dot.title = stage.replace('_', ' ');
-    if (completed.includes(stage)) dot.classList.add('done');
-    else if (stage === p.current_stage) dot.classList.add('active');
-    dotsEl.appendChild(dot);
-  }
+function scrollToBottom() {
+  requestAnimationFrame(() => { mainContent.scrollTop = mainContent.scrollHeight; });
 }
 
 // ============================================================
 //  UTILITIES
 // ============================================================
-function escapeHtml(s) {
+function esc(s) {
   if (!s) return '';
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
-function escapeAttr(s) {
-  if (!s) return '';
-  return s.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 function formatBytes(b) {
@@ -902,6 +1199,19 @@ function formatBytes(b) {
   if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
   return (b/1048576).toFixed(1) + ' MB';
 }
+
+// Load correction stats on init
+(async function() {
+  try {
+    const r = await fetch('/api/corrections/stats');
+    const data = await r.json();
+    if (data.total > 0) {
+      S.correctionCount = data.total;
+      $('#correction-badge').classList.add('visible');
+      $('#correction-count').textContent = data.total;
+    }
+  } catch {}
+})();
 </script>
 </body>
 </html>

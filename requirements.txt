@@ -39,3 +39,9 @@ pydot>=1.4.2
 altair>=5.2.0
 seaborn>=0.13.0
 defusedxml>=0.7.0
+
+# Visual Fidelity Engine (VFE) -- 5-layer deterministic comparison
+opencv-python>=4.8.0
+scikit-image>=0.22.0
+imagehash>=4.3.0
+Pillow>=10.0.0

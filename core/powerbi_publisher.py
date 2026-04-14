@@ -353,24 +353,28 @@ def publish_pbip(
     sm_id = sm_result.get("id", "")
     print(f"[PBI-PUBLISH] SemanticModel ID: {sm_id}")
 
-    # Step 2: Rewrite definition.pbir to use byConnection (API requires this
-    # instead of byPath which only works in git-integrated projects)
+    # Step 2: Rewrite definition.pbir to V4 byConnection format.
+    # The Fabric Items API requires byConnection (byPath only works in
+    # git-integrated workspaces). We use the XMLA connectionString format
+    # which is the only format Fabric accepts for API-published reports.
+    # Missing $schema or using the old pbiModelVirtualServerName format causes
+    # Fabric to fail silently — pages publish but visuals show as 0.
+    sm_name = sm_result.get("displayName", display_name)
+    conn_str = (
+        f"powerbi://api.powerbi.com/v1.0/myorg/{workspace_id}"
+        f";initial catalog={sm_name}"
+        f";semanticModelId={sm_id}"
+    )
     pbir_override = json.dumps({
+        "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definitionProperties/2.0.0/schema.json",
         "version": "4.0",
         "datasetReference": {
-            "byConnection": {
-                "connectionString": None,
-                "pbiServiceModelId": None,
-                "pbiModelVirtualServerName": "sobe_wowvirtualserver",
-                "pbiModelDatabaseName": sm_id,
-                "name": "EntityDataSource",
-                "connectionType": "pbiServiceXmlaStyleLive",
-            },
             "byPath": None,
+            "byConnection": {"connectionString": conn_str},
         },
     }, indent=2).encode("utf-8")
     rpt_overrides = {"definition.pbir": pbir_override}
-    print(f"[PBI-PUBLISH] Rewrote definition.pbir to reference SM {sm_id} via byConnection")
+    print(f"[PBI-PUBLISH] Rewrote definition.pbir to reference SM {sm_id} via byConnection (V4 XMLA)")
 
     # Step 3: Publish report
     rpt_result = _publish_item(token, workspace_id, display_name,

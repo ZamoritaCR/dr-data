@@ -142,6 +142,18 @@ def run_field_mapping(tableau_spec: dict, data_profile: dict,
             "summary": str,
         }
     """
+    # -- Learning: apply past chart_type corrections before mapping --
+    try:
+        from core.correction_store import lookup_corrections
+        for ws in tableau_spec.get("worksheets", []):
+            mark = ws.get("mark_type", "automatic")
+            past = lookup_corrections("chart_type", mark_type=mark)
+            if past:
+                ws["_corrected_chart_type"] = past[0]["corrected_value"]
+                logger.info(f"[LEARNING] Applied past correction for '{mark}': {past[0]['corrected_value']}")
+    except Exception as e:
+        logger.debug(f"[LEARNING] Correction lookup skipped: {e}")
+
     from core.direct_mapper import build_pbip_config_from_tableau
 
     config, dspec = build_pbip_config_from_tableau(
@@ -200,10 +212,35 @@ def run_formula_translation(calc_fields: list, tableau_spec: dict,
     translations = []
     review_needed = []
 
+    # -- Learning: pre-load past DAX corrections --
+    dax_corrections = {}
+    try:
+        from core.correction_store import lookup_corrections
+        past_dax = lookup_corrections("dax_formula", limit=50)
+        for pc in past_dax:
+            dax_corrections[pc.get("field_path", "")] = pc.get("corrected_value", "")
+    except Exception:
+        pass
+
     for cf in calc_fields:
         name = cf.get("name", "")
         formula = cf.get("formula", "")
         if not formula:
+            continue
+
+        # Check if we have a past analyst-corrected DAX for this field
+        pre_corrected = dax_corrections.get(name, "")
+        if pre_corrected:
+            logger.info(f"[LEARNING] Using past correction for '{name}'")
+            entry = {
+                "name": name,
+                "tableau_formula": formula[:200],
+                "dax": pre_corrected,
+                "tier": "GOOD",
+                "confidence": 0.95,
+                "notes": "Used analyst-corrected DAX from past session",
+            }
+            translations.append(entry)
             continue
 
         result = transpiler.transpile(formula)
@@ -468,6 +505,22 @@ def run_generate(config: dict, data_profile: dict, dashboard_spec: dict,
             fidelity_report_md = checker.generate_fidelity_report(fidelity_results)
 
             failed_visuals = [r for r in fidelity_results if not r.passed]
+
+            # -- Learning: annotate failed visuals with past corrections --
+            try:
+                from core.correction_store import lookup_corrections
+                for r in fidelity_results:
+                    if not r.passed and getattr(r, 'expected_chart_type', None):
+                        past = lookup_corrections("chart_type", mark_type=r.expected_chart_type)
+                        if past:
+                            r.flags = getattr(r, 'flags', [])
+                            r.flags.append(
+                                f"NOTE: Past correction exists -- analysts changed "
+                                f"'{r.expected_chart_type}' to '{past[0]['corrected_value']}' before"
+                            )
+            except Exception:
+                pass
+
             qa_lines = []
             for r in fidelity_results:
                 checks = []

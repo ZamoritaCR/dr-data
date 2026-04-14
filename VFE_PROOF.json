@@ -1,18 +1,11 @@
 {
-  "composite": 0.754,
-  "verdict": "PASS",
+  "composite": 0.7373,
   "scores": {
-    "ssim": 0.7469,
+    "ssim": 0.6992,
     "phash": 0.7188,
     "histogram": 0.6764,
     "orb": 1.0,
     "pixel": 0.6354
   },
-  "raw": {
-    "ssim": 0.7469,
-    "phash_dist": 18,
-    "histogram": 0.6764,
-    "orb_matches": 171,
-    "pixel_diff_ratio": 0.3646
-  }
+  "libraries": "ALL 5 OK"
 }

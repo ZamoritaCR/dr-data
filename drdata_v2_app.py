@@ -1276,12 +1276,22 @@ def _run_pipeline(job_id: str, file_id: str, q):
         )
         pbip_path = gen_result["path"]
         file_count = gen_result.get("file_count", 0)
+        filters_applied = False
+        try:
+            for visual_path in Path(pbip_path).rglob("visual.json"):
+                with open(visual_path, "r", encoding="utf-8") as vf:
+                    visual_doc = json.load(vf)
+                if visual_doc.get("filterConfig", {}).get("filters"):
+                    filters_applied = True
+                    break
+        except Exception as filter_err:
+            logger.warning(f"Filter detection (non-fatal): {filter_err}")
 
         _emit_logged(
             "build", "complete",
             f"{file_count} files generated",
-            output_data={"pbip_path": pbip_path, "file_count": file_count},
-            pbip_path=pbip_path, file_count=file_count,
+            output_data={"pbip_path": pbip_path, "file_count": file_count, "filters_applied": filters_applied},
+            pbip_path=pbip_path, file_count=file_count, filters_applied=filters_applied,
         )
 
         # ---- PHASE: VALIDATE ----
@@ -1429,6 +1439,7 @@ def _run_pipeline(job_id: str, file_id: str, q):
             "fidelity": fidelity,
             "pbip_path": pbip_path,
             "file_count": file_count,
+            "filters_applied": filters_applied,
             "worksheets": ws_names,
             "dashboards": db_names,
             "rows": len(df),

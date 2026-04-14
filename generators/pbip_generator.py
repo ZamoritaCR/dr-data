@@ -753,7 +753,8 @@ class PBIPGenerator:
         # objects can cause visuals to render as blank if the format is not
         # exactly what PBI expects for each visual type.
 
-        # Write PBI filter blocks from Tableau filter_values
+        # Write PBIR visual-level filters from Tableau filter_values.
+        # Fabric rejects the older query.filterState payload during publish.
         filter_values = cfg_obj.get("filter_values", [])
         if filter_values and profile_col_names:
             # Find the most likely filter field: first dimension in the visual
@@ -769,26 +770,50 @@ class PBIPGenerator:
                 if dims:
                     filter_field = dims[0]
             if filter_field and filter_field in (profile_col_names | measure_names):
+                value_literals = []
+                for value in filter_values[:10]:
+                    if isinstance(value, bool):
+                        literal = "true" if value else "false"
+                    elif isinstance(value, (int, float)) and not isinstance(value, bool):
+                        literal = str(value)
+                    else:
+                        escaped = str(value).replace("'", "''")
+                        literal = f"'{escaped}'"
+                    value_literals.append([{"Literal": {"Value": literal}}])
+
                 pbi_filter = {
-                    "type": "categorical",
+                    "name": f"visualFilter_{viz_id}_{filter_field}",
                     "displayName": filter_field,
-                    "howCreated": 0,
+                    "field": {
+                        "Column": {
+                            "Expression": {"SourceRef": {"Entity": table_name}},
+                            "Property": filter_field,
+                        }
+                    },
+                    "type": "Categorical",
+                    "howCreated": "User",
                     "isHiddenInViewMode": False,
+                    "isLockedInViewMode": False,
                     "filter": {
                         "Version": 2,
                         "From": [{"Name": "d", "Entity": table_name, "Type": 0}],
                         "Where": [{
                             "Condition": {
                                 "In": {
-                                    "Expressions": [{"Column": {"Expression": {"SourceRef": {"Source": "d"}}, "Property": filter_field}}],
-                                    "Values": [[{"Literal": {"Value": f"'{v}'"}}] for v in filter_values[:10]],
+                                    "Expressions": [{
+                                        "Column": {
+                                            "Expression": {"SourceRef": {"Source": "d"}},
+                                            "Property": filter_field,
+                                        }
+                                    }],
+                                    "Values": value_literals,
                                 }
                             }
                         }],
                     },
                 }
-                doc["visual"]["query"]["filterState"] = {
-                    f"f_{filter_field}": pbi_filter,
+                doc["filterConfig"] = {
+                    "filters": [pbi_filter],
                 }
 
         # Validate & fix all field references against real column names

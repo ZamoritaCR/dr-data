@@ -264,10 +264,13 @@ def run_formula_translation(calc_fields: list, tableau_spec: dict,
             "notes": "; ".join(result.get("warnings", [])),
         }
         translations.append(entry)
-        if tier in ("REVIEW", "BLOCKED"):
+        # Route to multi-brain: REVIEW/BLOCKED OR complex formula patterns
+        _COMPLEX_PATTERNS = ("IF ", "CASE ", "DATEPART(", "FIXED", "WINDOW_", "LOOKUP(", "RUNNING_")
+        is_complex = any(p in formula.upper() for p in _COMPLEX_PATTERNS)
+        if tier in ("REVIEW", "BLOCKED") or (is_complex and tier != "AUTO"):
             review_needed.append(entry)
 
-    # ── Multi-brain consensus for REVIEW/BLOCKED formulas ──
+    # ── Multi-brain consensus for REVIEW/BLOCKED/complex formulas ──
     if review_needed:
         try:
             from core.multi_brain import MultiBrainEngine

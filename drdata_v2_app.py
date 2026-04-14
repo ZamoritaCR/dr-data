@@ -180,13 +180,50 @@ async def upload_file(file: UploadFile = File(...)):
 
     threading.Thread(target=_bg_analyze, args=(file_id, str(dest_path)), daemon=True).start()
 
-    return {
+    # Check for existing session with this file (session persistence)
+    resumable = False
+    resume_session_id = None
+    try:
+        from core.correction_store import load_session
+        # Use file_id as lookup key -- also check any pipeline that used this filename
+        for sid, ps in _pipelines.items():
+            if ps.workbook_name == file.filename:
+                resumable = True
+                resume_session_id = sid
+                break
+        # Also check Supabase for persisted sessions
+        if not resumable:
+            # Try to find a session with this filename
+            from core.correction_store import _get_client
+            client = _get_client()
+            if client:
+                try:
+                    result = client.table("drdata_sessions") \
+                        .select("session_id, current_stage") \
+                        .eq("twbx_filename", file.filename) \
+                        .order("updated_at", desc=True) \
+                        .limit(1) \
+                        .execute()
+                    if result.data:
+                        resumable = True
+                        resume_session_id = result.data[0]["session_id"]
+                except Exception:
+                    pass
+    except Exception as e:
+        logger.debug(f"Session check: {e}")
+
+    resp = {
         "file_id": file_id,
         "filename": file.filename,
         "size": len(content_bytes),
         "analysis": f"Uploaded {file.filename}. {file_info.get('worksheets',0)} worksheets, {file_info.get('dashboards',0)} dashboards, {file_info.get('calc_fields',0)} calculated fields detected.",
         "file_info": file_info,
     }
+    if resumable and resume_session_id:
+        resp["resumable"] = True
+        resp["resume_session_id"] = resume_session_id
+        resp["analysis"] += " I found a previous session for this file -- you can resume where you left off."
+    return resp
 
 
 @app.post("/api/process/{file_id}")
@@ -978,14 +1015,48 @@ def _sync_run_next(session_id: str) -> dict:
     except Exception as e:
         logger.exception(f"Stage {stage} failed")
         ps.fail_stage(stage, str(e)[:500])
+        _persist_session(session_id, ps)
         return {"response": f"Stage {stage} failed: {str(e)[:300]}", "pipeline": ps.to_dict(), "files": [], "intent": "error"}
 
+    _persist_session(session_id, ps)
     return {
         "response": ps.format_stage_summary_for_chat(stage),
         "pipeline": ps.to_dict(),
         "files": [],
         "intent": "pipeline",
     }
+
+
+def _persist_session(session_id: str, ps):
+    """Save pipeline state to Supabase after each stage."""
+    try:
+        from core.correction_store import save_session
+        # Serialize context, excluding non-serializable items (dataframe)
+        ctx = {}
+        for k, v in ps.context.items():
+            if k == "dataframe":
+                continue  # DataFrames are too large / not JSON-serializable
+            try:
+                json.dumps(v)
+                ctx[k] = v
+            except (TypeError, ValueError):
+                pass
+
+        save_session(session_id, {
+            "twbx_filename": ps.workbook_name,
+            "tableau_spec": ctx.get("tableau_spec", {}),
+            "pipeline_state": {
+                "stages": {k: v.value for k, v in ps.stages.items()},
+                "current_stage": ps.current_stage,
+                "current_stage_index": ps.current_stage_index,
+            },
+            "current_stage": ps.current_stage_index,
+            "config": ctx.get("config", {}),
+            "data_profile": ctx.get("data_profile", {}),
+            "translations": ctx.get("formula_translations", {}),
+        })
+    except Exception as e:
+        logger.debug(f"Session persist: {e}")
 
 
 def _serve_downloads(downloads: list) -> list:

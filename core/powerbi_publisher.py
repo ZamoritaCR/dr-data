@@ -13,6 +13,7 @@ Credentials loaded from ~/.env.drdata (chmod 600, never committed to git).
 
 import base64
 import json
+import logging
 import os
 import time
 import requests
@@ -21,6 +22,8 @@ from typing import Dict, List, Optional, Tuple
 
 import msal
 from dotenv import load_dotenv
+
+logger = logging.getLogger("drdata-v2.powerbi_publisher")
 
 
 # ------------------------------------------------------------------ #
@@ -304,6 +307,7 @@ def publish_pbip(
     workspace_id: str,
     pbip_folder_path: str,
     display_name: str,
+    proof_output_dir: Optional[str] = None,
 ) -> Dict:
     """Publish a complete PBIP project to a Power BI workspace.
 
@@ -317,7 +321,7 @@ def publish_pbip(
         display_name: Name for the published items
 
     Returns:
-        Dict with semantic_model, report, and report_url keys.
+        Dict with semantic_model, report, report_url, and render proof fields.
         On error, returns dict with "error" key.
     """
     project = Path(pbip_folder_path)
@@ -381,6 +385,10 @@ def publish_pbip(
 
     rpt_id = rpt_result.get("id", "")
     report_url = f"https://app.powerbi.com/groups/{workspace_id}/reports/{rpt_id}"
+    embed_url = (
+        f"https://app.powerbi.com/reportEmbed"
+        f"?reportId={rpt_id}&groupId={workspace_id}"
+    )
 
     print(f"[PBI-PUBLISH] Report ID: {rpt_id}")
     print(f"[PBI-PUBLISH] Report URL: {report_url}")
@@ -389,13 +397,227 @@ def publish_pbip(
     if sm_id:
         _refresh_dataset(workspace_id, sm_id)
 
+    render_result = {
+        "render_proof": "",
+        "render_proof_method": "",
+        "render_proof_status": "not_attempted",
+        "render_proof_error": "",
+    }
+    if rpt_id:
+        render_result = _capture_render_proof(
+            workspace_id=workspace_id,
+            report_id=rpt_id,
+            output_dir=proof_output_dir,
+            embed_url=embed_url,
+        )
+
     return {
         "semantic_model": sm_result,
         "report": rpt_result,
         "semantic_model_id": sm_id,
         "report_id": rpt_id,
         "report_url": report_url,
+        "embed_url": embed_url,
+        **render_result,
     }
+
+
+def _capture_render_proof(
+    workspace_id: str,
+    report_id: str,
+    output_dir: Optional[str] = None,
+    embed_url: str = "",
+) -> Dict[str, str]:
+    """Capture a first-page PNG render proof after publish.
+
+    Attempts Power BI ExportTo first. If the export call returns 403,
+    falls back to a headless Playwright screenshot of the embed URL.
+    """
+    proof_dir = Path(output_dir or (Path.cwd() / "output" / report_id))
+    proof_dir.mkdir(parents=True, exist_ok=True)
+    png_path = proof_dir / "pbi_render_page1.png"
+
+    try:
+        pbi_token = get_access_token(PBI_SCOPE)
+    except Exception as exc:
+        logger.warning("PBI scope token failed for render proof: %s", exc)
+        return {
+            "render_proof": "",
+            "render_proof_method": "",
+            "render_proof_status": "failed",
+            "render_proof_error": f"PBI token error: {str(exc)[:300]}",
+        }
+
+    export_result = _export_first_page_png(
+        pbi_token=pbi_token,
+        workspace_id=workspace_id,
+        report_id=report_id,
+        output_path=str(png_path),
+    )
+    if export_result.get("ok"):
+        logger.info("Render proof captured via ExportTo: %s", png_path)
+        return {
+            "render_proof": str(png_path),
+            "render_proof_method": "export_api",
+            "render_proof_status": "succeeded",
+            "render_proof_error": "",
+        }
+
+    export_error = export_result.get("error", "export_failed")
+    if export_result.get("status_code") == 403 and embed_url:
+        screenshot_result = _capture_playwright_embed_screenshot(
+            embed_url=embed_url,
+            output_path=str(png_path),
+            access_token=pbi_token,
+        )
+        if screenshot_result.get("ok"):
+            logger.info("Render proof captured via Playwright: %s", png_path)
+            return {
+                "render_proof": str(png_path),
+                "render_proof_method": "playwright",
+                "render_proof_status": "succeeded",
+                "render_proof_error": "",
+            }
+        export_error = (
+            f"ExportTo 403; Playwright fallback failed: "
+            f"{screenshot_result.get('error', 'unknown_error')}"
+        )
+
+    logger.warning("Render proof capture failed: %s", export_error)
+    return {
+        "render_proof": "",
+        "render_proof_method": "",
+        "render_proof_status": "failed",
+        "render_proof_error": str(export_error)[:500],
+    }
+
+
+def _export_first_page_png(
+    pbi_token: str,
+    workspace_id: str,
+    report_id: str,
+    output_path: str,
+    max_wait_s: int = 180,
+) -> Dict[str, object]:
+    """Export the first report page to PNG via the Power BI Export API."""
+    headers = {
+        "Authorization": f"Bearer {pbi_token}",
+        "Content-Type": "application/json",
+    }
+
+    page_name = ""
+    try:
+        pages = get_report_pages(pbi_token, workspace_id, report_id)
+        if pages:
+            page_name = pages[0].get("name", "")
+    except Exception as exc:
+        logger.warning("Could not resolve first page name for export: %s", exc)
+
+    body = {"format": "PNG"}
+    if page_name:
+        body["powerBIReportConfiguration"] = {
+            "pages": [{"pageName": page_name}]
+        }
+
+    export_url = (
+        f"{PBI_API}/groups/{workspace_id}/reports/{report_id}/ExportTo"
+    )
+    try:
+        resp = requests.post(export_url, headers=headers, json=body, timeout=60)
+    except Exception as exc:
+        return {"ok": False, "error": f"export request failed: {exc}"}
+
+    if resp.status_code == 403:
+        return {
+            "ok": False,
+            "error": f"export forbidden: {resp.text[:300]}",
+            "status_code": 403,
+        }
+    if resp.status_code not in (200, 202):
+        return {
+            "ok": False,
+            "error": f"export failed: {resp.status_code} {resp.text[:300]}",
+            "status_code": resp.status_code,
+        }
+
+    if resp.status_code == 200:
+        Path(output_path).write_bytes(resp.content)
+        return {"ok": True, "path": output_path}
+
+    export_id = resp.json().get("id", "")
+    if not export_id:
+        return {"ok": False, "error": "export accepted without export id"}
+
+    status_url = (
+        f"{PBI_API}/groups/{workspace_id}/reports/{report_id}/exports/{export_id}"
+    )
+    deadline = time.time() + max_wait_s
+    while time.time() < deadline:
+        time.sleep(5)
+        try:
+            status_resp = requests.get(status_url, headers=headers, timeout=30)
+        except Exception as exc:
+            return {"ok": False, "error": f"status polling failed: {exc}"}
+
+        if status_resp.status_code not in (200, 202):
+            return {
+                "ok": False,
+                "error": f"status failed: {status_resp.status_code} {status_resp.text[:300]}",
+                "status_code": status_resp.status_code,
+            }
+
+        export_state = status_resp.json()
+        status = export_state.get("status", "")
+        if status == "Succeeded":
+            file_url = f"{status_url}/file"
+            file_resp = requests.get(file_url, headers=headers, timeout=60)
+            if file_resp.status_code != 200:
+                return {
+                    "ok": False,
+                    "error": f"file download failed: {file_resp.status_code} {file_resp.text[:300]}",
+                    "status_code": file_resp.status_code,
+                }
+            Path(output_path).write_bytes(file_resp.content)
+            return {"ok": True, "path": output_path}
+        if status == "Failed":
+            return {
+                "ok": False,
+                "error": f"export failed: {json.dumps(export_state)[:300]}",
+            }
+
+    return {"ok": False, "error": f"export timed out after {max_wait_s}s"}
+
+
+def _capture_playwright_embed_screenshot(
+    embed_url: str,
+    output_path: str,
+    access_token: str = "",
+) -> Dict[str, object]:
+    """Capture a screenshot of the Power BI embed URL."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception as exc:
+        return {"ok": False, "error": f"Playwright unavailable: {exc}"}
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(
+                viewport={"width": 1600, "height": 900},
+                ignore_https_errors=True,
+            )
+            if access_token:
+                context.set_extra_http_headers(
+                    {"Authorization": f"Bearer {access_token}"}
+                )
+            page = context.new_page()
+            page.goto(embed_url, wait_until="networkidle", timeout=120000)
+            page.wait_for_timeout(8000)
+            page.screenshot(path=output_path, full_page=False)
+            browser.close()
+        return {"ok": True, "path": output_path}
+    except Exception as exc:
+        return {"ok": False, "error": f"screenshot failed: {exc}"}
 
 
 # ------------------------------------------------------------------ #

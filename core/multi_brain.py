@@ -199,10 +199,9 @@ def _call_gemini(model: str, prompt: str) -> dict:
         return {"error": "GEMINI_API_KEY not set", "dax": "", "confidence": 0.0, "_model": model}
     start = time.time()
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        m = genai.GenerativeModel(model)
-        response = m.generate_content(prompt)
+        from google import genai
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(model=model, contents=prompt)
         result = _extract_json(response.text)
         result["_latency_s"] = round(time.time() - start, 1)
         result["_model"] = model

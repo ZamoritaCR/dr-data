@@ -1,15 +1,18 @@
 """
 Multi-brain consensus engine for DAX formula validation.
-Dispatches the same Tableau formula to 5 LLMs, compares outputs,
-and synthesizes a consensus DAX translation via Claude Opus judgment.
+7+ LLMs across 3 tiers. Claude Opus judges all outputs.
 
-Execution order (CLAUDE.md canon):
-  1. Free Ollama brains draft (qwen2.5-coder, deepseek-coder-v2, phi4)
-  2. Paid brains if API keys present (Claude Opus, GPT-4o)
-  3. Claude Opus judges all outputs, synthesizes best DAX
+Tier 1 - FREE LOCAL (Ollama, sequential for RAM):
+    deepseek-coder-v2, qwen2.5-coder, phi4, llama3.1:8b
+Tier 2 - CHEAP API (parallel, network-bound):
+    Gemini 2.5 Flash, Grok 3 Fast
+Tier 3 - PREMIUM API (parallel, network-bound):
+    Claude Opus 4.6, GPT-4o, Gemini 2.5 Pro
+Judge: Claude Opus 4.6
 """
 
 import json
+import logging
 import os
 import re
 import time
@@ -18,31 +21,36 @@ from pathlib import Path
 
 import requests
 
+logger = logging.getLogger(__name__)
+
 
 # ---------------------------------------------------------------------------
-#  .env loader (home directory)
+#  .env loader
 # ---------------------------------------------------------------------------
 
 def _load_env():
     """Load key=value pairs from ~/.env into os.environ (setdefault)."""
-    env_path = Path.home() / ".env"
-    if env_path.exists():
-        for line in env_path.read_text().splitlines():
-            line = line.strip()
-            if "=" in line and not line.startswith("#"):
-                k, v = line.split("=", 1)
-                os.environ.setdefault(k.strip(), v.strip())
+    for env_path in [Path.home() / ".env", Path("/home/zamoritacr/.env")]:
+        if env_path.exists():
+            for line in env_path.read_text().splitlines():
+                line = line.strip()
+                if "=" in line and not line.startswith("#"):
+                    k, v = line.split("=", 1)
+                    os.environ.setdefault(k.strip(), v.strip())
+            break
 
 _load_env()
 
-OLLAMA_BASE = "http://localhost:11434"
-OLLAMA_GENERATE = f"{OLLAMA_BASE}/api/generate"
-OLLAMA_TAGS = f"{OLLAMA_BASE}/api/tags"
 
-# Target Ollama model names (substring match)
+# ---------------------------------------------------------------------------
+#  Configuration
+# ---------------------------------------------------------------------------
+
+OLLAMA_URL = "http://localhost:11434/api/generate"
+OLLAMA_TAGS_URL = "http://localhost:11434/api/tags"
 OLLAMA_TARGETS = ["deepseek-coder-v2", "qwen2.5-coder", "phi4", "llama3.1"]
+OLLAMA_PAUSE = 5  # seconds between sequential calls (RAM management)
 
-# Judge uses full Opus reasoning
 JUDGE_MODEL = "claude-opus-4-6"
 
 
@@ -69,7 +77,7 @@ Translate the Tableau formula below to a correct, production-ready DAX measure.
 ## DAX Rules (MUST follow)
 1. Use `VAR` / `RETURN` pattern for readability when the expression is complex.
 2. Fully qualify all column references: `'{table_name}'[ColumnName]`.
-3. Do NOT use `EARLIER()` — use VAR to capture row context instead.
+3. Do NOT use `EARLIER()` -- use VAR to capture row context instead.
 4. Replace Tableau LOD `{{FIXED dim : agg}}` with `CALCULATE(agg, ALLEXCEPT(table, dim))`.
 5. Replace `IIF(cond, t, f)` with `IF(cond, t, f)`.
 6. Replace `ZN(x)` with `IF(ISBLANK(x), 0, x)`.
@@ -90,6 +98,7 @@ Respond with ONLY valid JSON, no markdown fences, no explanation:
 
 _JUDGE_PROMPT = """\
 You are Claude Opus, the final authority on DAX formula quality.
+You are judging outputs from {brain_count} LLMs across 3 tiers (local Ollama, cheap API, premium API).
 
 ## Original Tableau Formula
 ```
@@ -107,7 +116,8 @@ You are Claude Opus, the final authority on DAX formula quality.
 1. Evaluate each brain's DAX translation for correctness, completeness, and style.
 2. Either select the best one or synthesize a better DAX combining the best elements.
 3. Identify where brains AGREE (high confidence) and where they DISAGREE (investigate why).
-4. Apply the same DAX rules:
+4. Weight premium brains (Claude, GPT-4o, Gemini Pro) higher but do not ignore correct local answers.
+5. Apply the same DAX rules:
    - VAR/RETURN for complex expressions
    - Fully qualified column refs: `'TableName'[Col]`
    - No EARLIER(), no Tableau syntax leaking through
@@ -141,7 +151,6 @@ def _extract_json(text: str) -> dict:
     # Strip markdown code fences
     text = re.sub(r"```(?:json)?\s*", "", text).strip()
 
-    # Find first { ... } block
     start = text.find("{")
     end = text.rfind("}")
     if start == -1 or end == -1:
@@ -151,13 +160,137 @@ def _extract_json(text: str) -> dict:
     try:
         return json.loads(candidate)
     except json.JSONDecodeError:
-        # Try to recover common issues: trailing commas
         candidate = re.sub(r",\s*([}\]])", r"\1", candidate)
         try:
             return json.loads(candidate)
         except Exception:
-            # Last resort: return the raw DAX if it looks like code
             return {"dax": text.strip()[:500], "confidence": 0.2, "notes": "JSON parse failed", "warnings": ["Could not parse response JSON"]}
+
+
+# ---------------------------------------------------------------------------
+#  Brain callers (module-level functions)
+# ---------------------------------------------------------------------------
+
+def _call_ollama(model: str, prompt: str, timeout: int = 120) -> dict:
+    """Call a single Ollama model. Sequential use only (RAM constraint)."""
+    start = time.time()
+    try:
+        resp = requests.post(
+            OLLAMA_URL,
+            json={"model": model, "prompt": prompt, "stream": False},
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        text = resp.json().get("response", "")
+        result = _extract_json(text)
+        result["_latency_s"] = round(time.time() - start, 1)
+        result["_model"] = model
+        return result
+    except requests.Timeout:
+        return {"error": "timeout", "dax": "", "confidence": 0.0, "_model": model}
+    except Exception as exc:
+        return {"error": str(exc), "dax": "", "confidence": 0.0, "_model": model}
+
+
+def _call_gemini(model: str, prompt: str) -> dict:
+    """Call Google Gemini API. Works for both gemini-2.5-flash and gemini-2.5-pro."""
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    if not api_key:
+        return {"error": "GEMINI_API_KEY not set", "dax": "", "confidence": 0.0, "_model": model}
+    start = time.time()
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=api_key)
+        m = genai.GenerativeModel(model)
+        response = m.generate_content(prompt)
+        result = _extract_json(response.text)
+        result["_latency_s"] = round(time.time() - start, 1)
+        result["_model"] = model
+        return result
+    except Exception as exc:
+        logger.warning("[BRAIN] Gemini %s failed: %s", model, exc)
+        return {"error": str(exc), "dax": "", "confidence": 0.0, "_model": model}
+
+
+def _call_grok(prompt: str) -> dict:
+    """Call xAI Grok via OpenAI-compatible endpoint."""
+    api_key = os.environ.get("XAI_API_KEY", "")
+    if not api_key:
+        return {"error": "XAI_API_KEY not set", "dax": "", "confidence": 0.0, "_model": "grok-3-fast"}
+    start = time.time()
+    try:
+        resp = requests.post(
+            "https://api.x.ai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={
+                "model": "grok-3-fast",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.1,
+            },
+            timeout=60,
+        )
+        resp.raise_for_status()
+        text = resp.json()["choices"][0]["message"]["content"]
+        result = _extract_json(text)
+        result["_latency_s"] = round(time.time() - start, 1)
+        result["_model"] = "grok-3-fast"
+        return result
+    except Exception as exc:
+        logger.warning("[BRAIN] Grok failed: %s", exc)
+        return {"error": str(exc), "dax": "", "confidence": 0.0, "_model": "grok-3-fast"}
+
+
+def _call_claude(prompt: str, model: str = JUDGE_MODEL) -> dict:
+    """Call Anthropic Claude API."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return {"error": "ANTHROPIC_API_KEY not set", "dax": "", "confidence": 0.0, "_model": model}
+    start = time.time()
+    try:
+        from anthropic import Anthropic
+        client = Anthropic()
+        resp = client.messages.create(
+            model=model,
+            max_tokens=2000,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = resp.content[0].text
+        result = _extract_json(text)
+        result["_latency_s"] = round(time.time() - start, 1)
+        result["_model"] = model
+        return result
+    except Exception as exc:
+        logger.warning("[BRAIN] Claude %s failed: %s", model, exc)
+        return {"error": str(exc), "dax": "", "confidence": 0.0, "_model": model}
+
+
+def _call_openai(prompt: str) -> dict:
+    """Call OpenAI GPT-4o."""
+    api_key = os.environ.get("OPENAI_API_KEY", "")
+    if not api_key:
+        return {"error": "OPENAI_API_KEY not set", "dax": "", "confidence": 0.0, "_model": "gpt-4o"}
+    start = time.time()
+    try:
+        resp = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.1,
+                "response_format": {"type": "json_object"},
+            },
+            timeout=60,
+        )
+        resp.raise_for_status()
+        text = resp.json()["choices"][0]["message"]["content"]
+        result = _extract_json(text)
+        result["_latency_s"] = round(time.time() - start, 1)
+        result["_model"] = "gpt-4o"
+        return result
+    except Exception as exc:
+        logger.warning("[BRAIN] GPT-4o failed: %s", exc)
+        return {"error": str(exc), "dax": "", "confidence": 0.0, "_model": "gpt-4o"}
 
 
 # ---------------------------------------------------------------------------
@@ -165,18 +298,16 @@ def _extract_json(text: str) -> dict:
 # ---------------------------------------------------------------------------
 
 class MultiBrainEngine:
-    """Dispatch Tableau→DAX translation to all available LLMs, judge consensus."""
+    """Dispatch Tableau->DAX translation to 7+ LLMs across 3 tiers, judge consensus."""
 
     def __init__(self):
         self.ollama_models: list[str] = []
         self._detect_ollama()
 
-    # ── Model detection ──
-
     def _detect_ollama(self):
-        """Discover which target Ollama models are running."""
+        """Discover which target Ollama models are available."""
         try:
-            resp = requests.get(OLLAMA_TAGS, timeout=5)
+            resp = requests.get(OLLAMA_TAGS_URL, timeout=5)
             resp.raise_for_status()
             available = [m["name"] for m in resp.json().get("models", [])]
             for target in OLLAMA_TARGETS:
@@ -184,7 +315,7 @@ class MultiBrainEngine:
                 if match:
                     self.ollama_models.append(match)
         except Exception as exc:
-            print(f"[MULTI_BRAIN] Ollama not reachable: {exc}")
+            print(f"[BRAIN] Ollama not reachable: {exc}")
 
     # ── Public API ──
 
@@ -198,75 +329,90 @@ class MultiBrainEngine:
         """
         Dispatch to all available brains, judge, return consensus.
 
-        Returns:
-            {
-              "best_dax": str,
-              "confidence": float,
-              "agreement_score": float,
-              "winner": str,
-              "reasoning": str,
-              "per_brain": dict,
-              "all_results": dict,
-              "disagreements": list,
-              "original": str,
-            }
+        Returns dict with keys: best_dax, confidence, agreement_score, winner,
+        reasoning, per_brain, all_results, disagreements, original, timings
         """
-        translation_prompt = self._build_translation_prompt(
+        prompt = self._build_translation_prompt(
             tableau_formula, table_name, columns, rule_engine_result
         )
 
-        raw_results: dict[str, dict] = {}
+        results: dict[str, dict] = {}
+        timings: dict[str, float] = {}
 
-        # ── Sequential Ollama dispatch (avoids OOM on 14GB RAM) ──
-        for model in self.ollama_models:
-            print(f"[MULTI-BRAIN] Calling Ollama model: {model}")
-            try:
-                raw_results[model] = self._call_ollama(model, translation_prompt)
-            except Exception as exc:
-                raw_results[model] = {"error": str(exc), "dax": "", "confidence": 0.0}
-            time.sleep(5)  # let previous model unload from VRAM
+        # ── TIER 1: Ollama local models (sequential, RAM-bound) ──
+        print(f"[BRAIN] Tier 1: {len(self.ollama_models)} Ollama models (sequential)...")
+        for i, model in enumerate(self.ollama_models):
+            t0 = time.time()
+            print(f"  [{i+1}/{len(self.ollama_models)}] {model}...", end="", flush=True)
+            results[f"ollama/{model}"] = _call_ollama(model, prompt)
+            elapsed = round(time.time() - t0, 1)
+            timings[f"ollama/{model}"] = elapsed
+            ok = "OK" if results[f"ollama/{model}"].get("dax") else "FAIL"
+            print(f" {elapsed}s [{ok}]")
+            if i < len(self.ollama_models) - 1:
+                time.sleep(OLLAMA_PAUSE)
 
-        # ── Parallel paid API calls (network-bound) ──
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            futures: dict = {}
+        # ── TIER 2 + 3: API calls in parallel (network-bound) ──
+        api_tasks = {}
 
-            if os.getenv("ANTHROPIC_API_KEY"):
-                futures[pool.submit(self._call_claude, translation_prompt)] = "claude-opus"
-            else:
-                print("[MULTI-BRAIN] ANTHROPIC_API_KEY not set -- skipping Claude")
+        # Tier 2: cheap
+        api_tasks["gemini/2.5-flash"] = lambda: _call_gemini("gemini-2.5-flash", prompt)
+        api_tasks["grok/3-fast"] = lambda: _call_grok(prompt)
 
-            if os.getenv("OPENAI_API_KEY"):
-                futures[pool.submit(self._call_gpt4o, translation_prompt)] = "gpt-4o"
-            else:
-                print("[MULTI-BRAIN] OPENAI_API_KEY not set -- skipping GPT-4o")
+        # Tier 3: premium
+        api_tasks["claude/opus"] = lambda: _call_claude(prompt, JUDGE_MODEL)
+        api_tasks["openai/gpt-4o"] = lambda: _call_openai(prompt)
+        api_tasks["gemini/2.5-pro"] = lambda: _call_gemini("gemini-2.5-pro", prompt)
 
-            for future in as_completed(futures, timeout=90):
-                brain = futures[future]
+        print(f"[BRAIN] Tier 2+3: {len(api_tasks)} API models (parallel)...")
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            futures = {pool.submit(fn): name for name, fn in api_tasks.items()}
+            for future in as_completed(futures, timeout=120):
+                name = futures[future]
                 try:
-                    raw_results[brain] = future.result()
+                    results[name] = future.result()
                 except Exception as exc:
-                    raw_results[brain] = {"error": str(exc), "dax": "", "confidence": 0.0}
+                    results[name] = {"error": str(exc), "dax": "", "confidence": 0.0}
+                latency = results[name].get("_latency_s", 0)
+                timings[name] = latency
+                ok = "OK" if results[name].get("dax") else "SKIP"
+                err = results[name].get("error", "")
+                if err and "not set" in err:
+                    ok = "NO KEY"
+                elif err:
+                    ok = "FAIL"
+                print(f"  {name}: {latency}s [{ok}]")
 
-        if not raw_results:
+        # ── Summary ──
+        valid = {k: v for k, v in results.items() if v.get("dax") and not v.get("error")}
+        failed = {k: v.get("error", "no dax") for k, v in results.items() if k not in valid}
+
+        if failed:
+            print(f"[BRAIN] Skipped/failed ({len(failed)}): {', '.join(failed.keys())}")
+        print(f"[BRAIN] Got {len(valid)} valid DAX translations from {len(results)} brains")
+
+        if not valid:
             return {
                 "best_dax": "/* No brains available */",
                 "confidence": 0.0,
                 "agreement_score": 0.0,
                 "winner": "none",
-                "reasoning": "No LLMs responded.",
+                "reasoning": "No LLMs responded with valid DAX.",
                 "per_brain": {},
-                "all_results": {},
+                "all_results": results,
                 "disagreements": [],
                 "original": tableau_formula,
+                "timings": timings,
             }
 
-        # ── Judge ──
-        consensus = self._judge(tableau_formula, table_name, columns, raw_results)
-        consensus["all_results"] = raw_results
+        # ── JUDGE: Claude Opus synthesizes ──
+        consensus = self._judge(tableau_formula, table_name, columns, results)
+        consensus["all_results"] = results
         consensus["original"] = tableau_formula
+        consensus["timings"] = timings
         return consensus
 
-    # ── Prompt builders ──
+    # ── Prompt builder ──
 
     def _build_translation_prompt(
         self,
@@ -276,7 +422,7 @@ class MultiBrainEngine:
         rule_engine_result: dict | None,
     ) -> str:
         col_list = ", ".join(columns[:40]) if columns else "unknown"
-        if len(columns) > 40:
+        if columns and len(columns) > 40:
             col_list += f" ... (+{len(columns)-40} more)"
 
         if rule_engine_result and rule_engine_result.get("dax"):
@@ -285,7 +431,7 @@ class MultiBrainEngine:
                 f"\n## Rule Engine Baseline (confidence: {re_conf:.0%})\n"
                 f"The deterministic rule engine produced this translation:\n"
                 f"```\n{rule_engine_result['dax']}\n```\n"
-                f"You may improve or correct it — do not just echo it back.\n"
+                f"You may improve or correct it -- do not just echo it back.\n"
             )
         else:
             re_section = ""
@@ -297,64 +443,6 @@ class MultiBrainEngine:
             tableau_formula=formula,
         )
 
-    # ── Brain callers ──
-
-    def _call_ollama(self, model: str, prompt: str) -> dict:
-        start = time.time()
-        try:
-            resp = requests.post(
-                OLLAMA_GENERATE,
-                json={"model": model, "prompt": prompt, "stream": False},
-                timeout=90,
-            )
-            resp.raise_for_status()
-            text = resp.json().get("response", "")
-            result = _extract_json(text)
-            result["_latency_s"] = round(time.time() - start, 1)
-            result["_model"] = model
-            return result
-        except requests.Timeout:
-            return {"error": "timeout", "dax": "", "confidence": 0.0, "_model": model}
-        except Exception as exc:
-            return {"error": str(exc), "dax": "", "confidence": 0.0, "_model": model}
-
-    def _call_claude(self, prompt: str) -> dict:
-        start = time.time()
-        try:
-            from anthropic import Anthropic
-            client = Anthropic()
-            resp = client.messages.create(
-                model=JUDGE_MODEL,
-                max_tokens=2000,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            text = resp.content[0].text
-            result = _extract_json(text)
-            result["_latency_s"] = round(time.time() - start, 1)
-            result["_model"] = "claude-opus"
-            return result
-        except Exception as exc:
-            return {"error": str(exc), "dax": "", "confidence": 0.0, "_model": "claude-opus"}
-
-    def _call_gpt4o(self, prompt: str) -> dict:
-        start = time.time()
-        try:
-            from openai import OpenAI
-            client = OpenAI()
-            resp = client.chat.completions.create(
-                model="gpt-4o",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=2000,
-                response_format={"type": "json_object"},
-            )
-            text = resp.choices[0].message.content
-            result = _extract_json(text)
-            result["_latency_s"] = round(time.time() - start, 1)
-            result["_model"] = "gpt-4o"
-            return result
-        except Exception as exc:
-            return {"error": str(exc), "dax": "", "confidence": 0.0, "_model": "gpt-4o"}
-
     # ── Judge ──
 
     def _judge(
@@ -364,27 +452,30 @@ class MultiBrainEngine:
         columns: list[str],
         all_results: dict[str, dict],
     ) -> dict:
-        """
-        Use Claude Opus (via API if available, else local heuristic) to judge.
-        Falls back to highest-confidence brain if no API key.
-        """
-        # Build brain outputs section
+        """Use Claude Opus to judge all brain outputs. Falls back to heuristic."""
+        # Build brain outputs section for the judge prompt
         lines = []
+        valid_count = 0
         for brain, res in all_results.items():
             if res.get("error"):
-                lines.append(f"### {brain}\nERROR: {res['error']}\n")
-            else:
-                dax = res.get("dax", "")
-                conf = res.get("confidence", 0.0)
-                notes = res.get("notes", "")
-                warnings = res.get("warnings", [])
-                lines.append(
-                    f"### {brain} (confidence: {conf:.0%})\n"
-                    f"DAX:\n```\n{dax}\n```\n"
-                    f"Notes: {notes}\n"
-                    f"Warnings: {', '.join(warnings) if warnings else 'none'}\n"
-                )
+                continue
+            dax = res.get("dax", "")
+            if not dax:
+                continue
+            valid_count += 1
+            conf = res.get("confidence", 0.0)
+            notes = res.get("notes", "")
+            warnings = res.get("warnings", [])
+            lines.append(
+                f"### {brain} (confidence: {conf})\n"
+                f"DAX:\n```\n{dax}\n```\n"
+                f"Notes: {notes}\n"
+                f"Warnings: {', '.join(warnings) if warnings else 'none'}\n"
+            )
         brain_outputs_section = "\n".join(lines)
+
+        if not lines:
+            return self._heuristic_judge(all_results)
 
         col_list = ", ".join(columns[:40]) if columns else "unknown"
         judge_prompt = _JUDGE_PROMPT.format(
@@ -392,10 +483,12 @@ class MultiBrainEngine:
             table_name=table_name,
             columns=col_list,
             brain_outputs_section=brain_outputs_section,
+            brain_count=valid_count,
         )
 
-        # Try Anthropic API
-        if os.getenv("ANTHROPIC_API_KEY"):
+        # Try Claude Opus API
+        if os.environ.get("ANTHROPIC_API_KEY"):
+            print(f"[BRAIN] Judge: Claude Opus evaluating {valid_count} translations...")
             try:
                 from anthropic import Anthropic
                 client = Anthropic()
@@ -406,31 +499,34 @@ class MultiBrainEngine:
                 )
                 judgment = _extract_json(resp.content[0].text)
                 if judgment.get("best_dax"):
+                    judgment.setdefault("judge_model", JUDGE_MODEL)
                     return judgment
             except Exception as exc:
-                print(f"[MULTI_BRAIN] Judge API call failed: {exc}")
+                print(f"[BRAIN] Judge API failed: {exc}")
 
-        # Fallback: try Ollama judge (qwen or deepseek)
+        # Fallback: Ollama judge (qwen or deepseek)
         for model in self.ollama_models:
             if "deepseek" in model or "qwen" in model:
+                print(f"[BRAIN] Fallback judge: {model}")
                 try:
                     resp = requests.post(
-                        OLLAMA_GENERATE,
+                        OLLAMA_URL,
                         json={"model": model, "prompt": judge_prompt, "stream": False},
                         timeout=120,
                     )
                     resp.raise_for_status()
                     judgment = _extract_json(resp.json().get("response", ""))
                     if judgment.get("best_dax"):
+                        judgment["judge_model"] = f"ollama/{model}"
                         return judgment
                 except Exception:
                     pass
 
-        # Final fallback: pick highest-confidence brain
+        # Final fallback: heuristic
         return self._heuristic_judge(all_results)
 
     def _heuristic_judge(self, all_results: dict[str, dict]) -> dict:
-        """Fallback judge: pick the brain with the highest confidence DAX."""
+        """Fallback: pick the brain with the highest confidence DAX."""
         valid = {k: v for k, v in all_results.items() if v.get("dax") and not v.get("error")}
         if not valid:
             return {
@@ -441,9 +537,9 @@ class MultiBrainEngine:
                 "reasoning": "All brains failed or returned empty results.",
                 "disagreements": [],
                 "per_brain": {},
+                "judge_model": "heuristic",
             }
 
-        # Check agreement: count unique normalized DAX outputs
         dax_outputs = [v["dax"].strip() for v in valid.values()]
         unique_dax = set(dax_outputs)
         agreement = 1.0 - (len(unique_dax) - 1) / max(len(dax_outputs), 1)
@@ -459,6 +555,7 @@ class MultiBrainEngine:
             "reasoning": f"Heuristic: picked highest confidence brain ({best_brain}). {len(unique_dax)} unique translations from {len(valid)} brains.",
             "disagreements": list(unique_dax)[:3] if len(unique_dax) > 1 else [],
             "per_brain": {k: {"score": round(v.get("confidence", 0) * 10, 1), "issue": v.get("notes", "")} for k, v in valid.items()},
+            "judge_model": "heuristic",
         }
 
 
@@ -475,33 +572,23 @@ def run_batch(
 ) -> dict[str, dict]:
     """
     Translate a batch of {field_name: tableau_formula} using MultiBrainEngine.
-
-    Args:
-        formulas: dict of field_name -> tableau_formula
-        table_name: the target Power BI table name
-        columns: list of available column names
-        rule_engine_results: optional dict of field_name -> rule_engine_result
-        verbose: print progress
-
-    Returns:
-        dict of field_name -> consensus result
     """
     engine = MultiBrainEngine()
     if verbose:
-        print(f"[MULTI_BRAIN] Initialized with {len(engine.ollama_models)} Ollama models: {engine.ollama_models}")
+        print(f"[BRAIN] Batch: {len(engine.ollama_models)} Ollama + API brains ready")
 
     results = {}
     for i, (name, formula) in enumerate(formulas.items(), 1):
         if verbose:
-            print(f"[MULTI_BRAIN] ({i}/{len(formulas)}) Translating: {name!r}")
+            print(f"[BRAIN] ({i}/{len(formulas)}) Translating: {name!r}")
         re_result = (rule_engine_results or {}).get(name)
         results[name] = engine.translate_formula(formula, table_name, columns, re_result)
         if verbose:
             r = results[name]
-            print(f"  → winner={r.get('winner')}, conf={r.get('confidence', 0):.0%}, agreement={r.get('agreement_score', 0):.0%}")
+            print(f"  -> winner={r.get('winner')}, conf={r.get('confidence', 0):.0%}, agreement={r.get('agreement_score', 0):.0%}")
             if r.get("best_dax"):
                 preview = r["best_dax"][:80].replace("\n", " ")
-                print(f"  → DAX: {preview}...")
+                print(f"  -> DAX: {preview}...")
 
     return results
 
@@ -515,13 +602,12 @@ def dispatch_multi_brain(
     table_name: str = "Data",
     columns: list = None,
     rule_engine_result: dict = None,
-    timeout: int = 90,
+    timeout: int = 120,
 ) -> dict:
     """Convenience wrapper around MultiBrainEngine.translate_formula().
 
-    Returns the consensus dict with keys:
-        best_dax, confidence, agreement_score, winner, reasoning,
-        per_brain, all_results, disagreements, original
+    Returns dict with both the raw engine output and normalized
+    'responses'/'consensus' keys for backward compatibility.
     """
     engine = MultiBrainEngine()
     result = engine.translate_formula(
@@ -530,7 +616,6 @@ def dispatch_multi_brain(
         columns=columns or [],
         rule_engine_result=rule_engine_result,
     )
-    # Normalize response keys for callers expecting 'responses'/'consensus'
     return {
         "responses": result.get("all_results", {}),
         "consensus": {
@@ -540,6 +625,9 @@ def dispatch_multi_brain(
             "winner": result.get("winner", ""),
             "reasoning": result.get("reasoning", ""),
         },
-        "judge_model": JUDGE_MODEL,
+        "judge_model": result.get("judge_model", JUDGE_MODEL),
+        "valid_count": len({k: v for k, v in result.get("all_results", {}).items() if v.get("dax") and not v.get("error")}),
+        "failed_count": len({k: v for k, v in result.get("all_results", {}).items() if not v.get("dax") or v.get("error")}),
+        "timings": result.get("timings", {}),
         **result,
     }

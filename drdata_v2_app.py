@@ -280,17 +280,210 @@ class CorrectionRequest(BaseModel):
 
 
 @app.post("/api/pipeline/{session_id}/correct")
-async def pipeline_correct(session_id: str, req: CorrectionRequest):
-    """Apply analyst corrections to the current awaiting stage."""
+async def pipeline_correct(session_id: str, req: dict):
+    """Analyst submits corrections to any pipeline stage.
+
+    Body:
+    {
+        "stage": "field_mapping",
+        "corrections": [
+            {
+                "field_path": "worksheets.0.mark_type",
+                "original_value": "bar",
+                "corrected_value": "line",
+                "correction_type": "chart_type",
+                "worksheet_name": "Sales Overview",
+                "mark_type": "bar"
+            }
+        ]
+    }
+    """
+    from core.correction_store import store_correction
+
+    ps = _get_pipeline(session_id)
+    stored = 0
+    applied = 0
+
+    for c in req.get("corrections", []):
+        store_correction(
+            session_id=session_id,
+            stage=req.get("stage", "unknown"),
+            field_path=c.get("field_path", ""),
+            original_value=c.get("original_value", ""),
+            corrected_value=c.get("corrected_value", ""),
+            correction_type=c.get("correction_type", ""),
+            worksheet_name=c.get("worksheet_name", ""),
+            mark_type=c.get("mark_type", ""),
+            context=c.get("context"),
+        )
+        stored += 1
+
+        if ps:
+            _apply_correction(ps, req.get("stage"), c)
+            applied += 1
+
+    return {
+        "stored": stored,
+        "applied": applied,
+        "message": f"Dr. Data learned from {stored} corrections. Applied {applied} to current session.",
+        **(ps.to_dict() if ps else {}),
+    }
+
+
+@app.get("/api/pipeline/{session_id}/stage/{stage_num}")
+async def get_stage_output(session_id: str, stage_num: int):
+    """Get the output of a specific pipeline stage for display + editing."""
     ps = _get_pipeline(session_id)
     if not ps:
-        raise HTTPException(404, "No active pipeline")
-    if not ps.is_awaiting_approval:
-        return {"error": "No stage awaiting approval", **ps.to_dict()}
+        raise HTTPException(404, "Session not found")
 
-    stage = ps.current_stage
-    ps.correct_stage(stage, req.corrections)
-    return {"corrected": stage, **ps.to_dict()}
+    stage_names = list(StageName)
+    if stage_num < 0 or stage_num >= len(stage_names):
+        raise HTTPException(400, f"Invalid stage number: {stage_num}")
+
+    stage_key = stage_names[stage_num].value
+    result = ps.results.get(stage_key)
+    stage_data = result.data if result else {}
+
+    return {
+        "stage": stage_num,
+        "stage_name": _STAGE_NAMES.get(stage_num, f"Stage {stage_num}"),
+        "stage_key": stage_key,
+        "output": stage_data,
+        "summary": result.summary if result else "",
+        "editable_fields": _get_editable_fields(stage_num, stage_data),
+        "status": ps.stages.get(stage_key, "pending"),
+    }
+
+
+@app.get("/api/corrections/stats")
+async def correction_stats():
+    """Get correction learning statistics."""
+    from core.correction_store import get_correction_stats
+    stats = get_correction_stats()
+    msg = f"Dr. Data has learned from {stats['total']} analyst corrections"
+    return {**stats, "message": msg}
+
+
+_STAGE_NAMES = {
+    0: "Parse Tableau Workbook",
+    1: "Data Source",
+    2: "Field Mapping",
+    3: "Formula Translation",
+    4: "Visual Mapping",
+    5: "Semantic Model",
+    6: "Report Layout",
+    7: "Generate PBIP",
+}
+
+
+def _get_editable_fields(stage_num: int, stage_data: dict) -> list:
+    """Return list of editable field descriptors for a stage."""
+    editable = []
+    if stage_num == 0:  # Parse
+        for i, ws in enumerate(stage_data.get("tableau_spec", {}).get("worksheets", [])):
+            editable.append({
+                "field_path": f"worksheets.{i}.mark_type",
+                "label": ws.get("name", f"Worksheet {i}"),
+                "current_value": ws.get("mark_type", "automatic"),
+                "correction_type": "chart_type",
+                "editor": "dropdown",
+                "options": ["bar", "line", "area", "circle", "text", "square",
+                            "pie", "gantt", "polygon", "map", "automatic"],
+            })
+    elif stage_num == 2:  # Field Mapping
+        config = stage_data.get("config", {})
+        sections = config.get("report_layout", {}).get("sections", [])
+        for pi, page in enumerate(sections):
+            for vi, vc in enumerate(page.get("visualContainers", [])):
+                cfg = vc.get("config", {})
+                editable.append({
+                    "field_path": f"pages.{pi}.visuals.{vi}",
+                    "label": cfg.get("singleVisual", {}).get("title", {}).get("text", f"Visual {vi}"),
+                    "current_value": cfg.get("singleVisual", {}).get("visualType", ""),
+                    "correction_type": "field_mapping",
+                    "editor": "detail",
+                })
+    elif stage_num == 3:  # Formula Translation
+        for i, t in enumerate(stage_data.get("translations", [])):
+            editable.append({
+                "field_path": f"translations.{i}.dax",
+                "label": t.get("name", f"Formula {i}"),
+                "current_value": t.get("dax", ""),
+                "original_tableau": t.get("tableau_formula", ""),
+                "tier": t.get("tier", "AUTO"),
+                "correction_type": "dax_formula",
+                "editor": "code",
+            })
+    elif stage_num == 4:  # Visual Mapping
+        for i, v in enumerate(stage_data.get("visuals", [])):
+            editable.append({
+                "field_path": f"visuals.{i}.pbi_type",
+                "label": v.get("worksheet_name", f"Visual {i}"),
+                "current_value": v.get("pbi_type", ""),
+                "correction_type": "chart_type",
+                "editor": "dropdown",
+                "options": ["clusteredBarChart", "lineChart", "areaChart",
+                            "pieChart", "donutChart", "cardVisual", "tableEx",
+                            "waterfallChart", "treemap", "scatterChart",
+                            "filledMap", "shape", "slicer"],
+            })
+    return editable
+
+
+def _apply_correction(ps, stage: str, correction: dict):
+    """Apply a single correction to the in-memory pipeline state."""
+    ctype = correction.get("correction_type", "")
+    field_path = correction.get("field_path", "")
+    new_val = correction.get("corrected_value", "")
+
+    if ctype == "chart_type" and field_path.startswith("worksheets."):
+        # Update mark_type in tableau_spec
+        spec = ps.context.get("tableau_spec", {})
+        parts = field_path.split(".")
+        try:
+            idx = int(parts[1])
+            ws_list = spec.get("worksheets", [])
+            if idx < len(ws_list):
+                ws_list[idx]["mark_type"] = new_val
+        except (IndexError, ValueError):
+            pass
+
+    elif ctype == "dax_formula" and field_path.startswith("translations."):
+        # Update DAX in formula translation result
+        result = ps.results.get("formula_trans")
+        if result and result.data:
+            parts = field_path.split(".")
+            try:
+                idx = int(parts[1])
+                translations = result.data.get("translations", [])
+                if idx < len(translations):
+                    translations[idx]["dax"] = new_val
+            except (IndexError, ValueError):
+                pass
+
+    elif ctype == "chart_type" and field_path.startswith("visuals."):
+        # Update PBI visual type in visual mapping result
+        result = ps.results.get("visual_mapping")
+        if result and result.data:
+            parts = field_path.split(".")
+            try:
+                idx = int(parts[1])
+                visuals = result.data.get("visuals", [])
+                if idx < len(visuals):
+                    visuals[idx]["pbi_type"] = new_val
+            except (IndexError, ValueError):
+                pass
+
+    # Store in pipeline corrections dict
+    if stage:
+        if stage not in ps.corrections:
+            ps.corrections[stage] = {}
+        ps.corrections[stage][field_path] = {
+            "original": correction.get("original_value"),
+            "corrected": new_val,
+            "type": ctype,
+        }
 
 
 @app.post("/api/pipeline/{session_id}/run-next")

@@ -231,6 +231,7 @@ class PipelineState:
                     "stage": r.stage,
                     "status": r.status,
                     "summary": r.summary,
+                    "data": r.data,
                     "qa_notes": r.qa_notes,
                 }
                 for k, r in self.results.items()

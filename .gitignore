@@ -106,3 +106,17 @@ node_modules/
 nohup.out
 *.db
 .env.drdata
+
+# === TAOP security additions (do not remove) ===
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+credentials.json
+client_secret*.json
+*_secret.txt
+.joao_vault/

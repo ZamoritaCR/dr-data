@@ -1,0 +1,14 @@
+# CODEOWNERS — auto-assigns reviewers on every PR
+
+# Default: Johan reviews everything
+* @ZamoritaCR
+
+# V2 publish path — both review
+/core/publisher/      @gracepan6 @ZamoritaCR
+/core/powerbi_*.py    @gracepan6 @ZamoritaCR
+/tmdl_emit/           @gracepan6 @ZamoritaCR
+
+# Binding contract + CI — Johan approves
+/AGENTS.md            @ZamoritaCR
+/README.md            @ZamoritaCR
+/.github/             @ZamoritaCR
